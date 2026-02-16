@@ -42,7 +42,7 @@ jobs:
           node-version: '20'
           cache: 'npm'
       - name: Set version
-        run: npm version ${{ github.event.inputs.version }} --no-git-tag-version
+        run: npm version ${{ github.event.inputs.version }} --no-git-tag-version --allow-same-version
       - name: Commit and tag
         run: |
           git config user.name "github-actions"
