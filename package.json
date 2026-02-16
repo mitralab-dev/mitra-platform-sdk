@@ -1,5 +1,5 @@
 {
-  "name": "mitra-platform-sdk",
+  "name": "@mitralab.io/platform-sdk",
   "version": "0.5.0",
   "description": "JavaScript/TypeScript SDK for building apps on the Mitra Platform",
   "main": "dist/index.js",
