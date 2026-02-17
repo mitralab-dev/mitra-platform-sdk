@@ -1,0 +1,23 @@
+name: Proposal
+description: Proposta técnica com sub-issues
+type: Proposal
+body:
+  - type: textarea
+    id: context
+    attributes:
+      label: Contexto
+      description: O problema e por que precisa ser resolvido. Se tem milestone, pode referenciar.
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Solução
+      description: Abordagem escolhida e por quê. Decisões-chave. Diagrama se ajudar.
+    validations:
+      required: true
+  - type: textarea
+    id: contracts
+    attributes:
+      label: Contratos
+      description: "Preencher quando aplicável: migration (tabelas, colunas, índices), endpoints (method, path), eventos Kafka (tópico, payload)."

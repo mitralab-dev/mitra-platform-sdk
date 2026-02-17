@@ -1,0 +1,56 @@
+{
+  "name": "@mitralab.io/platform-sdk",
+  "version": "1.0.0",
+  "description": "JavaScript/TypeScript SDK for building apps on the Mitra Platform",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs,esm --dts --clean",
+    "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
+    "lint": "eslint src --ext .ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "mitra",
+    "sdk",
+    "api",
+    "crud",
+    "authentication",
+    "baas",
+    "backend-as-a-service"
+  ],
+  "author": "Mitra Platform",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mitralab-dev/mitra-platform-sdk"
+  },
+  "homepage": "https://github.com/mitralab-dev/mitra-platform-sdk#readme",
+  "bugs": {
+    "url": "https://github.com/mitralab-dev/mitra-platform-sdk/issues"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "eslint": "^8.56.0",
+    "tsup": "^8.0.1",
+    "typescript": "^5.3.3",
+    "vitest": "^1.2.0"
+  },
+  "peerDependencies": {},
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
