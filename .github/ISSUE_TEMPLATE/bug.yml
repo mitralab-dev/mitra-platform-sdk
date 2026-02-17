@@ -1,0 +1,18 @@
+name: Bug (Geral)
+description: Comportamento incorreto encontrado pelo time de desenvolvimento
+type: Bug
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Descrição do bug
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Passos para reproduzir
+  - type: textarea
+    id: expected
+    attributes:
+      label: Comportamento esperado
