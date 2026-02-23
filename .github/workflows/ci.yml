@@ -11,7 +11,35 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  pr-convention:
+    if: github.event_name == 'pull_request' && github.event.pull_request.user.login != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate PR title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          if echo "$PR_TITLE" | grep -qP "^(feat|fix|refactor|chore|docs)(\(.+\))?: .+ \(#[0-9]+\)$"; then
+            echo "PR title is valid: $PR_TITLE"
+          else
+            echo "PR title does not match the expected pattern."
+            echo ""
+            echo "  type(scope): descricao (#issue)"
+            echo ""
+            echo "Examples:"
+            echo "  feat(auth): implementar Google OAuth (#42)"
+            echo "  fix(imports): timeout no chunk processing (#15)"
+            echo "  chore: atualizar Spring Boot (#5)"
+            echo ""
+            echo "Types: feat, fix, refactor, chore, docs"
+            echo "Scope: opcional"
+            echo "Issue number: obrigatorio"
+            exit 1
+          fi
+
   build:
+    needs: pr-convention
+    if: ${{ !failure() && !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
