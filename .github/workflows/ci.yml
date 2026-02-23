@@ -11,13 +11,7 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  pr-convention:
-    if: github.event_name == 'pull_request'
-    uses: mitralab-dev/.github/.github/workflows/pr-title.yml@main
-
   build:
-    needs: pr-convention
-    if: ${{ !failure() && !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
