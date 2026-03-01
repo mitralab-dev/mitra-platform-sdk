@@ -1,0 +1,37 @@
+name: Bug (Support)
+description: Bug reportado pelo time de suporte
+type: Bug
+labels:
+  - support
+body:
+  - type: input
+    id: client
+    attributes:
+      label: Cliente / Tenant
+      description: Nome do cliente ou tenant ID afetado.
+    validations:
+      required: true
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Ambiente
+      options:
+        - Produção
+        - Dev
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Descrição do problema
+      description: O que o cliente reportou? Inclua prints ou links se possível.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Passos para reproduzir
+  - type: textarea
+    id: expected
+    attributes:
+      label: Comportamento esperado
