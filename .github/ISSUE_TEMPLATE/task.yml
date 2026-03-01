@@ -1,0 +1,11 @@
+name: Task
+description: Unidade de trabalho (sub-issue ou task avulsa)
+type: Task
+body:
+  - type: textarea
+    id: context
+    attributes:
+      label: Contexto
+      description: O que precisa ser feito e por quê.
+    validations:
+      required: true

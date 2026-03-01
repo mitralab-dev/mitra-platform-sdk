@@ -1,0 +1,14 @@
+name: Spike
+description: Investigação ou pesquisa técnica
+type: Spike
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Pergunta a responder
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Escopo e timebox
