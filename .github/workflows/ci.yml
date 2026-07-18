@@ -13,9 +13,7 @@ concurrency:
 jobs:
   pr-convention:
     if: github.event_name == 'pull_request' && github.event.pull_request.user.login != 'dependabot[bot]'
-    runs-on:
-      group: mitra-ci
-      labels: mitra-ci
+    runs-on: [self-hosted, mitra-ci]
     steps:
       - name: Validate PR title
         env:
@@ -31,9 +29,7 @@ jobs:
   build:
     needs: pr-convention
     if: ${{ !failure() && !cancelled() }}
-    runs-on:
-      group: mitra-ci
-      labels: mitra-ci
+    runs-on: [self-hosted, mitra-ci]
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -43,9 +39,7 @@ jobs:
       - run: npm ci
       - run: npm run build
   test:
-    runs-on:
-      group: mitra-ci
-      labels: mitra-ci
+    runs-on: [self-hosted, mitra-ci]
     needs: build
     if: ${{ !failure() && !cancelled() }}
     steps:
@@ -61,9 +55,7 @@ jobs:
           name: coverage
           path: coverage/
   sonar:
-    runs-on:
-      group: mitra-ci
-      labels: mitra-ci
+    runs-on: [self-hosted, mitra-ci]
     needs: test
     if: ${{ !failure() && !cancelled() }}
     steps:

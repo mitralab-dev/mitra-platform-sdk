@@ -10,9 +10,7 @@ permissions:
   contents: read
 jobs:
   build:
-    runs-on:
-      group: mitra-ci
-      labels: mitra-ci
+    runs-on: [self-hosted, mitra-ci]
     steps:
       - name: Validate branch
         if: github.ref_name != 'main'
@@ -28,9 +26,7 @@ jobs:
       - run: npm ci
       - run: npm run build
   test:
-    runs-on:
-      group: mitra-ci
-      labels: mitra-ci
+    runs-on: [self-hosted, mitra-ci]
     needs: build
     steps:
       - uses: actions/checkout@v6
@@ -41,9 +37,7 @@ jobs:
       - run: npm ci
       - run: npx vitest run --passWithNoTests
   bump:
-    runs-on:
-      group: mitra-ci
-      labels: mitra-ci
+    runs-on: [self-hosted, mitra-ci]
     needs: test
     permissions:
       contents: write
@@ -67,9 +61,7 @@ jobs:
           git push
           git push origin "v${{ github.event.inputs.version }}"
   publish:
-    runs-on:
-      group: mitra-ci
-      labels: mitra-ci
+    runs-on: [self-hosted, mitra-ci]
     needs: bump
     permissions:
       contents: read
