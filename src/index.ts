@@ -9,10 +9,11 @@
  *
  * @example
  * ```typescript
- * import { createClient } from 'mitra-platform-sdk';
+ * import { createClient } from '@mitralab.io/platform-sdk';
  *
  * const mitra = createClient({
  *   appId: 'your-app-id',
+ *   apiUrl: 'https://api.example.com',
  * });
  *
  * await mitra.init();

@@ -2,19 +2,33 @@
   "name": "@mitralab.io/platform-sdk",
   "version": "1.0.8",
   "description": "JavaScript/TypeScript SDK for building apps on the Mitra Platform",
-  "main": "dist/index.js",
-  "module": "dist/index.mjs",
-  "types": "dist/index.d.ts",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.mjs",
-      "require": "./dist/index.js"
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
   ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
   "scripts": {
     "build": "tsup src/index.ts --format cjs,esm --dts --clean",
     "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
@@ -22,9 +36,11 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run --coverage",
     "test:watch": "vitest",
+    "check:package-types": "npx --yes @arethetypeswrong/cli@0.18.5 --pack .",
+    "pack:check": "npm pack --dry-run",
     "smoke:package": "node scripts/smoke-package.mjs",
-    "check": "npm run lint && npm run typecheck && npm test && npm run build && npm run smoke:package",
-    "prepublishOnly": "npm run check"
+    "check": "npm run lint && npm run typecheck && npm test && npm run build && npm run pack:check && npm run smoke:package",
+    "prepublishOnly": "npm run check && npm run check:package-types"
   },
   "keywords": [
     "mitra",
@@ -64,6 +80,7 @@
     "node": ">=18.0.0"
   },
   "overrides": {
+    "esbuild": "^0.25.0",
     "rollup": "^4.59.0",
     "test-exclude": "7.0.1"
   }

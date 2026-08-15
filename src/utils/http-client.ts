@@ -38,6 +38,23 @@ function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
 
+function buildRequestUrl(
+  baseUrl: string,
+  path: string,
+  params?: Record<string, QueryParamValue>
+): string {
+  const url = `${baseUrl}${path}`;
+  if (!params) return url;
+
+  const searchParams = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined) searchParams.append(key, String(value));
+  });
+
+  const queryString = searchParams.toString();
+  return queryString ? `${url}?${queryString}` : url;
+}
+
 /** Allowed query parameter value types. */
 export type { QueryParamValue } from '@mitralab.io/sdk-core';
 
@@ -132,20 +149,7 @@ export class HttpClient implements Transport {
   async request<T>(path: string, options: RequestOptions = {}): Promise<T> {
     const { method = 'GET', body, headers = {}, params, isRetry } = options;
 
-    let url = `${this.baseUrl}${path}`;
-
-    if (params) {
-      const searchParams = new URLSearchParams();
-      Object.entries(params).forEach(([key, value]) => {
-        if (value !== undefined) {
-          searchParams.append(key, String(value));
-        }
-      });
-      const queryString = searchParams.toString();
-      if (queryString) {
-        url += `?${queryString}`;
-      }
-    }
+    const url = buildRequestUrl(this.baseUrl, path, params);
 
     const requestHeaders: Record<string, string> = {
       'Content-Type': 'application/json',
