@@ -175,6 +175,14 @@ try {
 }
 ```
 
+O transporte não segue redirects HTTP. Respostas 307, 308 ou respostas já
+marcadas como redirecionadas falham sem replay. A única repetição automática é
+a tentativa única após refresh bem-sucedido em resposta 401.
+
+Antes de construir `MitraApiError`, a SDK remove o token usado na tentativa e
+qualquer credencial no formato `Bearer` de `message`, `code` e `details`,
+percorrendo recursivamente valores, arrays e chaves de objetos.
+
 ## Desenvolvimento
 
 ```bash
