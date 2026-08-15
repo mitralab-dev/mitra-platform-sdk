@@ -14,7 +14,22 @@ try {
     ['pack', '--json', '--pack-destination', consumerDirectory],
     { encoding: 'utf8' }
   );
-  const [{ filename }] = JSON.parse(packOutput);
+  const [{ filename, files }] = JSON.parse(packOutput);
+  const packedFiles = new Set(files.map(({ path }) => path));
+  for (const expectedFile of [
+    'CHANGELOG.md',
+    'LICENSE',
+    'README.md',
+    'dist/index.cjs',
+    'dist/index.d.cts',
+    'dist/index.d.ts',
+    'dist/index.js',
+    'package.json',
+  ]) {
+    if (!packedFiles.has(expectedFile)) {
+      throw new Error(`Package is missing ${expectedFile}`);
+    }
+  }
   const tarball = join(consumerDirectory, filename);
 
   writeFileSync(

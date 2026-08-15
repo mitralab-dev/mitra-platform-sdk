@@ -37,6 +37,7 @@ export interface MitraClientConfig {
    * ```typescript
    * const mitra = createClient({
    *   appId: 'your-app-id',
+   *   apiUrl: 'https://api.example.com',
    *   onError: (error) => toast.error(error.message),
    * });
    * ```
@@ -82,6 +83,7 @@ function expectAppInfoResponse(value: unknown): AppInfoResponse {
  * ```typescript
  * const mitra = createClient({
  *   appId: 'your-app-id',
+ *   apiUrl: 'https://api.example.com',
  * });
  *
  * // Initialize (resolves app config automatically)
@@ -108,7 +110,10 @@ export interface MitraClient {
    *
    * @example
    * ```typescript
-   * const mitra = createClient({ appId: 'your-app-id' });
+   * const mitra = createClient({
+   *   appId: 'your-app-id',
+   *   apiUrl: 'https://api.example.com',
+   * });
    * await mitra.init();
    * ```
    */
@@ -209,7 +214,7 @@ export interface MitraClient {
  *
  * @example
  * ```typescript
- * import { createClient } from 'mitra-platform-sdk';
+ * import { createClient } from '@mitralab.io/platform-sdk';
  *
  * const mitra = createClient({
  *   appId: import.meta.env.VITE_MITRA_APP_ID,
@@ -227,7 +232,7 @@ export interface MitraClient {
  * ```typescript
  * // Export as singleton for use throughout your app
  * // src/api/mitraClient.ts
- * import { createClient } from 'mitra-platform-sdk';
+ * import { createClient } from '@mitralab.io/platform-sdk';
  *
  * export const mitra = createClient({
  *   appId: import.meta.env.VITE_MITRA_APP_ID,

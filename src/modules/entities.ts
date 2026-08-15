@@ -17,9 +17,8 @@ export class EntitiesModule {
 
   constructor(
     private readonly httpClient: HttpClient,
-    dataSourceId: string
+    _dataSourceId: string
   ) {
-    void dataSourceId;
     this.core = createEntitiesModule(httpClient, coreErrors);
   }
 
@@ -39,8 +38,7 @@ export class EntitiesModule {
    * Preserved for Platform SDK 1.x compatibility.
    * Records now resolve the app from authenticated context instead of a data source path.
    */
-  setDataSourceId(dataSourceId: string): void {
-    void dataSourceId;
+  setDataSourceId(_dataSourceId: string): void {
     this.core = createEntitiesModule(this.httpClient, coreErrors);
   }
 
