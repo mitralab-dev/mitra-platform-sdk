@@ -192,6 +192,8 @@ npm run lint
 npm test
 ```
 
-Na adoção empilhada inicial, o core deve ser empacotado e instalado com `--no-save --package-lock=false` para validação local. Nenhum `file:` ou path de tarball entra no manifesto. Depois que `@mitralab.io/sdk-core@0.1.0` for publicado, o lockfile deve ser regenerado a partir do registry antes do PR da Platform SDK.
+`@mitralab.io/sdk-core@0.1.0` é resolvido pelo registry público do npm e fica
+travado por integridade no `package-lock.json`. Não substitua a dependência por
+`file:` ou tarball local.
 
 Build gera CommonJS, ESM e tipos TypeScript em `dist/`.
