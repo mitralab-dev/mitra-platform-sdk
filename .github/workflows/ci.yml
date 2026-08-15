@@ -1,9 +1,9 @@
 name: Build & Test
 on:
   push:
-    branches: [main]
+    branches: [alpha, main]
   pull_request:
-    branches: [main]
+    branches: [alpha, main]
     types: [opened, edited, synchronize, reopened]
 permissions:
   contents: read
@@ -39,32 +39,59 @@ jobs:
 
   build:
     needs: pr-convention
-    if: ${{ !failure() && !cancelled() }}
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
+      - name: Require valid PR title
+        if: ${{ needs.pr-convention.result != 'success' && needs.pr-convention.result != 'skipped' }}
+        run: exit 1
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
-          node-version: '20'
-          cache: 'npm'
+          node-version: "20"
+          cache: "npm"
       - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
       - run: npm run build
+      - run: npm run smoke:package
+
   test:
+    needs: [build, compatibility]
+    if: ${{ always() }}
     runs-on: ubuntu-latest
-    needs: build
-    if: ${{ !failure() && !cancelled() }}
     steps:
+      - name: Require successful build and compatibility
+        if: ${{ needs.build.result != 'success' || needs.compatibility.result != 'success' }}
+        run: exit 1
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
-          node-version: '20'
-          cache: 'npm'
+          node-version: "20"
+          cache: "npm"
       - run: npm ci
-      - run: npx vitest run --coverage
+      - run: npm test
       - uses: actions/upload-artifact@v7
         with:
           name: coverage
           path: coverage/
+
+  compatibility:
+    needs: build
+    if: ${{ !failure() && !cancelled() }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [18, 22]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+
   sonar:
     runs-on: ubuntu-latest
     needs: test

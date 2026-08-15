@@ -1,151 +1,51 @@
+import {
+  createEntitiesModule,
+  type EntitiesProxy as CoreEntitiesProxy,
+} from '@mitralab.io/sdk-core';
+import { coreErrors } from '../core-errors';
 import { HttpClient } from '../utils/http-client';
-import type { QueryParamValue } from '../utils/http-client';
-import type { EntityListOptions, EntityTable } from './entities.types';
+import type { EntityTable } from './entities.types';
 
-// Re-export types for convenience
 export type { EntityListOptions, EntityTable } from './entities.types';
 
 /**
- * @internal
- */
-interface EntityListResponse<T> {
-  data: T[];
-  limit: number;
-  skip: number;
-  total: number;
-  hasMore: boolean;
-}
-
-/**
- * Module for database CRUD operations.
- *
- * Access any table dynamically: `mitra.entities.TableName.method()`.
- * Table names are case-sensitive and must match the Data Manager config.
- *
- * @example
- * ```typescript
- * // Dynamic access
- * const tasks = await mitra.entities.Task.list('-created_at', 10);
- * const task = await mitra.entities.Task.create({ title: 'New task' });
- *
- * // Typed access
- * const typed = mitra.entities.getTable<Task>('Task');
- * const pending = await typed.filter({ status: 'pending' });
- * ```
+ * Compatibility facade for the Platform SDK 1.x entity API.
+ * Shared request behavior lives in `@mitralab.io/sdk-core`.
  */
 export class EntitiesModule {
-  private readonly httpClient: HttpClient;
-  private dataSourceId: string;
-  private readonly tableProxies: Map<string, EntityTable<unknown>> = new Map();
+  private core: CoreEntitiesProxy;
 
-  constructor(httpClient: HttpClient, dataSourceId: string) {
-    this.httpClient = httpClient;
-    this.dataSourceId = dataSourceId;
+  constructor(
+    private readonly httpClient: HttpClient,
+    dataSourceId: string
+  ) {
+    void dataSourceId;
+    this.core = createEntitiesModule(httpClient, coreErrors);
   }
 
   static createProxy(httpClient: HttpClient, dataSourceId: string): EntitiesModule {
     const instance = new EntitiesModule(httpClient, dataSourceId);
     return new Proxy(instance, {
-      get: (target, prop: string) => {
-        if (prop in target) {
-          return (target as unknown as Record<string, unknown>)[prop];
+      get(target, property, receiver) {
+        if (typeof property !== 'string' || property in target) {
+          return Reflect.get(target, property, receiver) as unknown;
         }
-        return target.getTable(prop);
+        return target.getTable(property);
       },
     });
   }
 
+  /**
+   * Preserved for Platform SDK 1.x compatibility.
+   * Records now resolve the app from authenticated context instead of a data source path.
+   */
   setDataSourceId(dataSourceId: string): void {
-    this.dataSourceId = dataSourceId;
-    this.tableProxies.clear();
+    void dataSourceId;
+    this.core = createEntitiesModule(this.httpClient, coreErrors);
   }
 
   getTable<T = Record<string, unknown>>(tableName: string): EntityTable<T> {
-    if (!this.tableProxies.has(tableName)) {
-      this.tableProxies.set(tableName, this.createTableAccessor<T>(tableName) as EntityTable<unknown>);
-    }
-    return this.tableProxies.get(tableName) as EntityTable<T>;
-  }
-
-  private createTableAccessor<T = Record<string, unknown>>(
-    tableName: string
-  ): EntityTable<T> {
-    const basePath = `/api/v1/data-sources/${this.dataSourceId}/tables/${tableName}/records`;
-
-    return {
-      list: async (
-        sortOrOptions?: string | EntityListOptions,
-        limit?: number,
-        skip?: number,
-        fields?: string[]
-      ): Promise<T[]> => {
-        let params: Record<string, QueryParamValue>;
-
-        if (typeof sortOrOptions === 'string' || sortOrOptions === undefined) {
-          params = {
-            sort: sortOrOptions,
-            limit,
-            skip,
-            fields: fields?.join(','),
-          };
-        } else {
-          params = {
-            sort: sortOrOptions.sort,
-            limit: sortOrOptions.limit,
-            skip: sortOrOptions.skip,
-            fields: sortOrOptions.fields?.join(','),
-          };
-        }
-
-        const response = await this.httpClient.get<EntityListResponse<T>>(basePath, params);
-        return response.data;
-      },
-
-      filter: async (
-        query: Record<string, unknown>,
-        sort?: string,
-        limit?: number,
-        skip?: number,
-        fields?: string[]
-      ): Promise<T[]> => {
-        const params: Record<string, QueryParamValue> = {
-          q: JSON.stringify(query),
-          sort,
-          limit,
-          skip,
-          fields: fields?.join(','),
-        };
-
-        const response = await this.httpClient.get<EntityListResponse<T>>(basePath, params);
-        return response.data;
-      },
-
-      get: async (id: string | number): Promise<T> => {
-        return this.httpClient.get<T>(`${basePath}/${id}`);
-      },
-
-      create: async (data: Partial<T>): Promise<T> => {
-        return this.httpClient.post<T>(basePath, data);
-      },
-
-      update: async (id: string | number, data: Partial<T>): Promise<T> => {
-        return this.httpClient.put<T>(`${basePath}/${id}`, data);
-      },
-
-      delete: async (id: string | number): Promise<void> => {
-        return this.httpClient.delete<void>(`${basePath}/${id}`);
-      },
-
-      deleteMany: async (query: Record<string, unknown>): Promise<{ deleted: number }> => {
-        return this.httpClient.delete<{ deleted: number }>(basePath, {
-          q: JSON.stringify(query),
-        });
-      },
-
-      bulkCreate: async (data: Partial<T>[]): Promise<T[]> => {
-        return this.httpClient.post<T[]>(`${basePath}/bulk`, data);
-      },
-    };
+    return this.core.getTable<T>(tableName);
   }
 }
 

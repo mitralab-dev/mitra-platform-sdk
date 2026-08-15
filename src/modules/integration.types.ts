@@ -12,16 +12,4 @@ export interface ProxyInput {
   queryParams?: Record<string, string>;
 }
 
-/** Result of a proxied HTTP request. */
-export interface ProxyResult {
-  /** HTTP status code from the external API. */
-  status: number;
-  /** Response headers. */
-  headers: Record<string, string>;
-  /** Response body. */
-  body: unknown;
-  /** Execution time in milliseconds. */
-  durationMs: number;
-  /** Unique execution record ID. */
-  executionId: string;
-}
+export type { ProxyResult } from '@mitralab.io/sdk-core';

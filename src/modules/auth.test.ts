@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { AuthModule } from './auth';
-import { MitraApiError } from '../utils/http-client';
 import { mockFetchSequence, mockLocalStorage } from '../test-utils';
 
 const APP_ID = 'test-app';
@@ -8,6 +7,27 @@ const IAM_URL = 'https://api.mitra.io/iam';
 const STORAGE_KEY = `mitra_auth_${APP_ID}`;
 
 const fakeUser = { id: 'u1', tenantId: 't1', email: 'user@test.com', name: 'Test User' };
+const currentUserResponse = {
+  id: 'u1',
+  tenant: {
+    id: 't1',
+    shortId: 'AAAAAAAAAAAAAAAAAAAAEA',
+    legacyId: null,
+    slug: 'test-tenant',
+    plan: { id: 'plan-1', name: 'Free' },
+    name: 'Test Tenant',
+    description: null,
+    hexColor: null,
+    icon: null,
+    infraStatus: 'ACTIVE',
+    active: true,
+  },
+  email: 'user@test.com',
+  name: 'Test User',
+  imageUrl: null,
+  onboardingCompleted: false,
+};
+const apiUser = { ...currentUserResponse, tenantId: 't1' };
 const fakeTokenResponse = { accessToken: 'access-123', refreshToken: 'refresh-456', tokenType: 'Bearer' };
 
 describe('AuthModule', () => {
@@ -24,14 +44,14 @@ describe('AuthModule', () => {
   it('should sign in with credentials and return user', async () => {
     const fetchMock = mockFetchSequence([
       { body: fakeTokenResponse },
-      { body: fakeUser },
+      { body: currentUserResponse },
     ]);
 
     const auth = new AuthModule(APP_ID, IAM_URL);
     const user = await auth.signIn({ email: 'user@test.com', password: 'pass' });
 
-    expect(user).toEqual(fakeUser);
-    expect(auth.currentUser).toEqual(fakeUser);
+    expect(user).toEqual(apiUser);
+    expect(auth.currentUser).toEqual(apiUser);
     expect(auth.accessToken).toBe('access-123');
 
     // Verify POST /login was called with credentials and appId
@@ -40,10 +60,27 @@ describe('AuthModule', () => {
     expect(JSON.parse(options.body)).toEqual({ email: 'user@test.com', password: 'pass', appId: APP_ID });
   });
 
+  it('should reject an invalid canonical current-user response', async () => {
+    const invalidTenant = { ...currentUserResponse.tenant } as Record<string, unknown>;
+    delete invalidTenant.active;
+    mockFetchSequence([
+      { body: fakeTokenResponse },
+      { body: { ...currentUserResponse, tenant: invalidTenant } },
+    ]);
+    const auth = new AuthModule(APP_ID, IAM_URL);
+
+    await expect(
+      auth.signIn({ email: 'user@test.com', password: 'pass' })
+    ).rejects.toMatchObject({
+      code: 'INVALID_RESPONSE',
+      message: 'Current user response tenant has an invalid active field',
+    });
+  });
+
   it('should save auth state to localStorage after sign in', async () => {
     mockFetchSequence([
       { body: fakeTokenResponse },
-      { body: fakeUser },
+      { body: currentUserResponse },
     ]);
 
     const auth = new AuthModule(APP_ID, IAM_URL);
@@ -54,7 +91,7 @@ describe('AuthModule', () => {
       expect.any(String)
     );
     const stored = JSON.parse(storage._store[STORAGE_KEY]);
-    expect(stored.user).toEqual(fakeUser);
+    expect(stored.user).toEqual(apiUser);
     expect(stored.token).toBe('access-123');
     expect(stored.refreshToken).toBe('refresh-456');
   });
@@ -63,13 +100,13 @@ describe('AuthModule', () => {
     const fetchMock = mockFetchSequence([
       { body: { id: 'u1' } },           // POST /register
       { body: fakeTokenResponse },       // POST /tokens (signIn)
-      { body: fakeUser },               // GET /me (signIn)
+      { body: currentUserResponse },    // GET /me (signIn)
     ]);
 
     const auth = new AuthModule(APP_ID, IAM_URL);
     const user = await auth.signUp({ email: 'new@test.com', password: 'pass', name: 'New' });
 
-    expect(user).toEqual(fakeUser);
+    expect(user).toEqual(apiUser);
 
     // Verify register call includes appId
     const registerBody = JSON.parse(fetchMock.mock.calls[0][1].body);
@@ -80,7 +117,7 @@ describe('AuthModule', () => {
   it('should clear auth state on sign out', async () => {
     mockFetchSequence([
       { body: fakeTokenResponse },
-      { body: fakeUser },
+      { body: currentUserResponse },
     ]);
 
     const auth = new AuthModule(APP_ID, IAM_URL);
@@ -115,7 +152,7 @@ describe('AuthModule', () => {
     const newTokenResponse = { accessToken: 'new-access', refreshToken: 'new-refresh', tokenType: 'Bearer' };
     const fetchMock = mockFetchSequence([
       { body: newTokenResponse },  // POST /tokens/refresh
-      { body: fakeUser },          // GET /me
+      { body: currentUserResponse }, // GET /me
     ]);
 
     const auth = new AuthModule(APP_ID, IAM_URL);
@@ -139,7 +176,7 @@ describe('AuthModule', () => {
 
     const fetchMock = mockFetchSequence([
       { body: { accessToken: 'new', refreshToken: 'new-r', tokenType: 'Bearer' } },
-      { body: fakeUser },
+      { body: currentUserResponse },
     ]);
 
     const auth = new AuthModule(APP_ID, IAM_URL);
@@ -187,8 +224,9 @@ describe('AuthModule', () => {
       refreshToken: 'refresh-456',
     });
 
-    const updatedUser = { ...fakeUser, name: 'Updated Name' };
-    mockFetchSequence([{ body: updatedUser }]);
+    const updatedResponse = { ...currentUserResponse, name: 'Updated Name' };
+    const updatedUser = { ...updatedResponse, tenantId: 't1' };
+    mockFetchSequence([{ body: updatedResponse }]);
 
     const auth = new AuthModule(APP_ID, IAM_URL);
     const user = await auth.me();
@@ -222,7 +260,7 @@ describe('AuthModule', () => {
 
     mockFetchSequence([
       { body: fakeTokenResponse },
-      { body: fakeUser },
+      { body: currentUserResponse },
     ]);
 
     await auth.signIn({ email: 'user@test.com', password: 'pass' });
@@ -250,7 +288,7 @@ describe('AuthModule', () => {
       refreshToken: 'refresh-456',
     });
 
-    mockFetchSequence([{ body: fakeUser }]);
+    mockFetchSequence([{ body: currentUserResponse }]);
 
     const auth = new AuthModule(APP_ID, IAM_URL);
     const valid = await auth.checkAuth();
@@ -315,14 +353,14 @@ describe('AuthModule', () => {
 
     mockFetchSequence([
       { body: fakeTokenResponse },
-      { body: fakeUser },
+      { body: currentUserResponse },
     ]);
 
     await auth.signIn({ email: 'user@test.com', password: 'pass' });
 
     // Called again with the user
     expect(listener).toHaveBeenCalledTimes(2);
-    expect(listener).toHaveBeenLastCalledWith(fakeUser);
+    expect(listener).toHaveBeenLastCalledWith(apiUser);
   });
 
   it('should unsubscribe listener when unsub function is called', async () => {
@@ -336,7 +374,7 @@ describe('AuthModule', () => {
 
     mockFetchSequence([
       { body: fakeTokenResponse },
-      { body: fakeUser },
+      { body: currentUserResponse },
     ]);
 
     await auth.signIn({ email: 'user@test.com', password: 'pass' });

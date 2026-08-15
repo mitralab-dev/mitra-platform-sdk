@@ -5,7 +5,7 @@
 
 SDK JavaScript/TypeScript para apps criados na plataforma Mitra. O código gerado pelo Code Studio usa este pacote para autenticar usuários, acessar entidades do Data Manager, executar server functions, rodar custom queries e chamar integrações.
 
-Zero runtime dependencies: usa apenas Web APIs padrão (`fetch`, `localStorage`, `URL`, `Proxy`).
+O transporte de browser usa apenas Web APIs padrão (`fetch`, `localStorage`, `URL`, `Proxy`). Os contratos e módulos comuns vêm de `@mitralab.io/sdk-core`, sem trazer autenticação de browser para o core.
 
 ## O Que a SDK Entrega
 
@@ -41,11 +41,11 @@ await mitra.init();
 
 ## Configuração
 
-| Campo | Obrigatório | Uso |
-|---|---|---|
-| `appId` | sim | ID do app publicado no Code Studio |
-| `apiUrl` | sim | URL base do Kong/API da plataforma |
-| `onError` | não | callback global para erros de API |
+| Campo     | Obrigatório | Uso                                |
+| --------- | ----------- | ---------------------------------- |
+| `appId`   | sim         | ID do app publicado no Code Studio |
+| `apiUrl`  | sim         | URL base do Kong/API da plataforma |
+| `onError` | não         | callback global para erros de API  |
 
 O client deriva os endpoints dos serviços a partir de `apiUrl`: `/iam`, `/data-manager`, `/functions`, `/integration` e `/code-studio`.
 
@@ -54,20 +54,22 @@ O client deriva os endpoints dos serviços a partir de `apiUrl`: `/iam`, `/data-
 ```text
 src/
 ├── client.ts          # createClient, composição dos módulos e init
-├── modules/           # auth, entities, functions, integration e queries
+├── modules/           # auth de browser e fachadas compatíveis com a API 1.x
 ├── utils/http-client  # fetch wrapper, auth header, retry 401 e MitraApiError
 └── index.ts           # exports públicos
 ```
 
+`@mitralab.io/sdk-core` concentra entities, queries, Functions, integration, `auth.me`, paths seguros e validação estrutural de respostas. A Platform SDK continua responsável por login, cadastro, refresh, `localStorage`, listeners e o retry único após refresh em resposta `401`.
+
 ## Módulos
 
-| Módulo | Uso |
-|---|---|
-| `auth` | `signIn`, `signUp`, `signOut`, `refreshSession`, `me`, `checkAuth`, `onAuthStateChange` |
-| `entities` | CRUD dinâmico por tabela, filtro, paginação, bulk create e deleteMany |
-| `functions` | execução síncrona de server function por ID |
-| `queries` | execução de custom query por ID com parâmetros |
-| `integration` | execução de integration resource ou proxy direto por config |
+| Módulo        | Uso                                                                                     |
+| ------------- | --------------------------------------------------------------------------------------- |
+| `auth`        | `signIn`, `signUp`, `signOut`, `refreshSession`, `me`, `checkAuth`, `onAuthStateChange` |
+| `entities`    | CRUD dinâmico por tabela, filtro, paginação, bulk create e deleteMany                   |
+| `functions`   | disparo de server function por ID com a semântica assíncrona da API 1.x                 |
+| `queries`     | execução de custom query por ID com parâmetros                                          |
+| `integration` | execução de integration resource ou proxy direto por config                             |
 
 ## Auth
 
@@ -110,6 +112,8 @@ await mitra.entities.Task.delete(created.id);
 
 Table names são case-sensitive e precisam bater com o nome da tabela no Data Manager.
 
+Records usam `/api/v1/tables/{table}/records`. O app e o tenant vêm do contexto autenticado, não do `dataSourceId` no path.
+
 ## Functions
 
 ```typescript
@@ -117,10 +121,10 @@ const execution = await mitra.functions.execute('function-id', {
   orderId: 'order-123',
 });
 
-if (execution.status === 'COMPLETED') {
-  console.log(execution.output);
-}
+console.log(execution.id, execution.status);
 ```
+
+Na API 1.x, `execute` não envia `X-Invocation-Type`. O serviço usa o default assíncrono e devolve a execução criada, normalmente com status `PENDING`; a chamada não espera a Function terminar.
 
 ## Queries
 
@@ -179,5 +183,7 @@ npm run build
 npm run lint
 npm test
 ```
+
+Na adoção empilhada inicial, o core deve ser empacotado e instalado com `--no-save --package-lock=false` para validação local. Nenhum `file:` ou path de tarball entra no manifesto. Depois que `@mitralab.io/sdk-core@0.1.0` for publicado, o lockfile deve ser regenerado a partir do registry antes do PR da Platform SDK.
 
 Build gera CommonJS, ESM e tipos TypeScript em `dist/`.

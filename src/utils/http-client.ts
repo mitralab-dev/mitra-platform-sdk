@@ -1,5 +1,11 @@
+import type {
+  QueryParamValue,
+  Transport,
+  TransportRequestOptions,
+} from '@mitralab.io/sdk-core';
+
 /** Allowed query parameter value types. */
-export type QueryParamValue = string | number | boolean | undefined;
+export type { QueryParamValue } from '@mitralab.io/sdk-core';
 
 /**
  * Configuration options for creating an HttpClient instance.
@@ -20,7 +26,7 @@ export interface HttpClientConfig {
 /**
  * Options for making HTTP requests.
  */
-export interface RequestOptions {
+export interface RequestOptions extends Omit<TransportRequestOptions, 'method'> {
   /** HTTP method (defaults to 'GET') */
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
   /** Request body (will be JSON stringified) */
@@ -50,7 +56,7 @@ export interface RequestOptions {
  * const user = await client.post<User>('/users', { name: 'John' });
  * ```
  */
-export class HttpClient {
+export class HttpClient implements Transport {
   private readonly baseUrl: string;
   private readonly tokenGetter: () => string | null;
   private readonly onUnauthorized?: () => Promise<boolean>;

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { HttpClient, MitraApiError } from './http-client';
 import { mockFetch } from '../test-utils';
 

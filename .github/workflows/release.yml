@@ -9,7 +9,7 @@ on:
 permissions:
   contents: read
 jobs:
-  build:
+  validate:
     runs-on: ubuntu-latest
     steps:
       - name: Validate branch
@@ -17,17 +17,17 @@ jobs:
         run: |
           echo "::error::Releases are only allowed from the main branch."
           exit 1
-
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '20'
-          cache: 'npm'
-      - run: npm ci
-      - run: npm run build
+      - name: Validate version
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if [[ ! "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::Version must use canonical semantic versioning, for example 0.6.0."
+            exit 1
+          fi
   test:
     runs-on: ubuntu-latest
-    needs: build
+    needs: validate
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -35,7 +35,7 @@ jobs:
           node-version: '20'
           cache: 'npm'
       - run: npm ci
-      - run: npx vitest run --passWithNoTests
+      - run: npm run check
   bump:
     runs-on: ubuntu-latest
     needs: test
@@ -68,7 +68,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: main
+          ref: v${{ inputs.version }}
       - uses: actions/setup-node@v6
         with:
           node-version: '20'

@@ -1,3 +1,5 @@
+import { createAuthModule, type AuthModule as CoreAuthModule } from '@mitralab.io/sdk-core';
+import { coreErrors } from '../core-errors';
 import { HttpClient, MitraApiError } from '../utils/http-client';
 import type {
   User,
@@ -25,19 +27,21 @@ export type { User, SignInCredentials, SignUpData, AuthStateChangeCallback } fro
 export class AuthModule {
   private readonly appId: string;
   private _currentUser: User | null = null;
-  private _accessToken: string | null = null;
-  private _refreshToken: string | null = null;
+  #accessToken: string | null = null;
+  #refreshToken: string | null = null;
   private refreshPromise: Promise<boolean> | null = null;
   private readonly listeners: Set<AuthStateChangeCallback> = new Set();
   private readonly storageKey: string;
   private readonly publicClient: HttpClient;
   private readonly authedClient: HttpClient;
+  private readonly currentUserApi: CoreAuthModule;
 
   constructor(appId: string, iamBaseUrl: string) {
     this.appId = appId;
     this.storageKey = `mitra_auth_${appId}`;
     this.publicClient = new HttpClient({ baseUrl: iamBaseUrl, getToken: () => null });
-    this.authedClient = new HttpClient({ baseUrl: iamBaseUrl, getToken: () => this._accessToken });
+    this.authedClient = new HttpClient({ baseUrl: iamBaseUrl, getToken: () => this.#accessToken });
+    this.currentUserApi = createAuthModule(this.authedClient, coreErrors);
     this.loadFromStorage();
   }
 
@@ -48,12 +52,12 @@ export class AuthModule {
 
   /** The current JWT access token, or null. */
   get accessToken(): string | null {
-    return this._accessToken;
+    return this.#accessToken;
   }
 
   /** Whether a user is currently authenticated (local check, not server-validated). */
   get isAuthenticated(): boolean {
-    return this._currentUser !== null && this._accessToken !== null;
+    return this._currentUser !== null && this.#accessToken !== null;
   }
 
   /**
@@ -80,10 +84,10 @@ export class AuthModule {
       { ...credentials, appId: this.appId }
     );
 
-    this._accessToken = tokenResponse.accessToken;
-    this._refreshToken = tokenResponse.refreshToken;
+    this.#accessToken = tokenResponse.accessToken;
+    this.#refreshToken = tokenResponse.refreshToken;
 
-    const user = await this.authedClient.get<User>('/api/v1/auth/me');
+    const user = await this.getCurrentUser();
 
     this.setAuthState(user, tokenResponse.accessToken, tokenResponse.refreshToken);
     return user;
@@ -149,7 +153,7 @@ export class AuthModule {
    * ```
    */
   async refreshSession(): Promise<boolean> {
-    if (!this._refreshToken) return false;
+    if (!this.#refreshToken) return false;
 
     if (this.refreshPromise) return this.refreshPromise;
 
@@ -176,10 +180,10 @@ export class AuthModule {
    * ```
    */
   async me(): Promise<User | null> {
-    if (!this._accessToken) return null;
+    if (!this.#accessToken) return null;
 
     try {
-      const user = await this.authedClient.get<User>('/api/v1/auth/me');
+      const user = await this.getCurrentUser();
 
       this._currentUser = user;
       this.saveToStorage();
@@ -223,7 +227,7 @@ export class AuthModule {
    * ```
    */
   setToken(token: string, saveToStorage: boolean = true): void {
-    this._accessToken = token;
+    this.#accessToken = token;
     if (saveToStorage) {
       this.saveToStorage();
     }
@@ -278,13 +282,13 @@ export class AuthModule {
     try {
       const tokenResponse = await this.publicClient.post<AuthTokenResponse>(
         '/api/v1/auth/refresh-token',
-        { refreshToken: this._refreshToken }
+        { refreshToken: this.#refreshToken }
       );
 
-      this._accessToken = tokenResponse.accessToken;
-      this._refreshToken = tokenResponse.refreshToken;
+      this.#accessToken = tokenResponse.accessToken;
+      this.#refreshToken = tokenResponse.refreshToken;
 
-      const user = await this.authedClient.get<User>('/api/v1/auth/me');
+      const user = await this.getCurrentUser();
 
       this.setAuthState(user, tokenResponse.accessToken, tokenResponse.refreshToken);
       return true;
@@ -296,16 +300,21 @@ export class AuthModule {
 
   private setAuthState(user: User, token: string, refreshToken: string): void {
     this._currentUser = user;
-    this._accessToken = token;
-    this._refreshToken = refreshToken;
+    this.#accessToken = token;
+    this.#refreshToken = refreshToken;
     this.saveToStorage();
     this.notifyListeners();
   }
 
+  private async getCurrentUser(): Promise<User> {
+    const user = await this.currentUserApi.me();
+    return { ...user, tenantId: user.tenant.id };
+  }
+
   private clearAuthState(): void {
     this._currentUser = null;
-    this._accessToken = null;
-    this._refreshToken = null;
+    this.#accessToken = null;
+    this.#refreshToken = null;
     this.removeFromStorage();
     this.notifyListeners();
   }
@@ -328,8 +337,8 @@ export class AuthModule {
         this.storageKey,
         JSON.stringify({
           user: this._currentUser,
-          token: this._accessToken,
-          refreshToken: this._refreshToken,
+          token: this.#accessToken,
+          refreshToken: this.#refreshToken,
         })
       );
     } catch {
@@ -345,8 +354,8 @@ export class AuthModule {
       if (stored) {
         const { user, token, refreshToken } = JSON.parse(stored);
         this._currentUser = user;
-        this._accessToken = token;
-        this._refreshToken = refreshToken ?? null;
+        this.#accessToken = token;
+        this.#refreshToken = refreshToken ?? null;
       }
     } catch {
       this.removeFromStorage();

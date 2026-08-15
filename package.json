@@ -19,9 +19,12 @@
     "build": "tsup src/index.ts --format cjs,esm --dts --clean",
     "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
     "lint": "eslint src --ext .ts",
-    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --coverage",
     "test:watch": "vitest",
-    "prepublishOnly": "npm run build"
+    "smoke:package": "node scripts/smoke-package.mjs",
+    "check": "npm run lint && npm run typecheck && npm test && npm run build && npm run smoke:package",
+    "prepublishOnly": "npm run check"
   },
   "keywords": [
     "mitra",
@@ -42,12 +45,18 @@
   "bugs": {
     "url": "https://github.com/mitralab-dev/mitra-platform-sdk/issues"
   },
+  "dependencies": {
+    "@mitralab.io/sdk-core": "^0.1.0"
+  },
   "devDependencies": {
+    "@eslint/js": "^9.39.1",
     "@types/node": "^26.0.0",
     "@vitest/coverage-v8": "^4.1.2",
     "eslint": "^10.0.1",
+    "globals": "^16.5.0",
     "tsup": "^8.0.1",
     "typescript": "^6.0.2",
+    "typescript-eslint": "^8.57.1",
     "vitest": "^4.1.2"
   },
   "engines": {

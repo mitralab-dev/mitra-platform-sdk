@@ -1,3 +1,5 @@
+import { encodePathSegment, expectObject } from '@mitralab.io/sdk-core';
+import { coreErrors } from './core-errors';
 import { HttpClient, MitraApiError } from './utils/http-client';
 import { AuthModule } from './modules/auth';
 import { EntitiesModule, EntitiesProxy } from './modules/entities';
@@ -51,6 +53,28 @@ interface AppInfoResponse {
   allowSignup: boolean;
 }
 
+function expectAppInfoResponse(value: unknown): AppInfoResponse {
+  const response = expectObject<Record<string, unknown>>(
+    value,
+    'App info response',
+    coreErrors
+  );
+  if (typeof response.dataSourceId !== 'string' || !response.dataSourceId.trim()) {
+    throw coreErrors.invalidResponse(
+      'App info response has an invalid dataSourceId field'
+    );
+  }
+  if (typeof response.allowSignup !== 'boolean') {
+    throw coreErrors.invalidResponse(
+      'App info response has an invalid allowSignup field'
+    );
+  }
+  return {
+    dataSourceId: response.dataSourceId,
+    allowSignup: response.allowSignup,
+  };
+}
+
 /**
  * The Mitra client instance providing access to all SDK modules.
  *
@@ -80,7 +104,7 @@ export interface MitraClient {
    * Must be called before using `auth.signUp()` or `entities`.
    * Fetches dataSourceId and allowSignup from the public app info endpoint.
    *
-   * Safe to call multiple times — subsequent calls are no-ops.
+   * Safe to call multiple times. Subsequent calls are no-ops.
    *
    * @example
    * ```typescript
@@ -270,8 +294,10 @@ export function createClient(config: MitraClientConfig): MitraClient {
       getToken: () => null,
     });
 
-    const appInfo = await publicClient.get<AppInfoResponse>(
-      `/api/v1/apps/${appId}/info`
+    const appInfo = expectAppInfoResponse(
+      await publicClient.get<unknown>(
+        `/api/v1/apps/${encodePathSegment(appId, 'appId', coreErrors)}/info`
+      )
     );
 
     entitiesModule.setDataSourceId(appInfo.dataSourceId);
