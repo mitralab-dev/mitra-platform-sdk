@@ -37,6 +37,7 @@ describe('FunctionsModule', () => {
     expect(url).toBe(`${BASE}/api/v1/functions/fn-1/execute`);
     expect(options.method).toBe('POST');
     expect(JSON.parse(options.body)).toEqual({ input: { key: 'value' } });
+    expect(options.headers['X-Invocation-Type']).toBeUndefined();
   });
 
   it('should execute a function without input', async () => {
@@ -48,5 +49,16 @@ describe('FunctionsModule', () => {
 
     const [, options] = fetchMock.mock.calls[0];
     expect(options.body).toBeUndefined();
+    expect(options.headers['X-Invocation-Type']).toBeUndefined();
+  });
+
+  it('rejects a nullable input that is valid in Core but not in the 1.x facade', async () => {
+    mockFetch({ ...fakeExecution, input: null });
+    const client = new HttpClient({ baseUrl: BASE });
+    const functions = new FunctionsModule(client);
+
+    await expect(functions.execute('fn-1')).rejects.toMatchObject({
+      code: 'INVALID_RESPONSE',
+    });
   });
 });

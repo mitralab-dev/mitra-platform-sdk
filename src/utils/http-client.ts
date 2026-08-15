@@ -1,5 +1,45 @@
+import type {
+  QueryParamValue,
+  Transport,
+  TransportRequestOptions,
+} from '@mitralab.io/sdk-core';
+
+type ErrorPayload = Record<string, unknown>;
+
+const bearerCredentialPattern = /(Bearer\s+)\S+/gi;
+
+function redactText(value: string, currentToken: string | null): string {
+  const withoutBearerCredentials = value.replace(bearerCredentialPattern, '$1[REDACTED]');
+  return currentToken
+    ? withoutBearerCredentials.split(currentToken).join('[REDACTED]')
+    : withoutBearerCredentials;
+}
+
+function redactDetails(value: unknown, currentToken: string | null): unknown {
+  if (typeof value === 'string') return redactText(value, currentToken);
+  if (Array.isArray(value)) return value.map((item) => redactDetails(item, currentToken));
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [
+        redactText(key, currentToken),
+        redactDetails(entry, currentToken),
+      ])
+    );
+  }
+  return value;
+}
+
+function asErrorPayload(value: unknown): ErrorPayload {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return value as ErrorPayload;
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
 /** Allowed query parameter value types. */
-export type QueryParamValue = string | number | boolean | undefined;
+export type { QueryParamValue } from '@mitralab.io/sdk-core';
 
 /**
  * Configuration options for creating an HttpClient instance.
@@ -20,7 +60,7 @@ export interface HttpClientConfig {
 /**
  * Options for making HTTP requests.
  */
-export interface RequestOptions {
+export interface RequestOptions extends Omit<TransportRequestOptions, 'method'> {
   /** HTTP method (defaults to 'GET') */
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
   /** Request body (will be JSON stringified) */
@@ -50,7 +90,7 @@ export interface RequestOptions {
  * const user = await client.post<User>('/users', { name: 'John' });
  * ```
  */
-export class HttpClient {
+export class HttpClient implements Transport {
   private readonly baseUrl: string;
   private readonly tokenGetter: () => string | null;
   private readonly onUnauthorized?: () => Promise<boolean>;
@@ -122,7 +162,18 @@ export class HttpClient {
       method,
       headers: requestHeaders,
       body: body ? JSON.stringify(body) : undefined,
+      redirect: 'manual',
     });
+
+    if (response.redirected || response.type === 'opaqueredirect') {
+      const error = new MitraApiError(
+        'Redirected responses are not allowed',
+        response.status,
+        'REDIRECT_NOT_ALLOWED'
+      );
+      this.onError?.(error);
+      throw error;
+    }
 
     if (!response.ok) {
       if (response.status === 401 && !isRetry && this.onUnauthorized) {
@@ -132,12 +183,15 @@ export class HttpClient {
         }
       }
 
-      const errorBody = await response.json().catch(() => ({}));
+      const errorBody: unknown = await response.json().catch(() => ({}));
+      const errorPayload = asErrorPayload(errorBody);
+      const rawMessage = optionalString(errorPayload.message);
+      const rawCode = optionalString(errorPayload.error_code);
       const error = new MitraApiError(
-        errorBody.message || `Request failed with status ${response.status}`,
+        redactText(rawMessage || `Request failed with status ${response.status}`, token),
         response.status,
-        errorBody.error_code,
-        errorBody
+        rawCode === undefined ? undefined : redactText(rawCode, token),
+        redactDetails(errorBody, token)
       );
       this.onError?.(error);
       throw error;

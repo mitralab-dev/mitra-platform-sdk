@@ -6,7 +6,7 @@ export interface FunctionExecution {
   functionId: string;
   /** ID of the function version that was executed. */
   functionVersionId: string;
-  /** Execution status: PENDING, RUNNING, COMPLETED, or FAILED. */
+  /** Execution status returned by the Functions service. */
   status: string;
   /** Input data passed to the function. */
   input: Record<string, unknown>;

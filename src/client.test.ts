@@ -11,10 +11,11 @@ describe('createClient', () => {
     mockLocalStorage();
     mockFetch({});
 
-    const mitra = createClient({
+    const config = {
       appId: 'app-1',
       apiUrl: 'https://api.mitra.io',
-    });
+    };
+    const mitra = createClient(config);
 
     expect(mitra.auth).toBeDefined();
     expect(mitra.entities).toBeDefined();
@@ -22,6 +23,7 @@ describe('createClient', () => {
     expect(mitra.integration).toBeDefined();
     expect(mitra.queries).toBeDefined();
     expect(mitra.config.appId).toBe('app-1');
+    expect(mitra.config).toBe(config);
     expect(mitra.allowSignup).toBe(true);
   });
 
@@ -56,5 +58,65 @@ describe('createClient', () => {
 
     // Only one fetch call for init
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    {},
+    { dataSourceId: '', allowSignup: true },
+    { dataSourceId: 'ds-1' },
+    { dataSourceId: 'ds-1', allowSignup: 'true' },
+  ])('should reject invalid app info payload %#', async (response) => {
+    mockLocalStorage();
+    mockFetch(response);
+    const mitra = createClient({
+      appId: 'app-1',
+      apiUrl: 'https://api.mitra.io',
+    });
+
+    await expect(mitra.init()).rejects.toMatchObject({
+      code: 'INVALID_RESPONSE',
+    });
+    expect(mitra.allowSignup).toBe(true);
+  });
+
+  it('should retry init after an invalid response', async () => {
+    mockLocalStorage();
+    const fetchMock = mockFetchSequence([
+      { body: { dataSourceId: 'ds-1' } },
+      { body: { dataSourceId: 'ds-1', allowSignup: false } },
+    ]);
+    const mitra = createClient({
+      appId: 'app-1',
+      apiUrl: 'https://api.mitra.io',
+    });
+
+    await expect(mitra.init()).rejects.toMatchObject({ code: 'INVALID_RESPONSE' });
+    await expect(mitra.init()).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(mitra.allowSignup).toBe(false);
+  });
+
+  it('should not serialize persisted access or refresh tokens', () => {
+    const accessToken = 'persisted-access-token';
+    const refreshToken = 'persisted-refresh-token';
+    const storage = mockLocalStorage();
+    storage._store['mitra_auth_app-1'] = JSON.stringify({
+      user: { id: 'u1', tenantId: 't1', email: 'user@test.com', name: null },
+      token: accessToken,
+      refreshToken,
+    });
+    mockFetch({});
+
+    const mitra = createClient({
+      appId: 'app-1',
+      apiUrl: 'https://api.mitra.io',
+    });
+    const serialized = JSON.stringify(mitra);
+
+    expect(serialized).not.toContain(accessToken);
+    expect(serialized).not.toContain(refreshToken);
+    expect(Object.keys(mitra.auth)).not.toContain('_accessToken');
+    expect(Object.keys(mitra.auth)).not.toContain('_refreshToken');
   });
 });
