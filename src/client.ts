@@ -1,6 +1,7 @@
 import { encodePathSegment, expectObject } from '@mitralab.io/sdk-core';
 import { coreErrors } from './core-errors';
 import { HttpClient, MitraApiError } from './utils/http-client';
+import { LegacySessionBridge, setActiveBridge } from './legacy/bridge';
 import { AuthModule } from './modules/auth';
 import { EntitiesModule, EntitiesProxy } from './modules/entities';
 import { FunctionsModule } from './modules/functions';
@@ -287,6 +288,12 @@ export function createClient(config: MitraClientConfig): MitraClient {
   const integrationModule = new IntegrationModule(integrationHttpClient);
 
   const queriesModule = new QueriesModule(httpClient);
+
+  // Share one session with the deprecated mitra-interactions-sdk surface: hand
+  // it whatever session is already persisted, and adopt the ones it produces.
+  const legacyBridge = new LegacySessionBridge(authModule, appId, apiUrl);
+  setActiveBridge(legacyBridge);
+  legacyBridge.connect();
 
   let initialized = false;
   let allowSignup = true;

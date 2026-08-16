@@ -46,3 +46,10 @@ export type {
 } from './client';
 
 export { MitraApiError } from './utils/http-client';
+
+/**
+ * Deprecated `mitra-interactions-sdk` surface, re-exported so existing call
+ * sites keep compiling after the package swap. See `./legacy` for the
+ * replacement of each export.
+ */
+export * from './legacy';

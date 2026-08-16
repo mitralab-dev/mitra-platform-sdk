@@ -23,9 +23,9 @@ export function mockFetchSequence(responses: Array<{ body: unknown; status?: num
   return fn;
 }
 
-export function mockLocalStorage() {
+function memoryStorage() {
   const store: Record<string, string> = {};
-  const storage = {
+  return {
     getItem: vi.fn((key: string) => store[key] ?? null),
     setItem: vi.fn((key: string, value: string) => { store[key] = value; }),
     removeItem: vi.fn((key: string) => { delete store[key]; }),
@@ -34,6 +34,16 @@ export function mockLocalStorage() {
     key: vi.fn((index: number) => Object.keys(store)[index] ?? null),
     _store: store,
   };
+}
+
+export function mockLocalStorage() {
+  const storage = memoryStorage();
   vi.stubGlobal('localStorage', storage);
+  return storage;
+}
+
+export function mockSessionStorage() {
+  const storage = memoryStorage();
+  vi.stubGlobal('sessionStorage', storage);
   return storage;
 }

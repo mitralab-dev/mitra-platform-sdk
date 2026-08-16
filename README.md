@@ -141,6 +141,25 @@ console.log(result.status, result.body)
 
 Integration credentials are injected by the Integration service. Do not pass provider credentials through browser input.
 
+## Legacy surface
+
+The public surface of `mitra-interactions-sdk` is re-exported from this package so an application can replace the legacy dependency without rewriting its call sites. Every re-export is marked `@deprecated` and names its replacement, or states that no replacement exists yet.
+
+```typescript
+import { createClient, loginWithGoogleMitra } from "@mitralab.io/platform-sdk"
+
+export const mitra = createClient({ appId, apiUrl })
+
+await loginWithGoogleMitra()
+console.log(mitra.auth.accessToken)
+```
+
+SSO login, the Agent SDK, public Server Functions, and the record API have no equivalent on the new surface and remain supported. Entities, custom queries, Server Function execution, and integrations do have one, listed in the deprecation note of each export.
+
+`createClient` configures the legacy SDK with `baseURL: apiUrl` and `projectId: appId`, and bridges the session in both directions. A session persisted under `mitra_auth_{appId}` is handed to the legacy SDK at startup, and a session the legacy SDK produces through login or token refresh is persisted back under the same key. The bridge only propagates sessions the two SDKs produce: it never starts a login and never triggers a refresh of its own.
+
+The legacy SDK does not return a user, so `auth.currentUser` stays empty after a legacy login. Call `mitra.auth.me()` to populate it. Calling `configureSdkMitra` directly replaces the legacy configuration and removes the bridge.
+
 ## Errors and request behavior
 
 API failures throw `MitraApiError`:

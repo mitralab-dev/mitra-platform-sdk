@@ -62,7 +62,8 @@
     "url": "https://github.com/mitralab-dev/mitra-platform-sdk/issues"
   },
   "dependencies": {
-    "@mitralab.io/sdk-core": "^0.1.0"
+    "@mitralab.io/sdk-core": "^0.1.0",
+    "mitra-interactions-sdk": "1.0.60-beta.42"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",

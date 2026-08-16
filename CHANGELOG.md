@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+- Re-export the deprecated `mitra-interactions-sdk` surface from the package entrypoint.
+- Share one session between this SDK and the legacy SDK in both directions.
 - Make the SonarCloud job wait for the Quality Gate result.
 - Align the public package metadata and ESM, CommonJS, and TypeScript artifacts.
 - Add package shape checks and public tarball smoke coverage.

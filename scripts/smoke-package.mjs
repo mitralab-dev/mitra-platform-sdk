@@ -8,6 +8,42 @@ const consumerDirectory = mkdtempSync(join(tmpdir(), 'mitra-platform-sdk-smoke-'
 const typeScriptCompiler = join(process.cwd(), 'node_modules', 'typescript', 'bin', 'tsc');
 const coreTarball = process.env.MITRA_SDK_CORE_TARBALL;
 
+// The new surface, plus the deprecated mitra-interactions-sdk surface the
+// package re-exports so legacy applications can swap the dependency.
+const expectedExports = JSON.stringify(
+  [
+    'MitraApiError',
+    'createClient',
+    'callIntegrationMitra',
+    'configureSdkMitra',
+    'createMitraInstance',
+    'createRecordMitra',
+    'createRecordsBatchMitra',
+    'deleteRecordMitra',
+    'exchangeSsoCodeMitra',
+    'executePublicServerFunctionAsyncMitra',
+    'executePublicServerFunctionMitra',
+    'executeServerFunctionAsyncMitra',
+    'executeServerFunctionMitra',
+    'getAgentTaskMitra',
+    'getConfig',
+    'getPublicServerFunctionExecutionMitra',
+    'getRecordMitra',
+    'listIntegrationsMitra',
+    'listRecordsMitra',
+    'loginMitra',
+    'loginWithGoogleMitra',
+    'loginWithMicrosoftMitra',
+    'manageAgentChatMitra',
+    'manageAgentCredentialMitra',
+    'patchRecordMitra',
+    'refreshTokenSilently',
+    'resolveProjectId',
+    'stopServerFunctionExecutionMitra',
+    'updateRecordMitra',
+  ].sort()
+);
+
 try {
   const packOutput = execFileSync(
     'npm',
@@ -54,9 +90,13 @@ try {
     `import {
   createClient,
   MitraApiError,
+  executeServerFunctionMitra,
+  loginWithGoogleMitra,
   type EntityTable,
   type FunctionExecution,
+  type LoginResponse,
   type MitraClient,
+  type MitraConfig,
   type ProxyInput,
   type QueryResult,
   type User,
@@ -80,11 +120,17 @@ client.auth.signOut()
 client.auth.redirectToLogin()
 void client.init()
 void client.functions.execute("function-id")
+const legacyConfig: MitraConfig = { baseURL: "https://api.example.com", projectId: "app" }
+const legacySession: Promise<LoginResponse> = loginWithGoogleMitra({ projectId: "app" })
+
 void table
 void query
 void proxy
 void execution
 void error
+void legacyConfig
+void legacySession
+void executeServerFunctionMitra
 `
   );
   writeFileSync(
@@ -95,11 +141,14 @@ const user: sdk.User = { id: "user", tenantId: "tenant", email: "user@example.co
 const query: sdk.QueryResult = { rows: [], affectedRows: null }
 const proxy: sdk.ProxyInput = { method: "GET", endpoint: "/", queryParams: { limit: "10" } }
 const error = new sdk.MitraApiError("message", 400, "CODE", {})
+const legacyConfig: sdk.MitraConfig = { baseURL: "https://api.example.com", projectId: "app" }
 void client
 void user
 void query
 void proxy
 void error
+void legacyConfig
+void sdk.executeServerFunctionMitra
 `
   );
   execFileSync(
@@ -125,7 +174,7 @@ void error
     [
       '--input-type=module',
       '--eval',
-      'import * as sdk from "@mitralab.io/platform-sdk"; const keys = Object.keys(sdk).sort(); if (JSON.stringify(keys) !== JSON.stringify(["MitraApiError", "createClient"])) process.exit(1)',
+      `import * as sdk from "@mitralab.io/platform-sdk"; const keys = Object.keys(sdk).sort(); if (JSON.stringify(keys) !== ${JSON.stringify(expectedExports)}) process.exit(1)`,
     ],
     { cwd: consumerDirectory, stdio: 'inherit' }
   );
@@ -133,7 +182,7 @@ void error
     process.execPath,
     [
       '--eval',
-      'const sdk = require("@mitralab.io/platform-sdk"); const keys = Object.keys(sdk).sort(); if (JSON.stringify(keys) !== JSON.stringify(["MitraApiError", "createClient"])) process.exit(1)',
+      `const sdk = require("@mitralab.io/platform-sdk"); const keys = Object.keys(sdk).sort(); if (JSON.stringify(keys) !== ${JSON.stringify(expectedExports)}) process.exit(1)`,
     ],
     { cwd: consumerDirectory, stdio: 'inherit' }
   );

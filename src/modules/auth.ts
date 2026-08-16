@@ -234,6 +234,39 @@ export class AuthModule {
   }
 
   /**
+   * Reads the tokens currently held by this module.
+   *
+   * Used by the legacy session bridge to hand a session persisted by this SDK
+   * over to `mitra-interactions-sdk` on startup.
+   *
+   * @returns The access and refresh tokens, each `null` when absent.
+   *
+   * @internal
+   */
+  readSessionTokens(): { token: string | null; refreshToken: string | null } {
+    return { token: this.#accessToken, refreshToken: this.#refreshToken };
+  }
+
+  /**
+   * Adopts a session produced outside this module, such as a legacy SSO login.
+   *
+   * Replaces the in-memory tokens and persists them under the same storage key
+   * the rest of the module uses. The current user is left untouched because the
+   * legacy SDK does not return one; call `me()` to hydrate it.
+   *
+   * @param session - Access token and, when the issuer returned one, refresh token.
+   *
+   * @internal
+   */
+  adoptSession(session: { token: string; refreshToken?: string | null }): void {
+    this.#accessToken = session.token;
+    if (session.refreshToken !== undefined) {
+      this.#refreshToken = session.refreshToken;
+    }
+    this.saveToStorage();
+  }
+
+  /**
    * Redirects to `/login?returnUrl=...` for unauthenticated users.
    *
    * @param returnUrl - URL to return to after login (default: '/').
