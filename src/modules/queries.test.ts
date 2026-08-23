@@ -5,7 +5,6 @@ import { QueriesModule } from './queries';
 
 const BASE = 'https://api.mitra.io/data-manager';
 const response = { rows: [{ id: 1 }], durationMs: 3 };
-const result = { ...response, affectedRows: null };
 
 describe('QueriesModule compatibility facade', () => {
   afterEach(() => {
@@ -17,7 +16,10 @@ describe('QueriesModule compatibility facade', () => {
     const queries = new QueriesModule(new HttpClient({ baseUrl: BASE }));
     queries.setDataSourceId('ds-123');
 
-    await expect(queries.execute('query/one', { status: 'active' })).resolves.toEqual(result);
+    const executed = await queries.execute('query/one', { status: 'active' });
+
+    expect(executed).toEqual(response);
+    expect(executed.durationMs).toBe(3);
 
     const [url, options] = fetchMock.mock.calls[0];
     expect(url).toBe(`${BASE}/api/v1/custom-queries/query%2Fone/execute`);

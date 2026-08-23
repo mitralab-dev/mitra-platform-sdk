@@ -1,26 +1,106 @@
 import { createAuthModule, type AuthModule as CoreAuthModule } from '@mitralab.io/sdk-core';
 import { coreErrors } from '../core-errors';
 import { HttpClient, MitraApiError } from '../utils/http-client';
+import { expectAuthTokenResponse, GoogleAuthFlow } from './google-auth';
 import type {
   User,
   SignInCredentials,
   SignUpData,
   AuthTokenResponse,
   AuthStateChangeCallback,
+  GoogleSignInOptions,
 } from './auth.types';
 
-export type { User, SignInCredentials, SignUpData, AuthStateChangeCallback } from './auth.types';
+export type {
+  User,
+  SignInCredentials,
+  SignUpData,
+  AuthStateChangeCallback,
+  GoogleSignInOptions,
+} from './auth.types';
+
+interface AuthModuleOptions {
+  apiUrl?: string;
+  authPageUrl?: string;
+}
+
+interface AuthSessionTokens {
+  token: string | null;
+  refreshToken: string | null;
+}
+
+type AuthSessionChangeCallback = (session: AuthSessionTokens) => void;
+
+interface RefreshFlight {
+  generation: number;
+  promise: Promise<boolean>;
+}
+
+const DEFAULT_TOKEN_VALIDITY_MS = 30_000;
+
+export interface AuthSessionPort {
+  readonly accessToken: string | null;
+  ensureFreshSession(minValidityMs?: number): Promise<boolean>;
+  handleUnauthorized(requestToken: string | null): Promise<boolean>;
+  readSessionTokens(): AuthSessionTokens;
+  onSessionChange(callback: AuthSessionChangeCallback): () => void;
+  adoptSession(session: { token: string; refreshToken?: string | null }): boolean;
+}
+
+const sessionPorts = new WeakMap<AuthModule, AuthSessionPort>();
+
+/** @internal */
+export function getAuthSessionPort(auth: AuthModule): AuthSessionPort {
+  const port = sessionPorts.get(auth);
+  if (!port) throw new Error('Auth session port is unavailable.');
+  return port;
+}
+
+function decodeJwtPayload(token: string): Record<string, unknown> | null {
+  try {
+    const part = token.replace(/^Bearer\s+/i, '').split('.')[1];
+    if (!part || typeof globalThis.atob !== 'function') return null;
+    const base64 = part.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
+    const value: unknown = JSON.parse(globalThis.atob(padded));
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+    return value as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function belongsToApp(token: string, appId: string): boolean {
+  const payload = decodeJwtPayload(token);
+  if (!payload) return true;
+  return payload.app_id === appId;
+}
+
+function isTokenExpiring(token: string, minValidityMs: number): boolean {
+  const exp = decodeJwtPayload(token)?.exp;
+  if (typeof exp !== 'number' || !Number.isFinite(exp)) return false;
+  return exp * 1_000 - Date.now() < minValidityMs;
+}
+
+function isDefinitiveRefreshFailure(error: unknown): boolean {
+  return error instanceof MitraApiError
+    && error.status >= 400
+    && error.status < 500
+    && error.status !== 408
+    && error.status !== 429;
+}
 
 /**
  * Authentication module for managing user sessions.
  *
- * Handles sign-in, sign-up, sign-out, and automatic token refresh.
+ * Handles Google SSO, sign-out, and automatic token refresh. Email/password
+ * methods remain available for compatibility with Platform SDK 1.0.9.
  * Auth state is persisted to localStorage with key `mitra_auth_{appId}`
  * and restored on page reload.
  *
  * @example
  * ```typescript
- * await mitra.auth.signIn({ email: 'user@example.com', password: 'password' });
+ * await mitra.auth.signInWithGoogle({ mode: 'popup' });
  * console.log(mitra.auth.currentUser);
  * ```
  */
@@ -29,20 +109,47 @@ export class AuthModule {
   private _currentUser: User | null = null;
   #accessToken: string | null = null;
   #refreshToken: string | null = null;
-  private refreshPromise: Promise<boolean> | null = null;
+  private sessionGeneration = 0;
+  private refreshFlight: RefreshFlight | null = null;
+  private transientRefreshFailureGeneration: number | null = null;
   private readonly listeners: Set<AuthStateChangeCallback> = new Set();
+  private readonly sessionListeners: Set<AuthSessionChangeCallback> = new Set();
   private readonly storageKey: string;
   private readonly publicClient: HttpClient;
   private readonly authedClient: HttpClient;
   private readonly currentUserApi: CoreAuthModule;
+  private readonly googleAuth: GoogleAuthFlow;
 
-  constructor(appId: string, iamBaseUrl: string) {
+  constructor(appId: string, iamBaseUrl: string, options: AuthModuleOptions = {}) {
     this.appId = appId;
+    const apiUrl = (options.apiUrl ?? iamBaseUrl.replace(/\/iam\/?$/, '')).replace(/\/+$/, '');
     this.storageKey = `mitra_auth_${appId}`;
     this.publicClient = new HttpClient({ baseUrl: iamBaseUrl, getToken: () => null });
-    this.authedClient = new HttpClient({ baseUrl: iamBaseUrl, getToken: () => this.#accessToken });
+    this.authedClient = new HttpClient({
+      baseUrl: iamBaseUrl,
+      getToken: () => this.#accessToken,
+      beforeAuthenticatedRequest: () => this.ensureFreshSession().then(() => undefined),
+      onUnauthorized: (requestToken) => this.handleUnauthorized(requestToken),
+    });
     this.currentUserApi = createAuthModule(this.authedClient, coreErrors);
+    this.googleAuth = new GoogleAuthFlow({
+      appId,
+      apiUrl,
+      authPageUrl: options.authPageUrl,
+      client: this.publicClient,
+    });
     this.loadFromStorage();
+    const readAccessToken = () => this.#accessToken;
+    sessionPorts.set(this, {
+      get accessToken() {
+        return readAccessToken();
+      },
+      ensureFreshSession: (minValidityMs) => this.ensureFreshSession(minValidityMs),
+      handleUnauthorized: (requestToken) => this.handleUnauthorized(requestToken),
+      readSessionTokens: () => this.readSessionTokens(),
+      onSessionChange: (callback) => this.onSessionChange(callback),
+      adoptSession: (session) => this.adoptSession(session),
+    });
   }
 
   /** The currently authenticated user, or null. */
@@ -79,18 +186,68 @@ export class AuthModule {
    * ```
    */
   async signIn(credentials: SignInCredentials): Promise<User> {
-    const tokenResponse = await this.publicClient.post<AuthTokenResponse>(
-      '/api/v1/auth/login',
-      { ...credentials, appId: this.appId }
+    const tokenResponse = expectAuthTokenResponse(
+      await this.publicClient.post<unknown>(
+        '/api/v1/auth/login',
+        { ...credentials, appId: this.appId }
+      )
     );
 
-    this.#accessToken = tokenResponse.accessToken;
-    this.#refreshToken = tokenResponse.refreshToken;
+    return this.establishSession(tokenResponse);
+  }
 
-    const user = await this.getCurrentUser();
+  /**
+   * Signs in with Google SSO.
+   *
+   * Popup mode is used by default. Redirect mode stores a one-time CSRF context
+   * in `sessionStorage` and navigates to the configured `sdk-auth.html` page.
+   * Call {@link completeGoogleSignInRedirect} during application startup to
+   * finish a redirect response.
+   *
+   * The auth page is resolved from `createClient({ authPageUrl })`, then
+   * `window.__mitraEnv.authPageUrl`, and finally `/sdk-auth.html` on the API
+   * gateway origin.
+   *
+   * @param options - Popup or redirect mode.
+   * @returns The authenticated and hydrated user in popup mode.
+   * @throws {MitraApiError} When IAM rejects the authorization code.
+   * @throws {Error} When the browser blocks or cancels the popup, the flow times
+   * out, or the OAuth response fails origin, source, state, or shape validation.
+   *
+   * @example
+   * ```typescript
+   * const user = await mitra.auth.signInWithGoogle();
+   * ```
+   *
+   * @example
+   * ```typescript
+   * await mitra.auth.signInWithGoogle({ mode: 'redirect' });
+   * ```
+   */
+  async signInWithGoogle(options: GoogleSignInOptions = {}): Promise<User> {
+    return this.establishSession(await this.googleAuth.signIn(options));
+  }
 
-    this.setAuthState(user, tokenResponse.accessToken, tokenResponse.refreshToken);
-    return user;
+  /**
+   * Completes a Google redirect response from `#codeMitra` and `#stateMitra`.
+   *
+   * The method consumes and clears the fragment and stored CSRF context, sends
+   * the single-use code directly to IAM, persists both tokens, calls `auth.me()`,
+   * and notifies auth-state listeners. It returns `null` when the current URL is
+   * not a Google SSO redirect. Redirect errors must carry the same `stateMitra`
+   * stored at the start of the flow before their message is exposed or consumed.
+   *
+   * @returns The authenticated user, or `null` when no redirect result is present.
+   *
+   * @example
+   * ```typescript
+   * const redirectedUser = await mitra.auth.completeGoogleSignInRedirect();
+   * if (redirectedUser) console.log(redirectedUser.email);
+   * ```
+   */
+  async completeGoogleSignInRedirect(): Promise<User | null> {
+    const tokenResponse = await this.googleAuth.completeRedirect();
+    return tokenResponse ? this.establishSession(tokenResponse) : null;
   }
 
   /**
@@ -140,9 +297,9 @@ export class AuthModule {
   /**
    * Refreshes the session using the stored refresh token.
    *
-   * Called automatically by the SDK on 401 responses. Can also be called
-   * manually. Multiple concurrent calls are deduplicated (only one refresh
-   * request is made).
+   * Called automatically before requests whose JWT is close to expiry and on
+   * `401` responses. Can also be called manually. Multiple proactive, reactive,
+   * and manual calls are deduplicated into one refresh request.
    *
    * @returns `true` if refresh succeeded, `false` otherwise.
    *
@@ -155,21 +312,54 @@ export class AuthModule {
   async refreshSession(): Promise<boolean> {
     if (!this.#refreshToken) return false;
 
-    if (this.refreshPromise) return this.refreshPromise;
-
-    this.refreshPromise = this.doRefresh();
-    try {
-      return await this.refreshPromise;
-    } finally {
-      this.refreshPromise = null;
+    if (!this.hasValidAppIdentity()) {
+      this.clearAuthState();
+      return false;
     }
+
+    const generation = this.sessionGeneration;
+    if (this.refreshFlight?.generation === generation) {
+      return this.refreshFlight.promise;
+    }
+
+    this.transientRefreshFailureGeneration = null;
+    const flight: RefreshFlight = {
+      generation,
+      promise: this.doRefresh(generation, this.#refreshToken),
+    };
+    this.refreshFlight = flight;
+    try {
+      return await flight.promise;
+    } finally {
+      if (this.refreshFlight === flight) {
+        this.refreshFlight = null;
+      }
+    }
+  }
+
+  /**
+   * Resolves a 401 against the credential that actually reached the server.
+   * A newer session is retried as-is instead of being refreshed because of an
+   * older request. A signed-out session is neither refreshed nor retried.
+   *
+   * @param requestToken - Access token attached to the rejected request.
+   * @returns Whether the request should be retried once with the current token.
+   *
+   * @internal
+   */
+  private async handleUnauthorized(requestToken: string | null): Promise<boolean> {
+    const currentToken = this.#accessToken;
+    if (!currentToken) return false;
+    if (currentToken !== requestToken) return true;
+    return this.refreshSession();
   }
 
   /**
    * Fetches the current user from the server and updates local state.
    *
-   * Only clears auth state on 401 (expired/invalid token).
-   * Transient errors (500, network) return null without clearing the session.
+   * Clears auth state on a definitive 401. When the request reaches 401 after
+   * IAM refresh failed due to a network error, 408, 429, or 5xx response, the
+   * retained session is preserved and this method returns null.
    *
    * @returns The user if authenticated, `null` otherwise.
    *
@@ -181,16 +371,25 @@ export class AuthModule {
    */
   async me(): Promise<User | null> {
     if (!this.#accessToken) return null;
+    const generation = this.sessionGeneration;
 
     try {
       const user = await this.getCurrentUser();
+      if (generation !== this.sessionGeneration) return null;
 
       this._currentUser = user;
+      this.transientRefreshFailureGeneration = null;
       this.saveToStorage();
       this.notifyListeners();
       return user;
     } catch (error) {
-      if (error instanceof MitraApiError && error.status === 401) {
+      if (
+        error instanceof MitraApiError
+        && error.status === 401
+        && this.#accessToken
+        && generation === this.sessionGeneration
+        && this.transientRefreshFailureGeneration !== this.sessionGeneration
+      ) {
         this.clearAuthState();
       }
       return null;
@@ -227,10 +426,16 @@ export class AuthModule {
    * ```
    */
   setToken(token: string, saveToStorage: boolean = true): void {
+    if (!this.belongsToConfiguredApp(token)) {
+      this.clearAuthState();
+      return;
+    }
+    this.invalidatePendingRefreshes();
     this.#accessToken = token;
     if (saveToStorage) {
       this.saveToStorage();
     }
+    this.notifySessionListeners();
   }
 
   /**
@@ -243,8 +448,54 @@ export class AuthModule {
    *
    * @internal
    */
-  readSessionTokens(): { token: string | null; refreshToken: string | null } {
+  private readSessionTokens(): AuthSessionTokens {
     return { token: this.#accessToken, refreshToken: this.#refreshToken };
+  }
+
+  /**
+   * Ensures the current access token has enough remaining validity.
+   *
+   * JWT decoding is used only as a scheduling heuristic. Opaque tokens and JWTs
+   * without a numeric `exp` claim proceed unchanged and remain server-authoritative.
+   * Multiple proactive and reactive callers share the same refresh request.
+   * Transient refresh failures preserve the current session so the caller can
+   * continue and rely on the normal one-time `401` refresh fallback.
+   *
+   * This method is suitable for authenticated HTTP, WebSocket, and Server-Sent
+   * Events boundaries that need a fresh token before connecting.
+   *
+   * @param minValidityMs - Minimum remaining token lifetime. Defaults to 30 seconds.
+   * @returns `true` when no refresh is needed or refresh succeeds. Returns
+   * `false` when a required refresh fails, even when a transient failure keeps
+   * the current session available for a reactive server-authoritative fallback.
+   */
+  async ensureFreshSession(minValidityMs: number = DEFAULT_TOKEN_VALIDITY_MS): Promise<boolean> {
+    if (!Number.isFinite(minValidityMs) || minValidityMs < 0) {
+      throw new RangeError('minValidityMs must be a finite non-negative number');
+    }
+    if (!this.#accessToken) return false;
+    if (!this.hasValidAppIdentity()) {
+      this.clearAuthState();
+      return false;
+    }
+    if (!isTokenExpiring(this.#accessToken, minValidityMs)) return true;
+
+    return this.refreshSession();
+  }
+
+  /**
+   * Subscribes an internal boundary to token changes without triggering login
+   * or refresh. Unlike auth-state listeners, this callback is not invoked
+   * immediately and does not depend on the user being hydrated.
+   *
+   * @param callback - Receives the current access and refresh tokens.
+   * @returns A function that removes the callback.
+   *
+   * @internal
+   */
+  private onSessionChange(callback: AuthSessionChangeCallback): () => void {
+    this.sessionListeners.add(callback);
+    return () => this.sessionListeners.delete(callback);
   }
 
   /**
@@ -258,12 +509,25 @@ export class AuthModule {
    *
    * @internal
    */
-  adoptSession(session: { token: string; refreshToken?: string | null }): void {
+  private adoptSession(session: { token: string; refreshToken?: string | null }): boolean {
+    if (
+      !this.belongsToConfiguredApp(session.token)
+      || (
+        typeof session.refreshToken === 'string'
+        && !this.belongsToConfiguredApp(session.refreshToken)
+      )
+    ) {
+      this.clearAuthState();
+      return false;
+    }
+    this.invalidatePendingRefreshes();
     this.#accessToken = session.token;
     if (session.refreshToken !== undefined) {
       this.#refreshToken = session.refreshToken;
     }
     this.saveToStorage();
+    this.notifySessionListeners();
+    return true;
   }
 
   /**
@@ -311,23 +575,67 @@ export class AuthModule {
     };
   }
 
-  private async doRefresh(): Promise<boolean> {
+  private async doRefresh(generation: number, refreshToken: string): Promise<boolean> {
+    let tokenResponse: AuthTokenResponse;
     try {
-      const tokenResponse = await this.publicClient.post<AuthTokenResponse>(
-        '/api/v1/auth/refresh-token',
-        { refreshToken: this.#refreshToken }
+      tokenResponse = expectAuthTokenResponse(
+        await this.publicClient.post<unknown>(
+          '/api/v1/auth/refresh-token',
+          { refreshToken }
+        )
       );
+    } catch (error) {
+      if (generation !== this.sessionGeneration) return false;
+      if (isDefinitiveRefreshFailure(error)) {
+        this.clearAuthState();
+      } else {
+        this.transientRefreshFailureGeneration = generation;
+      }
+      return false;
+    }
 
-      this.#accessToken = tokenResponse.accessToken;
-      this.#refreshToken = tokenResponse.refreshToken;
-
-      const user = await this.getCurrentUser();
-
-      this.setAuthState(user, tokenResponse.accessToken, tokenResponse.refreshToken);
-      return true;
-    } catch {
+    if (generation !== this.sessionGeneration) return false;
+    if (
+      !this.belongsToConfiguredApp(tokenResponse.accessToken)
+      || !this.belongsToConfiguredApp(tokenResponse.refreshToken)
+    ) {
       this.clearAuthState();
       return false;
+    }
+
+    this.#accessToken = tokenResponse.accessToken;
+    this.#refreshToken = tokenResponse.refreshToken;
+    this.transientRefreshFailureGeneration = null;
+    this.saveToStorage();
+    this.notifySessionListeners();
+    return true;
+  }
+
+  private async establishSession(tokenResponse: AuthTokenResponse): Promise<User> {
+    if (
+      !this.belongsToConfiguredApp(tokenResponse.accessToken)
+      || !this.belongsToConfiguredApp(tokenResponse.refreshToken)
+    ) {
+      this.clearAuthState();
+      throw coreErrors.invalidResponse('Authentication returned a token for a different app');
+    }
+    this.invalidatePendingRefreshes();
+    const generation = this.sessionGeneration;
+    this.#accessToken = tokenResponse.accessToken;
+    this.#refreshToken = tokenResponse.refreshToken;
+
+    try {
+      const user = await this.getCurrentUser();
+      if (generation !== this.sessionGeneration) {
+        throw new Error('Authentication session was superseded');
+      }
+      this.setAuthState(user, this.#accessToken!, this.#refreshToken!);
+      return user;
+    } catch (error) {
+      if (generation === this.sessionGeneration) {
+        this.clearAuthState();
+      }
+      throw error;
     }
   }
 
@@ -336,6 +644,7 @@ export class AuthModule {
     this.#accessToken = token;
     this.#refreshToken = refreshToken;
     this.saveToStorage();
+    this.notifySessionListeners();
     this.notifyListeners();
   }
 
@@ -345,11 +654,43 @@ export class AuthModule {
   }
 
   private clearAuthState(): void {
+    const hadAuthState = this._currentUser !== null
+      || this.#accessToken !== null
+      || this.#refreshToken !== null;
+    this.invalidatePendingRefreshes();
     this._currentUser = null;
     this.#accessToken = null;
     this.#refreshToken = null;
     this.removeFromStorage();
-    this.notifyListeners();
+    if (hadAuthState) {
+      this.notifySessionListeners();
+      this.notifyListeners();
+    }
+  }
+
+  private invalidatePendingRefreshes(): void {
+    this.sessionGeneration += 1;
+    this.transientRefreshFailureGeneration = null;
+  }
+
+  private hasValidAppIdentity(): boolean {
+    return (!this.#accessToken || this.belongsToConfiguredApp(this.#accessToken))
+      && (!this.#refreshToken || this.belongsToConfiguredApp(this.#refreshToken));
+  }
+
+  private belongsToConfiguredApp(token: string): boolean {
+    return belongsToApp(token, this.appId);
+  }
+
+  private notifySessionListeners(): void {
+    const session = this.readSessionTokens();
+    this.sessionListeners.forEach((callback) => {
+      try {
+        callback(session);
+      } catch {
+        // Internal session observers must not break authentication.
+      }
+    });
   }
 
   private notifyListeners(): void {
@@ -386,9 +727,22 @@ export class AuthModule {
       const stored = localStorage.getItem(this.storageKey);
       if (stored) {
         const { user, token, refreshToken } = JSON.parse(stored);
+        if (
+          typeof token !== 'string'
+          || (refreshToken !== null && refreshToken !== undefined && typeof refreshToken !== 'string')
+          || !this.belongsToConfiguredApp(token)
+          || (
+            typeof refreshToken === 'string'
+            && !this.belongsToConfiguredApp(refreshToken)
+          )
+        ) {
+          this.clearAuthState();
+          return;
+        }
         this._currentUser = user;
         this.#accessToken = token;
         this.#refreshToken = refreshToken ?? null;
+        this.invalidatePendingRefreshes();
       }
     } catch {
       this.removeFromStorage();

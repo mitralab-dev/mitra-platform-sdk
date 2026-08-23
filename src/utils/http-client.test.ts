@@ -106,6 +106,46 @@ describe('HttpClient', () => {
     });
   });
 
+  it('should refresh before constructing the Authorization header', async () => {
+    const fetchMock = mockFetch({ id: 1 });
+    let token = 'old-token';
+    const beforeAuthenticatedRequest = vi.fn(async () => {
+      token = 'new-token';
+    });
+    const client = new HttpClient({
+      baseUrl: 'https://api.mitra.io',
+      getToken: () => token,
+      beforeAuthenticatedRequest,
+    });
+
+    await client.get('/users');
+
+    expect(beforeAuthenticatedRequest).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledWith('https://api.mitra.io/users', {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer new-token',
+      },
+      body: undefined,
+      redirect: 'manual',
+    });
+  });
+
+  it('should not run the authenticated pre-request hook without a token', async () => {
+    mockFetch({ id: 1 });
+    const beforeAuthenticatedRequest = vi.fn();
+    const client = new HttpClient({
+      baseUrl: 'https://api.mitra.io',
+      getToken: () => null,
+      beforeAuthenticatedRequest,
+    });
+
+    await client.get('/users');
+
+    expect(beforeAuthenticatedRequest).not.toHaveBeenCalled();
+  });
+
   it('should NOT include Authorization header when token is null', async () => {
     const fetchMock = mockFetch({ id: 1 });
     const client = new HttpClient({
@@ -159,6 +199,41 @@ describe('HttpClient', () => {
     expect(fetchMock.mock.calls[0][1]).toMatchObject({ redirect: 'manual' });
     expect(fetchMock.mock.calls[1][1]).toMatchObject({ redirect: 'manual' });
     expect(result).toEqual({ id: 1 });
+  });
+
+  it('should report the request token and build the retry with the current token', async () => {
+    let token = 'old-access';
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        json: vi.fn().mockResolvedValue({ message: 'Unauthorized' }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: vi.fn().mockResolvedValue({ id: 1 }),
+      });
+    vi.stubGlobal('fetch', fetchMock);
+    const onUnauthorized = vi.fn(async (requestToken: string | null) => {
+      expect(requestToken).toBe('old-access');
+      token = 'new-access';
+      return true;
+    });
+    const client = new HttpClient({
+      baseUrl: 'https://api.mitra.io',
+      getToken: () => token,
+      onUnauthorized,
+    });
+
+    await expect(client.get('/users')).resolves.toEqual({ id: 1 });
+
+    expect(onUnauthorized).toHaveBeenCalledOnce();
+    expect(onUnauthorized).toHaveBeenCalledWith('old-access');
+    const firstHeaders = (fetchMock.mock.calls[0][1] as RequestInit).headers as Record<string, string>;
+    const retryHeaders = (fetchMock.mock.calls[1][1] as RequestInit).headers as Record<string, string>;
+    expect(firstHeaders.Authorization).toBe('Bearer old-access');
+    expect(retryHeaders.Authorization).toBe('Bearer new-access');
   });
 
   it.each([307, 308])('should block status %i without following or replaying', async (status) => {
@@ -330,6 +405,45 @@ describe('HttpClient', () => {
     expect(result).toBeUndefined();
   });
 
+  it('should return undefined for an empty 202 response', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 202 })));
+    const client = new HttpClient({ baseUrl: 'https://api.mitra.io' });
+
+    const result = await client.post('/copilot/api/v1/tasks/task-1/inputs', {
+      type: 'message',
+      content: 'Hello',
+    });
+
+    expect(result).toBeUndefined();
+  });
+
+  it('should parse a non-empty successful JSON response', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ accepted: true }), {
+          status: 202,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      )
+    );
+    const client = new HttpClient({ baseUrl: 'https://api.mitra.io' });
+
+    await expect(client.post('/jobs')).resolves.toEqual({ accepted: true });
+  });
+
+  it('should reject a non-empty successful response with invalid JSON', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('not-json', { status: 200 })));
+    const onError = vi.fn();
+    const client = new HttpClient({ baseUrl: 'https://api.mitra.io', onError });
+
+    await expect(client.get('/broken-success')).rejects.toMatchObject({
+      status: 200,
+      code: 'INVALID_RESPONSE',
+    });
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ code: 'INVALID_RESPONSE' }));
+  });
+
   it('should use generic message when response body is not valid JSON', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: false,
@@ -477,5 +591,80 @@ describe('HttpClient', () => {
     for (const credential of Object.values(credentials)) {
       expect(serialized).not.toContain(credential);
     }
+  });
+
+  it('should recursively redact values under sensitive credential field names', async () => {
+    const credentials = {
+      access: 'foreign-access-token',
+      refresh: 'foreign-refresh-token',
+      token: 'foreign-token',
+      idToken: 'foreign-id-token',
+      oauthToken: 'foreign-oauth-token',
+      apiToken: 'foreign-api-token',
+      apiKey: 'foreign-api-key',
+      password: 'foreign-password',
+      clientSecret: 'foreign-client-secret',
+      credential: 'foreign-credential',
+      privateKey: 'foreign-private-key',
+    };
+    mockFetch({
+      message: 'Rejected credentials',
+      details: {
+        access_token: credentials.access,
+        nested: {
+          refreshToken: credentials.refresh,
+          TOKEN: credentials.token,
+          id_token: credentials.idToken,
+          oauthToken: credentials.oauthToken,
+          array: [
+            { api_token: credentials.apiToken },
+            {
+              apiKey: credentials.apiKey,
+              password: credentials.password,
+              clientSecret: credentials.clientSecret,
+              credential: credentials.credential,
+              privateKey: credentials.privateKey,
+            },
+          ],
+        },
+      },
+    }, 400);
+    const client = new HttpClient({ baseUrl: 'https://api.mitra.io' });
+
+    let error: unknown;
+    try {
+      await client.get('/sensitive-fields');
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(MitraApiError);
+    const apiError = error as MitraApiError;
+    expect(apiError.details).toEqual({
+      message: 'Rejected credentials',
+      details: {
+        access_token: '[REDACTED]',
+        nested: {
+          refreshToken: '[REDACTED]',
+          TOKEN: '[REDACTED]',
+          id_token: '[REDACTED]',
+          oauthToken: '[REDACTED]',
+          array: [
+            { api_token: '[REDACTED]' },
+            {
+              apiKey: '[REDACTED]',
+              password: '[REDACTED]',
+              clientSecret: '[REDACTED]',
+              credential: '[REDACTED]',
+              privateKey: '[REDACTED]',
+            },
+          ],
+        },
+      },
+    });
+    const serialized = JSON.stringify(apiError);
+    Object.values(credentials).forEach((credential) => {
+      expect(serialized).not.toContain(credential);
+    });
   });
 });

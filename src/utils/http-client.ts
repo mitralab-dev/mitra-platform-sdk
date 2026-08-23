@@ -7,6 +7,12 @@ import type {
 type ErrorPayload = Record<string, unknown>;
 
 const bearerCredentialPattern = /(Bearer\s+)\S+/gi;
+const sensitiveDetailKeyPattern =
+  /token|authorization|password|secret|api.?key|credential|private.?key/i;
+
+function isSensitiveDetailKey(key: string): boolean {
+  return sensitiveDetailKeyPattern.test(key);
+}
 
 function redactText(value: string, currentToken: string | null): string {
   const withoutBearerCredentials = value.replace(bearerCredentialPattern, '$1[REDACTED]');
@@ -20,10 +26,15 @@ function redactDetails(value: unknown, currentToken: string | null): unknown {
   if (Array.isArray(value)) return value.map((item) => redactDetails(item, currentToken));
   if (value && typeof value === 'object') {
     return Object.fromEntries(
-      Object.entries(value).map(([key, entry]) => [
-        redactText(key, currentToken),
-        redactDetails(entry, currentToken),
-      ])
+      Object.entries(value).map(([key, entry]) => {
+        const redactedKey = redactText(key, currentToken);
+        return [
+          redactedKey,
+          isSensitiveDetailKey(redactedKey)
+            ? '[REDACTED]'
+            : redactDetails(entry, currentToken),
+        ];
+      })
     );
   }
   return value;
@@ -66,8 +77,13 @@ export interface HttpClientConfig {
   baseUrl: string;
   /** Function that returns the current authentication token, or null if not authenticated */
   getToken?: () => string | null;
-  /** Callback invoked on 401 responses. Should attempt token refresh and return true if successful. */
-  onUnauthorized?: () => Promise<boolean>;
+  /** Refreshes an authenticated session before the Authorization header is constructed. */
+  beforeAuthenticatedRequest?: () => Promise<void>;
+  /**
+   * Callback invoked on a 401 with the token used by that request. Returns
+   * true when the request should be retried once with the current credential.
+   */
+  onUnauthorized?: (requestToken: string | null) => Promise<boolean>;
   /** Called whenever an API request fails. Useful for global error handling (e.g., toast notifications). */
   onError?: (error: MitraApiError) => void;
   /** Headers included in every request (e.g., X-App-Id for tracing). */
@@ -110,13 +126,15 @@ export interface RequestOptions extends Omit<TransportRequestOptions, 'method'> 
 export class HttpClient implements Transport {
   private readonly baseUrl: string;
   private readonly tokenGetter: () => string | null;
-  private readonly onUnauthorized?: () => Promise<boolean>;
+  private readonly beforeAuthenticatedRequest?: () => Promise<void>;
+  private readonly onUnauthorized?: (requestToken: string | null) => Promise<boolean>;
   private readonly onError?: (error: MitraApiError) => void;
   private readonly defaultHeaders: Record<string, string>;
 
   constructor(config: HttpClientConfig) {
     this.baseUrl = config.baseUrl.replace(/\/$/, '');
     this.tokenGetter = config.getToken ?? (() => null);
+    this.beforeAuthenticatedRequest = config.beforeAuthenticatedRequest;
     this.onUnauthorized = config.onUnauthorized;
     this.onError = config.onError;
     this.defaultHeaders = config.defaultHeaders ?? {};
@@ -151,6 +169,10 @@ export class HttpClient implements Transport {
 
     const url = buildRequestUrl(this.baseUrl, path, params);
 
+    if (!isRetry && this.tokenGetter() && this.beforeAuthenticatedRequest) {
+      await this.beforeAuthenticatedRequest();
+    }
+
     const requestHeaders: Record<string, string> = {
       'Content-Type': 'application/json',
       ...this.defaultHeaders,
@@ -181,7 +203,7 @@ export class HttpClient implements Transport {
 
     if (!response.ok) {
       if (response.status === 401 && !isRetry && this.onUnauthorized) {
-        const refreshed = await this.onUnauthorized();
+        const refreshed = await this.onUnauthorized(token);
         if (refreshed) {
           return this.request<T>(path, { ...options, isRetry: true });
         }
@@ -203,6 +225,25 @@ export class HttpClient implements Transport {
 
     if (response.status === 204) {
       return undefined as T;
+    }
+
+    if (typeof response.text === 'function') {
+      const responseText = await response.text();
+      if (responseText.length === 0) {
+        return undefined as T;
+      }
+
+      try {
+        return JSON.parse(responseText) as T;
+      } catch {
+        const error = new MitraApiError(
+          `Response from ${path} is not valid JSON`,
+          response.status,
+          'INVALID_RESPONSE'
+        );
+        this.onError?.(error);
+        throw error;
+      }
     }
 
     return response.json();

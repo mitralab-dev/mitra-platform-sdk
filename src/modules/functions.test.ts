@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { FunctionsModule } from './functions';
 import { HttpClient } from '../utils/http-client';
-import { mockFetch } from '../test-utils';
+import { mockFetch, mockFetchSequence } from '../test-utils';
 
 const BASE = 'https://api.mitra.io/functions';
 
@@ -37,7 +37,7 @@ describe('FunctionsModule', () => {
     expect(url).toBe(`${BASE}/api/v1/functions/fn-1/execute`);
     expect(options.method).toBe('POST');
     expect(JSON.parse(options.body)).toEqual({ input: { key: 'value' } });
-    expect(options.headers['X-Invocation-Type']).toBeUndefined();
+    expect(options.headers['X-Invocation-Type']).toBe('sync');
   });
 
   it('should execute a function without input', async () => {
@@ -49,16 +49,36 @@ describe('FunctionsModule', () => {
 
     const [, options] = fetchMock.mock.calls[0];
     expect(options.body).toBeUndefined();
-    expect(options.headers['X-Invocation-Type']).toBeUndefined();
+    expect(options.headers['X-Invocation-Type']).toBe('sync');
   });
 
-  it('rejects a nullable input that is valid in Core but not in the 1.x facade', async () => {
-    mockFetch({ ...fakeExecution, input: null });
+  it('accepts the producer nullable input contract from Core', async () => {
+    const nullableInputExecution = { ...fakeExecution, input: null };
+    mockFetch(nullableInputExecution);
     const client = new HttpClient({ baseUrl: BASE });
     const functions = new FunctionsModule(client);
 
-    await expect(functions.execute('fn-1')).rejects.toMatchObject({
-      code: 'INVALID_RESPONSE',
-    });
+    await expect(functions.execute('fn-1')).resolves.toEqual(nullableInputExecution);
+  });
+
+  it('supports async execution, status polling, and cancellation through Core', async () => {
+    const fetchMock = mockFetchSequence([
+      { body: fakeExecution },
+      { body: fakeExecution },
+      { body: undefined, status: 204 },
+    ]);
+    const client = new HttpClient({ baseUrl: BASE });
+    const functions = new FunctionsModule(client);
+
+    await expect(functions.executeAsync('fn-1', { key: 'value' })).resolves.toEqual(fakeExecution);
+    await expect(functions.getExecution('exec-1')).resolves.toEqual(fakeExecution);
+    await expect(functions.cancelExecution('exec-1')).resolves.toBeUndefined();
+
+    expect(fetchMock.mock.calls[0][0]).toBe(`${BASE}/api/v1/functions/fn-1/execute`);
+    expect(fetchMock.mock.calls[0][1].headers['X-Invocation-Type']).toBe('async');
+    expect(fetchMock.mock.calls[1][0]).toBe(`${BASE}/api/v1/executions/exec-1`);
+    expect(fetchMock.mock.calls[1][1].method).toBe('GET');
+    expect(fetchMock.mock.calls[2][0]).toBe(`${BASE}/api/v1/executions/exec-1/cancel`);
+    expect(fetchMock.mock.calls[2][1].method).toBe('POST');
   });
 });

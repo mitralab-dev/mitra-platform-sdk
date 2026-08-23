@@ -23,7 +23,6 @@ export class QueriesModule {
   }
 
   async execute(id: string, parameters?: Record<string, unknown>): Promise<QueryResult> {
-    const result = await this.core.execute(id, parameters);
-    return { ...result, affectedRows: result.affectedRows ?? null };
+    return this.core.execute(id, parameters);
   }
 }

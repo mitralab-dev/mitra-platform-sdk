@@ -18,6 +18,45 @@ describe('IntegrationModule', () => {
     vi.unstubAllGlobals();
   });
 
+  it('lists only the current app integration configs through the Core contract', async () => {
+    const config = {
+      id: 'config-1',
+      appId: 'app-1',
+      legacyId: 42,
+      templateId: 'template-1',
+      alias: 'billing',
+      status: 'CONNECTED',
+      lastCheckedAt: '2026-08-22T00:00:00Z',
+    };
+    const fetchMock = mockFetch({ content: [config], totalElements: 1 });
+    const client = new HttpClient({ baseUrl: BASE });
+    const integration = new IntegrationModule(client);
+
+    await expect(integration.list({ page: 1, size: 10, sort: 'alias,asc' })).resolves.toEqual({
+      content: [config],
+      totalElements: 1,
+    });
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      `${BASE}/api/v1/template-configs?page=1&size=10&sort=alias%2Casc`
+    );
+    expect(fetchMock.mock.calls[0][1].method).toBe('GET');
+  });
+
+  it('executes a saved config by its app-scoped alias', async () => {
+    const fetchMock = mockFetch(fakeProxyResult);
+    const client = new HttpClient({ baseUrl: BASE });
+    const integration = new IntegrationModule(client);
+
+    await expect(integration.executeByAlias('billing', {
+      method: 'GET',
+      endpoint: '/invoices',
+    })).resolves.toEqual(fakeProxyResult);
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      `${BASE}/api/v1/proxy/template-configs/by-alias/billing/execute`
+    );
+  });
+
   it('should execute a resource with params', async () => {
     const fetchMock = mockFetch(fakeProxyResult);
     const client = new HttpClient({ baseUrl: BASE });
@@ -56,6 +95,7 @@ describe('IntegrationModule', () => {
       endpoint: '/orders',
       headers: { 'X-Custom': 'value' },
       body: { item: 'test' },
+      queryParams: { limit: 10, enabled: true },
     });
 
     const [url, options] = fetchMock.mock.calls[0];
@@ -65,6 +105,7 @@ describe('IntegrationModule', () => {
     expect(body.endpoint).toBe('/orders');
     expect(body.headers).toEqual({ 'X-Custom': 'value' });
     expect(body.body).toEqual({ item: 'test' });
+    expect(body.queryParams).toEqual({ limit: 10, enabled: true });
     expect(body.source).toBe('SDK');
   });
 });

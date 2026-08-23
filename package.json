@@ -1,6 +1,6 @@
 {
   "name": "@mitralab.io/platform-sdk",
-  "version": "1.0.9",
+  "version": "1.1.0-beta.0",
   "description": "JavaScript/TypeScript SDK for building apps on the Mitra Platform",
   "type": "module",
   "sideEffects": false,
@@ -62,7 +62,7 @@
     "url": "https://github.com/mitralab-dev/mitra-platform-sdk/issues"
   },
   "dependencies": {
-    "@mitralab.io/sdk-core": "^0.1.0",
+    "@mitralab.io/sdk-core": "0.2.0-beta.0",
     "mitra-interactions-sdk": "1.0.60-beta.45"
   },
   "devDependencies": {

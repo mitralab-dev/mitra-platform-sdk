@@ -3,9 +3,9 @@
  * swap the legacy package for `@mitralab.io/platform-sdk` without rewriting
  * call sites first.
  *
- * Everything here is deprecated. Parts of it have no equivalent on the new
- * surface yet (SSO login, the Agent SDK, public Server Functions, the record
- * API) and stay supported until the platform ships one.
+ * Everything here is deprecated. Microsoft SSO is the only login without a
+ * native replacement. The other capabilities remain available during migration
+ * even when the native API has different input or response semantics.
  *
  * The four legacy entry points that produce a session are wrapped so the
  * resulting session also lands in this SDK. Every other export is the legacy
@@ -43,12 +43,13 @@ import {
   stopServerFunctionExecutionMitra as legacyStopServerFunctionExecutionMitra,
   updateRecordMitra as legacyUpdateRecordMitra,
 } from 'mitra-interactions-sdk';
+import type * as LegacyTypes from 'mitra-interactions-sdk';
 import { adoptLegacySession } from './bridge';
 
 /**
  * @deprecated Use `createClient`, which configures the legacy SDK for you.
- * Calling this directly replaces the legacy configuration and drops the session
- * bridge installed by `createClient`.
+ * Calling this directly replaces the legacy configuration and refresh hook
+ * until the next bridged session change.
  */
 export const configureSdkMitra = legacyConfigureSdkMitra;
 
@@ -68,8 +69,8 @@ export const getConfig = legacyGetConfig;
 export const resolveProjectId = legacyResolveProjectId;
 
 /**
- * @deprecated No replacement yet; still supported. SSO is the only login the
- * platform offers today, and `mitra.auth.signIn` does not cover it.
+ * @deprecated Use `mitra.auth.signInWithGoogle()` when `method` is Google.
+ * Other legacy login methods remain supported until an equivalent exists.
  */
 export const loginMitra: typeof legacyLoginMitra = async (method, options) => {
   const session = await legacyLoginMitra(method, options);
@@ -78,8 +79,7 @@ export const loginMitra: typeof legacyLoginMitra = async (method, options) => {
 };
 
 /**
- * @deprecated No replacement yet; still supported. SSO is the only login the
- * platform offers today, and `mitra.auth.signIn` does not cover it.
+ * @deprecated Use `mitra.auth.signInWithGoogle()`.
  */
 export const loginWithGoogleMitra: typeof legacyLoginWithGoogleMitra = async (options) => {
   const session = await legacyLoginWithGoogleMitra(options);
@@ -88,8 +88,8 @@ export const loginWithGoogleMitra: typeof legacyLoginWithGoogleMitra = async (op
 };
 
 /**
- * @deprecated No replacement yet; still supported. SSO is the only login the
- * platform offers today, and `mitra.auth.signIn` does not cover it.
+ * @deprecated No replacement yet; Microsoft SSO remains supported through the
+ * legacy surface.
  */
 export const loginWithMicrosoftMitra: typeof legacyLoginWithMicrosoftMitra = async (options) => {
   const session = await legacyLoginWithMicrosoftMitra(options);
@@ -98,8 +98,9 @@ export const loginWithMicrosoftMitra: typeof legacyLoginWithMicrosoftMitra = asy
 };
 
 /**
- * @deprecated No replacement yet; still supported. Completes the redirect leg
- * of the legacy SSO flow.
+ * @deprecated For Google redirects, use
+ * `mitra.auth.completeGoogleSignInRedirect()`. Other providers remain supported
+ * through the legacy surface.
  */
 export const exchangeSsoCodeMitra: typeof legacyExchangeSsoCodeMitra = async (options) => {
   const session = await legacyExchangeSsoCodeMitra(options);
@@ -114,37 +115,34 @@ export const exchangeSsoCodeMitra: typeof legacyExchangeSsoCodeMitra = async (op
 export const refreshTokenSilently = legacyRefreshTokenSilently;
 
 /**
- * @deprecated Use `mitra.functions.execute` instead. Note that the new method
- * is asynchronous and returns the created execution rather than its output.
+ * @deprecated Use `mitra.functions.execute` instead. The native method invokes
+ * the synchronous Functions endpoint and returns its execution contract.
  */
 export const executeServerFunctionMitra = legacyExecuteServerFunctionMitra;
 
 /**
- * @deprecated Use `mitra.functions.execute` instead.
+ * @deprecated Use `mitra.functions.executeAsync` instead, then poll or cancel
+ * the returned execution ID through the same module.
  */
 export const executeServerFunctionAsyncMitra = legacyExecuteServerFunctionAsyncMitra;
 
 /**
- * @deprecated No replacement yet; still supported. `mitra.functions.execute`
- * always sends the caller's session and cannot run a public Server Function.
+ * @deprecated Use `mitra.publicFunctions.execute` instead.
  */
 export const executePublicServerFunctionMitra = legacyExecutePublicServerFunctionMitra;
 
 /**
- * @deprecated No replacement yet; still supported. `mitra.functions.execute`
- * always sends the caller's session and cannot run a public Server Function.
+ * @deprecated Use `mitra.publicFunctions.executeAsync` instead.
  */
 export const executePublicServerFunctionAsyncMitra = legacyExecutePublicServerFunctionAsyncMitra;
 
 /**
- * @deprecated No replacement yet; still supported. The new Functions module has
- * no execution lookup.
+ * @deprecated Use `mitra.publicFunctions.getExecution` instead.
  */
 export const getPublicServerFunctionExecutionMitra = legacyGetPublicServerFunctionExecutionMitra;
 
 /**
- * @deprecated No replacement yet; still supported. The new Functions module has
- * no cancellation method.
+ * @deprecated Use `mitra.functions.cancelExecution` instead.
  */
 export const stopServerFunctionExecutionMitra = legacyStopServerFunctionExecutionMitra;
 
@@ -154,8 +152,7 @@ export const stopServerFunctionExecutionMitra = legacyStopServerFunctionExecutio
 export const callIntegrationMitra = legacyCallIntegrationMitra;
 
 /**
- * @deprecated No replacement yet; still supported. The new Integration module
- * executes a known integration but does not list them.
+ * @deprecated Use `mitra.integration.list()` instead.
  */
 export const listIntegrationsMitra = legacyListIntegrationsMitra;
 
@@ -196,93 +193,149 @@ export const patchRecordMitra = legacyPatchRecordMitra;
 export const deleteRecordMitra = legacyDeleteRecordMitra;
 
 /**
- * @deprecated No replacement yet; still supported. The Agent SDK has no
- * equivalent on the new surface.
+ * @deprecated Use `mitra.agentTasks.session` instead.
  */
 export const getAgentTaskMitra = legacyGetAgentTaskMitra;
 
 /**
- * @deprecated No replacement yet; still supported. The Agent SDK has no
- * equivalent on the new surface.
+ * @deprecated Use `mitra.agentTasks.list`, `rename`, and `archive` instead.
  */
 export const manageAgentChatMitra = legacyManageAgentChatMitra;
 
 /**
- * @deprecated No replacement yet; still supported. The Agent SDK has no
- * equivalent on the new surface.
+ * @deprecated Use `mitra.agentCredentials` instead.
  */
 export const manageAgentCredentialMitra = legacyManageAgentCredentialMitra;
 
-/**
- * Types of the legacy surface. Deprecated alongside the functions that use
- * them; they carry no deprecation tag of their own so that a call site keeps
- * exactly one warning.
- */
-export type {
-  AgentChat,
-  AgentCredentialStatus,
-  AgentDeltaEvent,
-  AgentErrorEvent,
-  AgentMessage,
-  AgentModel,
-  AgentProvider,
-  AgentQueueChangeEvent,
-  AgentRawEvent,
-  AgentStatusChangeEvent,
-  AgentTaskCreatedEvent,
-  AgentTaskEventMap,
-  AgentTaskEventName,
-  AgentTaskSession,
-  AgentTaskStatus,
-  AgentTaskTransport,
-  AgentTimelineItem,
-  AgentToolEvent,
-  AgentTurnEndEvent,
-  AgentType,
-  AuthAgentCredentialResult,
-  CallIntegrationOptions,
-  CallIntegrationResponse,
-  ChatManageAction,
-  ConnectAgentCredentialResult,
-  CreateRecordOptions,
-  CreateRecordsBatchOptions,
-  CredentialAction,
-  DeleteAgentChatResult,
-  DeleteRecordOptions,
-  DeviceAuthAgentCredentialResult,
-  ExecutePublicServerFunctionAsyncResponse,
-  ExecutePublicServerFunctionOptions,
-  ExecutePublicServerFunctionResponse,
-  ExecuteServerFunctionAsyncOptions,
-  ExecuteServerFunctionAsyncResponse,
-  ExecuteServerFunctionOptions,
-  ExecuteServerFunctionResponse,
-  GetAgentTaskCreateOptions,
-  GetAgentTaskOpenOptions,
-  GetAgentTaskOptions,
-  GetPublicServerFunctionExecutionOptions,
-  GetPublicServerFunctionExecutionResponse,
-  GetRecordOptions,
-  IntegrationResponse,
-  ListAgentModelsResult,
-  ListAgentProvidersResult,
-  ListIntegrationsOptions,
-  ListRecordsOptions,
-  ListRecordsResponse,
-  LoginOptions,
-  LoginResponse,
-  ManageAgentChatDeleteOptions,
-  ManageAgentChatListOptions,
-  ManageAgentChatOptions,
-  ManageAgentChatRenameOptions,
-  ManageAgentCredentialOptions,
-  MitraConfig,
-  MitraInstance,
-  PatchRecordOptions,
-  QueuedItem,
-  RenameAgentChatResult,
-  SendOptions,
-  StopServerFunctionExecutionOptions,
-  StopServerFunctionExecutionResponse,
-  UpdateRecordOptions,
-} from 'mitra-interactions-sdk';
+/** @deprecated Legacy compatibility type. */
+export type AgentChat = LegacyTypes.AgentChat;
+/** @deprecated Legacy compatibility type. */
+export type AgentCredentialStatus = LegacyTypes.AgentCredentialStatus;
+/** @deprecated Legacy compatibility type. */
+export type AgentDeltaEvent = LegacyTypes.AgentDeltaEvent;
+/** @deprecated Legacy compatibility type. */
+export type AgentErrorEvent = LegacyTypes.AgentErrorEvent;
+/** @deprecated Legacy compatibility type. */
+export type AgentMessage = LegacyTypes.AgentMessage;
+/** @deprecated Legacy compatibility type. */
+export type AgentModel = LegacyTypes.AgentModel;
+/** @deprecated Legacy compatibility type. */
+export type AgentProvider = LegacyTypes.AgentProvider;
+/** @deprecated Legacy compatibility type. */
+export type AgentQueueChangeEvent = LegacyTypes.AgentQueueChangeEvent;
+/** @deprecated Legacy compatibility type. */
+export type AgentRawEvent = LegacyTypes.AgentRawEvent;
+/** @deprecated Legacy compatibility type. */
+export type AgentStatusChangeEvent = LegacyTypes.AgentStatusChangeEvent;
+/** @deprecated Legacy compatibility type. */
+export type AgentTaskCreatedEvent = LegacyTypes.AgentTaskCreatedEvent;
+/** @deprecated Legacy compatibility type. */
+export type AgentTaskEventMap = LegacyTypes.AgentTaskEventMap;
+/** @deprecated Legacy compatibility type. */
+export type AgentTaskEventName = LegacyTypes.AgentTaskEventName;
+/** @deprecated Legacy compatibility type. */
+export type AgentTaskSession = LegacyTypes.AgentTaskSession;
+/** @deprecated Legacy compatibility type. */
+export type AgentTaskStatus = LegacyTypes.AgentTaskStatus;
+/** @deprecated Legacy compatibility type. */
+export type AgentTaskTransport = LegacyTypes.AgentTaskTransport;
+/** @deprecated Legacy compatibility type. */
+export type AgentTimelineItem = LegacyTypes.AgentTimelineItem;
+/** @deprecated Legacy compatibility type. */
+export type AgentToolEvent = LegacyTypes.AgentToolEvent;
+/** @deprecated Legacy compatibility type. */
+export type AgentTurnEndEvent = LegacyTypes.AgentTurnEndEvent;
+/** @deprecated Legacy compatibility type. */
+export type AgentType = LegacyTypes.AgentType;
+/** @deprecated Legacy compatibility type. */
+export type AuthAgentCredentialResult = LegacyTypes.AuthAgentCredentialResult;
+/** @deprecated Legacy compatibility type. */
+export type CallIntegrationOptions = LegacyTypes.CallIntegrationOptions;
+/** @deprecated Legacy compatibility type. */
+export type CallIntegrationResponse = LegacyTypes.CallIntegrationResponse;
+/** @deprecated Legacy compatibility type. */
+export type ChatManageAction = LegacyTypes.ChatManageAction;
+/** @deprecated Legacy compatibility type. */
+export type ConnectAgentCredentialResult = LegacyTypes.ConnectAgentCredentialResult;
+/** @deprecated Legacy compatibility type. */
+export type CreateRecordOptions = LegacyTypes.CreateRecordOptions;
+/** @deprecated Legacy compatibility type. */
+export type CreateRecordsBatchOptions = LegacyTypes.CreateRecordsBatchOptions;
+/** @deprecated Legacy compatibility type. */
+export type CredentialAction = LegacyTypes.CredentialAction;
+/** @deprecated Legacy compatibility type. */
+export type DeleteAgentChatResult = LegacyTypes.DeleteAgentChatResult;
+/** @deprecated Legacy compatibility type. */
+export type DeleteRecordOptions = LegacyTypes.DeleteRecordOptions;
+/** @deprecated Legacy compatibility type. */
+export type DeviceAuthAgentCredentialResult = LegacyTypes.DeviceAuthAgentCredentialResult;
+/** @deprecated Legacy compatibility type. */
+export type ExecutePublicServerFunctionAsyncResponse = LegacyTypes.ExecutePublicServerFunctionAsyncResponse;
+/** @deprecated Legacy compatibility type. */
+export type ExecutePublicServerFunctionOptions = LegacyTypes.ExecutePublicServerFunctionOptions;
+/** @deprecated Legacy compatibility type. */
+export type ExecutePublicServerFunctionResponse = LegacyTypes.ExecutePublicServerFunctionResponse;
+/** @deprecated Legacy compatibility type. */
+export type ExecuteServerFunctionAsyncOptions = LegacyTypes.ExecuteServerFunctionAsyncOptions;
+/** @deprecated Legacy compatibility type. */
+export type ExecuteServerFunctionAsyncResponse = LegacyTypes.ExecuteServerFunctionAsyncResponse;
+/** @deprecated Legacy compatibility type. */
+export type ExecuteServerFunctionOptions = LegacyTypes.ExecuteServerFunctionOptions;
+/** @deprecated Legacy compatibility type. */
+export type ExecuteServerFunctionResponse = LegacyTypes.ExecuteServerFunctionResponse;
+/** @deprecated Legacy compatibility type. */
+export type GetAgentTaskCreateOptions = LegacyTypes.GetAgentTaskCreateOptions;
+/** @deprecated Legacy compatibility type. */
+export type GetAgentTaskOpenOptions = LegacyTypes.GetAgentTaskOpenOptions;
+/** @deprecated Legacy compatibility type. */
+export type GetAgentTaskOptions = LegacyTypes.GetAgentTaskOptions;
+/** @deprecated Legacy compatibility type. */
+export type GetPublicServerFunctionExecutionOptions = LegacyTypes.GetPublicServerFunctionExecutionOptions;
+/** @deprecated Legacy compatibility type. */
+export type GetPublicServerFunctionExecutionResponse = LegacyTypes.GetPublicServerFunctionExecutionResponse;
+/** @deprecated Legacy compatibility type. */
+export type GetRecordOptions = LegacyTypes.GetRecordOptions;
+/** @deprecated Legacy compatibility type. */
+export type IntegrationResponse = LegacyTypes.IntegrationResponse;
+/** @deprecated Legacy compatibility type. */
+export type ListAgentModelsResult = LegacyTypes.ListAgentModelsResult;
+/** @deprecated Legacy compatibility type. */
+export type ListAgentProvidersResult = LegacyTypes.ListAgentProvidersResult;
+/** @deprecated Legacy compatibility type. */
+export type ListIntegrationsOptions = LegacyTypes.ListIntegrationsOptions;
+/** @deprecated Legacy compatibility type. */
+export type ListRecordsOptions = LegacyTypes.ListRecordsOptions;
+/** @deprecated Legacy compatibility type. */
+export type ListRecordsResponse = LegacyTypes.ListRecordsResponse;
+/** @deprecated Legacy compatibility type. */
+export type LoginOptions = LegacyTypes.LoginOptions;
+/** @deprecated Legacy compatibility type. */
+export type LoginResponse = LegacyTypes.LoginResponse;
+/** @deprecated Legacy compatibility type. */
+export type ManageAgentChatDeleteOptions = LegacyTypes.ManageAgentChatDeleteOptions;
+/** @deprecated Legacy compatibility type. */
+export type ManageAgentChatListOptions = LegacyTypes.ManageAgentChatListOptions;
+/** @deprecated Legacy compatibility type. */
+export type ManageAgentChatOptions = LegacyTypes.ManageAgentChatOptions;
+/** @deprecated Legacy compatibility type. */
+export type ManageAgentChatRenameOptions = LegacyTypes.ManageAgentChatRenameOptions;
+/** @deprecated Legacy compatibility type. */
+export type ManageAgentCredentialOptions = LegacyTypes.ManageAgentCredentialOptions;
+/** @deprecated Legacy compatibility type. */
+export type MitraConfig = LegacyTypes.MitraConfig;
+/** @deprecated Legacy compatibility type. */
+export type MitraInstance = LegacyTypes.MitraInstance;
+/** @deprecated Legacy compatibility type. */
+export type PatchRecordOptions = LegacyTypes.PatchRecordOptions;
+/** @deprecated Legacy compatibility type. */
+export type QueuedItem = LegacyTypes.QueuedItem;
+/** @deprecated Legacy compatibility type. */
+export type RenameAgentChatResult = LegacyTypes.RenameAgentChatResult;
+/** @deprecated Legacy compatibility type. */
+export type SendOptions = LegacyTypes.SendOptions;
+/** @deprecated Legacy compatibility type. */
+export type StopServerFunctionExecutionOptions = LegacyTypes.StopServerFunctionExecutionOptions;
+/** @deprecated Legacy compatibility type. */
+export type StopServerFunctionExecutionResponse = LegacyTypes.StopServerFunctionExecutionResponse;
+/** @deprecated Legacy compatibility type. */
+export type UpdateRecordOptions = LegacyTypes.UpdateRecordOptions;

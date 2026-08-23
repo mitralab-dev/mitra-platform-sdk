@@ -1,12 +1,23 @@
-import { encodePathSegment, expectObject } from '@mitralab.io/sdk-core';
+import {
+  createPublicFunctionsModule,
+  encodePathSegment,
+  expectObject,
+  type AgentTasksWithSessions,
+  type PublicFunctionsModule,
+} from '@mitralab.io/sdk-core';
 import { coreErrors } from './core-errors';
 import { HttpClient, MitraApiError } from './utils/http-client';
 import { LegacySessionBridge, setActiveBridge } from './legacy/bridge';
-import { AuthModule } from './modules/auth';
+import { AuthModule, getAuthSessionPort } from './modules/auth';
 import { EntitiesModule, EntitiesProxy } from './modules/entities';
 import { FunctionsModule } from './modules/functions';
 import { IntegrationModule } from './modules/integration';
 import { QueriesModule } from './modules/queries';
+import { createBrowserAgentTasksModule } from './modules/agent-tasks';
+import {
+  createBrowserAgentCredentialsModule,
+  type AgentCredentialsModule,
+} from './modules/agent-credentials';
 
 /**
  * Configuration options for creating a Mitra client.
@@ -31,6 +42,19 @@ export interface MitraClientConfig {
   apiUrl: string;
 
   /**
+   * Absolute URL of the Mitra Google SSO page.
+   *
+   * When omitted, the SDK reads `window.__mitraEnv.authPageUrl` and then falls
+   * back to `/sdk-auth.html` on the origin of `apiUrl`.
+   *
+   * @example
+   * ```typescript
+   * authPageUrl: 'https://auth.example.com/sdk-auth.html'
+   * ```
+   */
+  authPageUrl?: string;
+
+  /**
    * Global error handler called whenever an API request fails.
    * Useful for displaying toast notifications or logging errors.
    *
@@ -51,7 +75,7 @@ export interface MitraClientConfig {
  * @internal
  */
 interface AppInfoResponse {
-  dataSourceId: string;
+  dataSourceId: string | null;
   allowSignup: boolean;
 }
 
@@ -61,7 +85,10 @@ function expectAppInfoResponse(value: unknown): AppInfoResponse {
     'App info response',
     coreErrors
   );
-  if (typeof response.dataSourceId !== 'string' || !response.dataSourceId.trim()) {
+  if (
+    response.dataSourceId !== null
+    && (typeof response.dataSourceId !== 'string' || !response.dataSourceId.trim())
+  ) {
     throw coreErrors.invalidResponse(
       'App info response has an invalid dataSourceId field'
     );
@@ -91,7 +118,7 @@ function expectAppInfoResponse(value: unknown): AppInfoResponse {
  * await mitra.init();
  *
  * // Authentication
- * await mitra.auth.signIn({ email, password });
+ * await mitra.auth.signInWithGoogle({ mode: 'popup' });
  *
  * // Database operations
  * const tasks = await mitra.entities.Task.list();
@@ -123,11 +150,12 @@ export interface MitraClient {
   /**
    * Authentication module for managing user sessions.
    *
-   * Handles user registration, login, logout, and session persistence.
+   * Handles Google SSO and session lifecycle. Email/password methods remain
+   * available for compatibility with Platform SDK 1.0.9.
    *
    * @example
    * ```typescript
-   * await mitra.auth.signIn({ email: 'user@example.com', password: 'password' });
+   * await mitra.auth.signInWithGoogle({ mode: 'popup' });
    * console.log(mitra.auth.currentUser);
    * ```
    */
@@ -156,6 +184,15 @@ export interface MitraClient {
    * ```
    */
   functions: FunctionsModule;
+
+  /** Anonymous execution of Functions explicitly published as public. */
+  publicFunctions: PublicFunctionsModule;
+
+  /** Browser-safe Agent task REST API and native live sessions. */
+  agentTasks: AgentTasksWithSessions;
+
+  /** Browser-safe credential status, model discovery, and provider auth flows. */
+  agentCredentials: AgentCredentialsModule;
 
   /**
    * Integration module for proxying HTTP requests to external APIs.
@@ -225,7 +262,7 @@ export interface MitraClient {
  * await mitra.init();
  *
  * // Use the client
- * await mitra.auth.signIn({ email, password });
+ * await mitra.auth.signInWithGoogle({ mode: 'popup' });
  * const tasks = await mitra.entities.Task.list();
  * ```
  *
@@ -242,25 +279,31 @@ export interface MitraClient {
  * ```
  */
 export function createClient(config: MitraClientConfig): MitraClient {
-  const { appId, apiUrl, onError } = config;
+  const { appId, apiUrl, authPageUrl, onError } = config;
+  const gatewayUrl = apiUrl.replace(/\/+$/, '');
 
   // Determine service URLs from base API URL
-  const iamUrl = `${apiUrl}/iam`;
-  const dataManagerUrl = `${apiUrl}/data-manager`;
-  const functionsUrl = `${apiUrl}/functions`;
-  const integrationUrl = `${apiUrl}/integration`;
-  const codeStudioUrl = `${apiUrl}/code-studio`;
+  const iamUrl = `${gatewayUrl}/iam`;
+  const dataManagerUrl = `${gatewayUrl}/data-manager`;
+  const functionsUrl = `${gatewayUrl}/functions`;
+  const integrationUrl = `${gatewayUrl}/integration`;
+  const codeStudioUrl = `${gatewayUrl}/code-studio`;
+  const copilotUrl = `${gatewayUrl}/copilot`;
 
   // Create auth module first (manages tokens)
-  const authModule = new AuthModule(appId, iamUrl);
+  const authModule = new AuthModule(appId, iamUrl, { apiUrl: gatewayUrl, authPageUrl });
+  const authSession = getAuthSessionPort(authModule);
 
-  const onUnauthorized = () => authModule.refreshSession();
+  const onUnauthorized = (requestToken: string | null) =>
+    authSession.handleUnauthorized(requestToken);
+  const beforeAuthenticatedRequest = () => authModule.ensureFreshSession().then(() => undefined);
   const defaultHeaders = { 'X-App-Id': appId };
 
   // Create HTTP client that uses auth tokens
   const httpClient = new HttpClient({
     baseUrl: dataManagerUrl,
     getToken: () => authModule.accessToken,
+    beforeAuthenticatedRequest,
     onUnauthorized,
     onError,
     defaultHeaders,
@@ -272,15 +315,36 @@ export function createClient(config: MitraClientConfig): MitraClient {
   const functionsHttpClient = new HttpClient({
     baseUrl: functionsUrl,
     getToken: () => authModule.accessToken,
+    beforeAuthenticatedRequest,
     onUnauthorized,
     onError,
     defaultHeaders,
   });
   const functionsModule = new FunctionsModule(functionsHttpClient);
+  const publicFunctionsModule = createPublicFunctionsModule(
+    new HttpClient({ baseUrl: functionsUrl, getToken: () => null }),
+    coreErrors
+  );
+
+  const copilotHttpClient = new HttpClient({
+    baseUrl: copilotUrl,
+    getToken: () => authModule.accessToken,
+    beforeAuthenticatedRequest,
+    onUnauthorized,
+    onError,
+    defaultHeaders,
+  });
+  const agentTasksModule = createBrowserAgentTasksModule(
+    copilotHttpClient,
+    authSession,
+    gatewayUrl
+  );
+  const agentCredentialsModule = createBrowserAgentCredentialsModule(copilotHttpClient);
 
   const integrationHttpClient = new HttpClient({
     baseUrl: integrationUrl,
     getToken: () => authModule.accessToken,
+    beforeAuthenticatedRequest,
     onUnauthorized,
     onError,
     defaultHeaders,
@@ -291,7 +355,7 @@ export function createClient(config: MitraClientConfig): MitraClient {
 
   // Share one session with the deprecated mitra-interactions-sdk surface: hand
   // it whatever session is already persisted, and adopt the ones it produces.
-  const legacyBridge = new LegacySessionBridge(authModule, appId, apiUrl);
+  const legacyBridge = new LegacySessionBridge(authSession, appId, apiUrl, authPageUrl);
   setActiveBridge(legacyBridge);
   legacyBridge.connect();
 
@@ -312,8 +376,10 @@ export function createClient(config: MitraClientConfig): MitraClient {
       )
     );
 
-    entitiesModule.setDataSourceId(appInfo.dataSourceId);
-    queriesModule.setDataSourceId(appInfo.dataSourceId);
+    if (appInfo.dataSourceId) {
+      entitiesModule.setDataSourceId(appInfo.dataSourceId);
+      queriesModule.setDataSourceId(appInfo.dataSourceId);
+    }
     allowSignup = appInfo.allowSignup;
 
     initialized = true;
@@ -324,6 +390,9 @@ export function createClient(config: MitraClientConfig): MitraClient {
     auth: authModule,
     entities: entitiesModule,
     functions: functionsModule,
+    publicFunctions: publicFunctionsModule,
+    agentTasks: agentTasksModule,
+    agentCredentials: agentCredentialsModule,
     integration: integrationModule,
     queries: queriesModule,
     get allowSignup() {
@@ -334,9 +403,59 @@ export function createClient(config: MitraClientConfig): MitraClient {
 }
 
 // Re-export types from modules
-export type { User, SignInCredentials, SignUpData } from './modules/auth';
+export type {
+  User,
+  SignInCredentials,
+  SignUpData,
+  GoogleSignInOptions,
+} from './modules/auth';
 export type { EntityListOptions, EntityTable } from './modules/entities';
 export type { FunctionExecution } from './modules/functions';
-export type { ProxyInput, ProxyResult } from './modules/integration';
+export type {
+  ListTemplateConfigsOptions,
+  ProxyInput,
+  ProxyResult,
+  TemplateConfigPage,
+} from './modules/integration';
 export type { QueryResult } from './modules/queries';
+export type {
+  NativeAgentMessage,
+  AgentQueueItem,
+  AgentSendOptions,
+  AgentSendAndWaitOptions,
+  AgentSessionTransport,
+  AgentTask,
+  AgentTaskCreateInput,
+  AgentTaskInput,
+  AgentTaskListOptions,
+  AgentTaskSessionEventMap,
+  AgentTaskSessionOptions,
+  AgentTaskSessionStatus,
+  NativeAgentTaskSession,
+  NativeAgentTimelineItem,
+  NativeAgentToolEvent,
+  AgentTurnResult,
+  ExistingAgentTaskSessionOptions,
+  NewAgentTaskSessionOptions,
+  Page,
+  PageOptions,
+} from './modules/agent-tasks';
+export type {
+  AgentModel as NativeAgentModel,
+  AuthenticationResult,
+  CredentialStatus,
+  DeviceAuthorization,
+  OAuthExchangeInput,
+  OAuthStartResult,
+  PublicFunctionAsyncResult,
+  PublicFunctionExecutionResult,
+  PublicFunctionResult,
+  PublicFunctionsModule,
+} from '@mitralab.io/sdk-core';
+export type {
+  AgentCredentialProvider,
+  AgentCredentialsModule,
+  AgentDeviceProvider,
+  AgentOAuthProvider,
+} from './modules/agent-credentials';
 export { MitraApiError } from './utils/http-client';

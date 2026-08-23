@@ -1,5 +1,6 @@
 import { configureSdkMitra, getConfig, type LoginResponse } from 'mitra-interactions-sdk';
-import type { AuthModule } from '../modules/auth';
+import type { AuthSessionPort } from '../modules/auth';
+import { resolveAuthPageUrl } from '../modules/auth-page-url';
 
 /**
  * The legacy SDK accepts both a bare JWT and a `Bearer `-prefixed one, but this
@@ -18,14 +19,20 @@ function stripBearer(token: string): string {
  * single-flight refresh each SDK implements stays untouched.
  */
 export class LegacySessionBridge {
-  private readonly auth: AuthModule;
+  private readonly auth: AuthSessionPort;
   private readonly appId: string;
   private readonly apiUrl: string;
+  private readonly configuredAuthPageUrl?: string;
+  private readonly legacyUrl: string;
+  private unsubscribeFromAuth: (() => void) | null = null;
 
-  constructor(auth: AuthModule, appId: string, apiUrl: string) {
+  constructor(auth: AuthSessionPort, appId: string, apiUrl: string, authPageUrl?: string) {
     this.auth = auth;
     this.appId = appId;
     this.apiUrl = apiUrl;
+    this.configuredAuthPageUrl = authPageUrl;
+    const gatewayUrl = apiUrl.replace(/\/+$/, '');
+    this.legacyUrl = gatewayUrl ? `${gatewayUrl}/legacy` : '';
   }
 
   /**
@@ -35,16 +42,41 @@ export class LegacySessionBridge {
    * not stop the new client from being created.
    */
   connect(): void {
-    const { token, refreshToken } = this.auth.readSessionTokens();
+    this.disconnect();
+    this.syncToLegacy(this.auth.readSessionTokens());
+    this.unsubscribeFromAuth = this.auth.onSessionChange((session) => {
+      this.syncToLegacy(session);
+    });
+  }
 
+  /** Stops this bridge from changing the process-wide legacy SDK singleton. */
+  disconnect(): void {
+    this.unsubscribeFromAuth?.();
+    this.unsubscribeFromAuth = null;
+  }
+
+  private syncToLegacy(session: { token: string | null; refreshToken: string | null }): void {
     try {
+      const authPageUrl = resolveAuthPageUrl(
+        this.apiUrl,
+        this.configuredAuthPageUrl
+      ).toString();
       configureSdkMitra({
-        baseURL: this.apiUrl,
+        baseURL: this.legacyUrl,
+        authUrl: this.legacyUrl,
+        authPageUrl,
         projectId: this.appId,
         onTokenRefresh: (session) => this.adopt(session),
-        ...(token ? { token } : {}),
-        ...(refreshToken ? { refreshToken } : {}),
+        ...(session.token ? { token: session.token } : {}),
+        ...(session.refreshToken ? { refreshToken: session.refreshToken } : {}),
       });
+
+      // The legacy package has no public sign-out API. `getConfig()` returns its
+      // live config object, so removing credentials here safely disables legacy
+      // calls and refresh without coupling to its private localStorage key.
+      const legacyConfig = getConfig();
+      if (!session.token) delete legacyConfig.token;
+      if (!session.refreshToken) delete legacyConfig.refreshToken;
     } catch {
       // The legacy SDK rejects configurations this client cannot fix, such as a
       // blank apiUrl. The new surface keeps working without the bridge.
@@ -52,26 +84,16 @@ export class LegacySessionBridge {
   }
 
   /**
-   * Stores a session produced by the legacy SDK and reinstates the refresh hook.
-   *
-   * `configureSdkMitra` replaces the legacy global configuration instead of
-   * merging into it, and the legacy login path calls it without a callback, so
-   * `onTokenRefresh` has to be registered again after every legacy login.
+   * Stores a session produced by the legacy SDK. The AuthModule subscription
+   * then writes that session back to the process-wide legacy config and
+   * reinstates the refresh hook removed by legacy login.
    */
   adopt(session: LoginResponse): void {
-    this.auth.adoptSession({
+    const adopted = this.auth.adoptSession({
       token: stripBearer(session.token),
       refreshToken: session.refreshToken ?? null,
     });
-
-    try {
-      configureSdkMitra({
-        ...getConfig(),
-        onTokenRefresh: (refreshed) => this.adopt(refreshed),
-      });
-    } catch {
-      // Nothing to reinstate when the legacy SDK is not configured.
-    }
+    if (!adopted) this.syncToLegacy(this.auth.readSessionTokens());
   }
 }
 
@@ -87,6 +109,7 @@ let activeBridge: LegacySessionBridge | null = null;
  * @internal
  */
 export function setActiveBridge(bridge: LegacySessionBridge): void {
+  activeBridge?.disconnect();
   activeBridge = bridge;
 }
 
@@ -108,5 +131,6 @@ export function adoptLegacySession(session: LoginResponse): void {
  * @internal
  */
 export function resetActiveBridge(): void {
+  activeBridge?.disconnect();
   activeBridge = null;
 }

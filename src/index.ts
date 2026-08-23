@@ -19,7 +19,7 @@
  * await mitra.init();
  *
  * // Authentication
- * await mitra.auth.signIn({ email: 'user@example.com', password: 'password' });
+ * await mitra.auth.signInWithGoogle({ mode: 'popup' });
  *
  * // Database operations
  * const tasks = await mitra.entities.Task.list('-created_at', 10);
@@ -37,12 +37,49 @@ export type {
   User,
   SignInCredentials,
   SignUpData,
+  GoogleSignInOptions,
   EntityListOptions,
   EntityTable,
   FunctionExecution,
   ProxyInput,
   ProxyResult,
+  ListTemplateConfigsOptions,
+  TemplateConfigPage,
   QueryResult,
+  AgentCredentialsModule,
+  NativeAgentMessage,
+  NativeAgentModel,
+  AgentQueueItem,
+  AgentSendOptions,
+  AgentSendAndWaitOptions,
+  AgentSessionTransport,
+  AgentTask,
+  AgentTaskCreateInput,
+  AgentTaskInput,
+  AgentTaskListOptions,
+  AgentTaskSessionEventMap,
+  AgentTaskSessionOptions,
+  AgentTaskSessionStatus,
+  NativeAgentTaskSession,
+  NativeAgentTimelineItem,
+  NativeAgentToolEvent,
+  AgentTurnResult,
+  AuthenticationResult,
+  AgentCredentialProvider,
+  AgentDeviceProvider,
+  AgentOAuthProvider,
+  CredentialStatus,
+  DeviceAuthorization,
+  ExistingAgentTaskSessionOptions,
+  NewAgentTaskSessionOptions,
+  OAuthExchangeInput,
+  OAuthStartResult,
+  Page,
+  PageOptions,
+  PublicFunctionAsyncResult,
+  PublicFunctionExecutionResult,
+  PublicFunctionResult,
+  PublicFunctionsModule,
 } from './client';
 
 export { MitraApiError } from './utils/http-client';

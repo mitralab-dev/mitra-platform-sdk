@@ -23,6 +23,12 @@ export interface SignUpData {
   name?: string;
 }
 
+/** Options for Google SSO. */
+export interface GoogleSignInOptions {
+  /** Opens a popup by default. Redirect mode navigates the current page. */
+  mode?: 'popup' | 'redirect';
+}
+
 /**
  * Response from authentication token endpoints.
  * @internal
