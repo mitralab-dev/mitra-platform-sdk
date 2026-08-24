@@ -10,16 +10,18 @@ export type { QueryResult } from './queries.types';
 
 /** Platform SDK 1.x facade over the shared custom query contract. */
 export class QueriesModule {
-  private dataSourceId = '';
   private readonly core: CoreQueriesModule;
 
   constructor(httpClient: HttpClient) {
-    this.core = createQueriesModule(httpClient, () => this.dataSourceId, coreErrors);
+    this.core = createQueriesModule(httpClient, coreErrors);
   }
 
-  /** Called by `client.init()` to set the app's resolved data source. */
-  setDataSourceId(dataSourceId: string): void {
-    this.dataSourceId = dataSourceId;
+  /**
+   * @deprecated Preserved for Platform SDK 1.x source compatibility. Data Manager now resolves
+   * the Data Source from the authenticated app.
+   */
+  setDataSourceId(_dataSourceId: string): void {
+    // Compatibility no-op.
   }
 
   async execute(id: string, parameters?: Record<string, unknown>): Promise<QueryResult> {

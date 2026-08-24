@@ -25,7 +25,7 @@ describe('IntegrationModule', () => {
       legacyId: 42,
       templateId: 'template-1',
       alias: 'billing',
-      status: 'CONNECTED',
+      status: 'connected',
       lastCheckedAt: '2026-08-22T00:00:00Z',
     };
     const fetchMock = mockFetch({ content: [config], totalElements: 1 });

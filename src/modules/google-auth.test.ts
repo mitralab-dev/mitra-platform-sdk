@@ -29,7 +29,9 @@ const CURRENT_USER_RESPONSE = {
   email: 'user@test.com',
   name: 'Test User',
   imageUrl: null,
+  planId: 'plan-1',
   onboardingCompleted: false,
+  language: 'pt-BR',
 };
 const USER = { ...CURRENT_USER_RESPONSE, tenantId: 't1' };
 

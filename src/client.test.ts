@@ -50,7 +50,7 @@ describe('createClient', () => {
     expect(mitra.allowSignup).toBe(true);
   });
 
-  it('should fetch app info and set dataSourceId on init', async () => {
+  it('should fetch app info and update public app config on init', async () => {
     mockLocalStorage();
     const fetchMock = mockFetch({ dataSourceId: 'ds-resolved', allowSignup: false });
 
@@ -85,7 +85,10 @@ describe('createClient', () => {
 
   it('should initialize an app without a Data Source', async () => {
     mockLocalStorage();
-    mockFetch({ dataSourceId: null, allowSignup: false });
+    mockFetchSequence([
+      { body: { dataSourceId: null, allowSignup: false } },
+      { body: { rows: [], affectedRows: null, durationMs: 1 } },
+    ]);
 
     const mitra = createClient({
       appId: 'app-1',
@@ -94,7 +97,7 @@ describe('createClient', () => {
 
     await expect(mitra.init()).resolves.toBeUndefined();
     expect(mitra.allowSignup).toBe(false);
-    await expect(mitra.queries.execute('query-1')).rejects.toThrow(/dataSourceId/i);
+    await expect(mitra.queries.execute('query-1')).resolves.toMatchObject({ rows: [] });
   });
 
   it.each([

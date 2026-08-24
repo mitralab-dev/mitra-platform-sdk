@@ -32,7 +32,9 @@ const currentUserResponse = {
   email: 'user@test.com',
   name: 'Test User',
   imageUrl: null,
+  planId: 'plan-1',
   onboardingCompleted: false,
+  language: 'pt-BR',
 };
 
 /** Builds an unsigned JWT so the legacy scope check can read the claims. */

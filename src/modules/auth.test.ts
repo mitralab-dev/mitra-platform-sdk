@@ -25,7 +25,9 @@ const currentUserResponse = {
   email: 'user@test.com',
   name: 'Test User',
   imageUrl: null,
+  planId: 'plan-1',
   onboardingCompleted: false,
+  language: 'pt-BR',
 };
 const apiUser = { ...currentUserResponse, tenantId: 't1' };
 const fakeTokenResponse = { accessToken: 'access-123', refreshToken: 'refresh-456', tokenType: 'Bearer' };

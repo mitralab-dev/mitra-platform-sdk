@@ -11,7 +11,7 @@ describe('QueriesModule compatibility facade', () => {
     vi.unstubAllGlobals();
   });
 
-  it('keeps setDataSourceId and sends the canonical query body', async () => {
+  it('keeps setDataSourceId as a compatibility no-op and sends the producer body', async () => {
     const fetchMock = mockFetch(response);
     const queries = new QueriesModule(new HttpClient({ baseUrl: BASE }));
     queries.setDataSourceId('ds-123');
@@ -24,23 +24,16 @@ describe('QueriesModule compatibility facade', () => {
     const [url, options] = fetchMock.mock.calls[0];
     expect(url).toBe(`${BASE}/api/v1/custom-queries/query%2Fone/execute`);
     expect(JSON.parse(options.body)).toEqual({
-      dataSourceId: 'ds-123',
       parameters: { status: 'active' },
     });
   });
 
-  it('requires init and defaults parameters to an empty object', async () => {
+  it('does not require init and defaults parameters to an empty object', async () => {
+    const fetchMock = mockFetch(response);
     const queries = new QueriesModule(new HttpClient({ baseUrl: BASE }));
 
-    await expect(queries.execute('query-id')).rejects.toMatchObject({
-      code: 'INVALID_CONFIGURATION',
-    });
-
-    const fetchMock = mockFetch(response);
-    queries.setDataSourceId('ds-123');
     await queries.execute('query-id');
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
-      dataSourceId: 'ds-123',
       parameters: {},
     });
   });
@@ -48,7 +41,6 @@ describe('QueriesModule compatibility facade', () => {
   it('rejects a response without the canonical duration field', async () => {
     mockFetch({ rows: [] });
     const queries = new QueriesModule(new HttpClient({ baseUrl: BASE }));
-    queries.setDataSourceId('ds-123');
 
     await expect(queries.execute('query-id')).rejects.toMatchObject({
       code: 'INVALID_RESPONSE',

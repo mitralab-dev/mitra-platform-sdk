@@ -13,6 +13,8 @@ All notable changes to this project are documented in this file.
 - Document the missing producer contract for native record selection by `jdbcConnectionConfigId` instead of inventing a browser-side translation.
 - Document that entity `update` already implements the producer's partial PUT semantics, so no duplicate PATCH method is needed.
 - Derive Function execution, integration proxy input, and custom query result types directly from Core without narrowing nullable or producer-returned fields.
+- Preserve the complete Data Manager record envelope and execute Custom Queries with only
+  producer parameters, without a caller-selected Data Source or an `init()` precondition.
 
 - Refresh app sessions proactively through IAM before authenticated native requests, with a 30-second JWT expiry heuristic and one shared refresh flight.
 - Preserve sessions on transient refresh failures, clear them on definitive IAM client failures, and retain the one-time reactive `401` retry.

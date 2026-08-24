@@ -131,8 +131,8 @@ export interface MitraClient {
   /**
    * Initializes the client by resolving app config from the server.
    *
-   * Must be called before using `auth.signUp()` or `entities`.
-   * Fetches dataSourceId and allowSignup from the public app info endpoint.
+   * Must be called before using `auth.signUp()` when its availability depends on app config.
+   * Fetches the compatibility dataSourceId and allowSignup from the public app info endpoint.
    *
    * Safe to call multiple times. Subsequent calls are no-ops.
    *
@@ -244,7 +244,7 @@ export interface MitraClient {
  * - **integration**: Proxy HTTP requests to external APIs
  * - **queries**: Custom query management and execution
  *
- * After creating the client, call `init()` to resolve the app's config
+ * After creating the client, call `init()` to resolve the app's compatibility config
  * (dataSourceId, allowSignup) automatically from the server.
  *
  * @param config - Configuration options for the client.
@@ -378,7 +378,6 @@ export function createClient(config: MitraClientConfig): MitraClient {
 
     if (appInfo.dataSourceId) {
       entitiesModule.setDataSourceId(appInfo.dataSourceId);
-      queriesModule.setDataSourceId(appInfo.dataSourceId);
     }
     allowSignup = appInfo.allowSignup;
 

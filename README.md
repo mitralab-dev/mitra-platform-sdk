@@ -30,9 +30,10 @@ await mitra.init()
 ```
 
 `init()` resolves the application's public Code Studio configuration, including nullable
-`dataSourceId` and `allowSignup`. Apps that only render UI or call modules that do not need a Data
-Source initialize normally; data-scoped modules fail only when they are used without one. Call
-`init()` during application startup before using entities, custom queries, or the compatibility sign-up method.
+`dataSourceId` and `allowSignup`. The Data Source value remains part of the Platform 1.x
+compatibility flow; native Entities and Custom Queries resolve the current app through the
+authenticated request. Call `init()` during application startup before the compatibility sign-up
+method needs `allowSignup`.
 
 ## Configuration
 
@@ -139,7 +140,7 @@ type Task = {
   status: "pending" | "done"
 }
 
-const tasks = await mitra.entities.getTable<Task>("Task").list({
+const { data: tasks } = await mitra.entities.getTable<Task>("Task").list({
   sort: "-created_at",
   limit: 10,
   fields: ["id", "title", "status"],
@@ -237,6 +238,10 @@ const result = await mitra.queries.execute("query-id", {
 
 console.log(result.rows, result.affectedRows)
 ```
+
+Custom Query execution sends only `parameters`. Data Manager resolves its Data Source from the
+authenticated app, so Queries work without a caller-selected `dataSourceId` and do not depend on
+`init()`.
 
 ## Integrations
 

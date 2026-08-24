@@ -20,14 +20,12 @@ const task = {
 function page<T>(content: T[]) {
   return {
     content,
-    totalElements: content.length,
-    totalPages: 1,
-    size: 20,
-    number: 0,
-    first: true,
-    last: true,
-    numberOfElements: content.length,
-    empty: content.length === 0,
+    page: {
+      size: 20,
+      totalElements: content.length,
+      totalPages: content.length === 0 ? 0 : 1,
+      number: 0,
+    },
   };
 }
 
