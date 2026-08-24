@@ -18,7 +18,7 @@ const CURRENT_USER_RESPONSE = {
     shortId: 'AAAAAAAAAAAAAAAAAAAAEA',
     legacyId: null,
     slug: 'test-tenant',
-    plan: { id: 'plan-1', name: 'Free' },
+    clusterType: 'SHARED',
     name: 'Test Tenant',
     description: null,
     hexColor: null,

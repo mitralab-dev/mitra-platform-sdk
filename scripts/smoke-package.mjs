@@ -181,7 +181,6 @@ void table
 void query
 void proxy
 void execution
-void publicExecution
 void unsupportedGoogleCreate
 void error
 void legacyConfig
