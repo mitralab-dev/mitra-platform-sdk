@@ -447,7 +447,6 @@ export type {
   OAuthExchangeInput,
   OAuthStartResult,
   PublicFunctionAsyncResult,
-  PublicFunctionExecutionResult,
   PublicFunctionResult,
   PublicFunctionsModule,
 } from '@mitralab.io/sdk-core';

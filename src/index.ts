@@ -77,7 +77,6 @@ export type {
   Page,
   PageOptions,
   PublicFunctionAsyncResult,
-  PublicFunctionExecutionResult,
   PublicFunctionResult,
   PublicFunctionsModule,
 } from './client';

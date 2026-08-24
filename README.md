@@ -185,13 +185,9 @@ const result = await mitra.publicFunctions.execute("public-function-id", { sku: 
 const queuedPublic = await mitra.publicFunctions.executeAsync("public-function-id", { sku: "A-1" })
 ```
 
-Poll a public async execution through the same anonymous transport:
-
-```ts
-const completedPublic = await mitra.publicFunctions.getExecution(queuedPublic.id)
-```
-
-Only executions created by the public async route are visible there. Public cancellation is not part of the producer contract.
+Public async execution is fire-and-forget. The public API does not expose anonymous polling or
+cancellation. Use synchronous `publicFunctions.execute` when the screen needs the result, or the
+authenticated `functions.executeAsync` plus `functions.getExecution` flow after login.
 
 ## Agent tasks and credentials
 

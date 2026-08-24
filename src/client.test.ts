@@ -170,7 +170,6 @@ describe('createClient', () => {
     const fetchMock = mockFetchSequence([
       { body: { success: true, output: { value: 42 }, error: null } },
       { body: { id: 'exec-public', status: 'PENDING' } },
-      { body: { id: 'exec-public', status: 'SUCCESS', output: { value: 42 }, error: null } },
       { body: [{
         provider: 'ANTHROPIC',
         connected: true,
@@ -190,12 +189,6 @@ describe('createClient', () => {
       id: 'exec-public',
       status: 'PENDING',
     });
-    await expect(mitra.publicFunctions.getExecution('exec-public')).resolves.toEqual({
-      id: 'exec-public',
-      status: 'SUCCESS',
-      output: { value: 42 },
-      error: null,
-    });
     await expect(mitra.agentCredentials.list()).resolves.toHaveLength(1);
 
     const [, publicOptions] = fetchMock.mock.calls[0];
@@ -207,13 +200,8 @@ describe('createClient', () => {
     expect(publicOptions.headers['X-Invocation-Type']).toBe('sync');
 
     expect(fetchMock.mock.calls[1][1].headers['X-Invocation-Type']).toBe('async');
-    expect(fetchMock.mock.calls[2][0]).toBe(
-      'https://api.mitra.io/functions/public/v1/functions/executions/exec-public'
-    );
-    expect(fetchMock.mock.calls[2][1].headers.Authorization).toBeUndefined();
-    expect(fetchMock.mock.calls[2][1].headers['X-App-Id']).toBeUndefined();
-    const [, agentOptions] = fetchMock.mock.calls[3];
-    expect(fetchMock.mock.calls[3][0]).toBe('https://api.mitra.io/copilot/api/v1/credentials');
+    const [, agentOptions] = fetchMock.mock.calls[2];
+    expect(fetchMock.mock.calls[2][0]).toBe('https://api.mitra.io/copilot/api/v1/credentials');
     expect(agentOptions.headers.Authorization).toBe('Bearer app-access');
     expect(agentOptions.headers['X-App-Id']).toBe('app-1');
   });

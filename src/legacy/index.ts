@@ -137,7 +137,8 @@ export const executePublicServerFunctionMitra = legacyExecutePublicServerFunctio
 export const executePublicServerFunctionAsyncMitra = legacyExecutePublicServerFunctionAsyncMitra;
 
 /**
- * @deprecated Use `mitra.publicFunctions.getExecution` instead.
+ * @deprecated Kept for backward compatibility. The direct public API has no anonymous polling;
+ * use `mitra.functions.getExecution` only in an authenticated flow.
  */
 export const getPublicServerFunctionExecutionMitra = legacyGetPublicServerFunctionExecutionMitra;
 

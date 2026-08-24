@@ -119,7 +119,6 @@ import {
   type FunctionExecution,
   type GoogleSignInOptions,
   type NativeAgentTaskSession,
-  type PublicFunctionExecutionResult,
   type LoginResponse,
   type MitraClient,
   type MitraConfig,
@@ -149,7 +148,6 @@ void client.auth.signIn({ email: user.email, password: "password" })
 void client.auth.signUp({ email: user.email, password: "password" })
 void client.auth.signInWithGoogle(googleOptions)
 void client.auth.completeGoogleSignInRedirect()
-const publicExecution = {} as PublicFunctionExecutionResult
 client.auth.signOut()
 client.auth.redirectToLogin()
 void client.init()
