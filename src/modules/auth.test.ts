@@ -74,71 +74,50 @@ describe('AuthModule', () => {
     vi.unstubAllGlobals();
   });
 
-  it('should sign in with credentials and return user', async () => {
-    const fetchMock = mockFetchSequence([
-      { body: fakeTokenResponse },
-      { body: currentUserResponse },
-    ]);
-
+  it('should reject unsupported email and password authentication without a request', async () => {
+    const fetchMock = mockFetchSequence([]);
     const auth = new AuthModule(APP_ID, IAM_URL);
-    const user = await auth.signIn({ email: 'user@test.com', password: 'pass' });
 
-    expect(user).toEqual(apiUser);
-    expect(auth.currentUser).toEqual(apiUser);
-    expect(auth.accessToken).toBe('access-123');
-
-    // Verify POST /login was called with credentials and appId
-    const [url, options] = fetchMock.mock.calls[0];
-    expect(url).toBe(`${IAM_URL}/api/v1/auth/login`);
-    expect(JSON.parse(options.body)).toEqual({ email: 'user@test.com', password: 'pass', appId: APP_ID });
+    await expect(auth.signIn({ email: 'user@test.com', password: 'pass' })).rejects.toMatchObject({
+      code: 'UNSUPPORTED_AUTH_METHOD',
+    });
+    await expect(auth.signUp({ email: 'user@test.com', password: 'pass' })).rejects.toMatchObject({
+      code: 'UNSUPPORTED_AUTH_METHOD',
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('should reject sign-in JWTs issued for another app before user hydration', async () => {
-    const fetchMock = mockFetchSequence([{
-      body: {
-        accessToken: jwt({ app_id: 'other-app' }),
-        refreshToken: jwt({ app_id: 'other-app' }),
-        tokenType: 'Bearer',
-      },
-    }]);
+  it('should reject adopted sessions issued for another app before user hydration', () => {
     const auth = new AuthModule(APP_ID, IAM_URL);
 
-    await expect(
-      auth.signIn({ email: 'user@test.com', password: 'pass' })
-    ).rejects.toMatchObject({
-      code: 'INVALID_RESPONSE',
-      message: 'Authentication returned a token for a different app',
-    });
-    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(auth.setSession({
+      accessToken: jwt({ app_id: 'other-app' }),
+      refreshToken: jwt({ app_id: 'other-app' }),
+    })).toBe(false);
     expect(auth.accessToken).toBeNull();
     expect(storage._store[STORAGE_KEY]).toBeUndefined();
   });
 
-  it('should reject an invalid canonical current-user response', async () => {
+  it('should reject an invalid canonical current-user response after session adoption', async () => {
     const invalidTenant = { ...currentUserResponse.tenant } as Record<string, unknown>;
     delete invalidTenant.active;
-    mockFetchSequence([
-      { body: fakeTokenResponse },
-      { body: { ...currentUserResponse, tenant: invalidTenant } },
-    ]);
+    mockFetchSequence([{ body: { ...currentUserResponse, tenant: invalidTenant } }]);
     const auth = new AuthModule(APP_ID, IAM_URL);
+    auth.setSession({ accessToken: 'access-123', refreshToken: 'refresh-456' });
 
-    await expect(
-      auth.signIn({ email: 'user@test.com', password: 'pass' })
-    ).rejects.toMatchObject({
-      code: 'INVALID_RESPONSE',
-      message: 'Current user response tenant has an invalid active field',
-    });
+    await expect(auth.checkAuth()).resolves.toBe(false);
+    expect(auth.currentUser).toBeNull();
+    expect(auth.accessToken).toBe('access-123');
   });
 
-  it('should save auth state to localStorage after sign in', async () => {
-    mockFetchSequence([
-      { body: fakeTokenResponse },
-      { body: currentUserResponse },
-    ]);
-
+  it('should save and hydrate an adopted session', async () => {
+    mockFetchSequence([{ body: currentUserResponse }]);
     const auth = new AuthModule(APP_ID, IAM_URL);
-    await auth.signIn({ email: 'user@test.com', password: 'pass' });
+    expect(auth.setSession({
+      accessToken: 'access-123',
+      refreshToken: 'refresh-456',
+    })).toBe(true);
+    await expect(auth.checkAuth()).resolves.toBe(true);
 
     expect(storage.setItem).toHaveBeenCalledWith(
       STORAGE_KEY,
@@ -150,32 +129,11 @@ describe('AuthModule', () => {
     expect(stored.refreshToken).toBe('refresh-456');
   });
 
-  it('should sign up and then sign in automatically', async () => {
-    const fetchMock = mockFetchSequence([
-      { body: { id: 'u1' } },           // POST /register
-      { body: fakeTokenResponse },       // POST /tokens (signIn)
-      { body: currentUserResponse },    // GET /me (signIn)
-    ]);
-
-    const auth = new AuthModule(APP_ID, IAM_URL);
-    const user = await auth.signUp({ email: 'new@test.com', password: 'pass', name: 'New' });
-
-    expect(user).toEqual(apiUser);
-
-    // Verify register call includes appId
-    const registerBody = JSON.parse(fetchMock.mock.calls[0][1].body);
-    expect(registerBody.appId).toBe(APP_ID);
-    expect(registerBody.email).toBe('new@test.com');
-  });
-
   it('should clear auth state on sign out', async () => {
-    mockFetchSequence([
-      { body: fakeTokenResponse },
-      { body: currentUserResponse },
-    ]);
-
+    mockFetchSequence([{ body: currentUserResponse }]);
     const auth = new AuthModule(APP_ID, IAM_URL);
-    await auth.signIn({ email: 'user@test.com', password: 'pass' });
+    auth.setSession({ accessToken: 'access-123', refreshToken: 'refresh-456' });
+    await auth.checkAuth();
 
     auth.signOut();
 
@@ -348,24 +306,21 @@ describe('AuthModule', () => {
     expect(sessionListener.mock.calls).toEqual([[{ token: null, refreshToken: null }]]);
   });
 
-  it('should not let an old refresh overwrite a newer credential login', async () => {
+  it('should not let an old refresh overwrite a newer adopted session', async () => {
     storedSession(storage, 'old-access', 'old-refresh');
     const pendingRefresh = deferred<Response>();
     const fetchMock = vi.fn()
       .mockReturnValueOnce(pendingRefresh.promise)
-      .mockResolvedValueOnce(jsonResponse({
-        accessToken: 'login-access',
-        refreshToken: 'login-refresh',
-        tokenType: 'Bearer',
-      }))
       .mockResolvedValueOnce(jsonResponse(currentUserResponse));
     vi.stubGlobal('fetch', fetchMock);
     const auth = new AuthModule(APP_ID, IAM_URL);
 
     const oldRefresh = auth.refreshSession();
-    await expect(
-      auth.signIn({ email: 'user@test.com', password: 'pass' })
-    ).resolves.toEqual(apiUser);
+    expect(auth.setSession({
+      accessToken: 'login-access',
+      refreshToken: 'login-refresh',
+    })).toBe(true);
+    await expect(auth.me()).resolves.toEqual(apiUser);
     pendingRefresh.resolve(jsonResponse({
       accessToken: 'late-old-access',
       refreshToken: 'late-old-refresh',
@@ -820,12 +775,9 @@ describe('AuthModule', () => {
     const auth = new AuthModule(APP_ID, IAM_URL);
     expect(auth.isAuthenticated).toBe(false);
 
-    mockFetchSequence([
-      { body: fakeTokenResponse },
-      { body: currentUserResponse },
-    ]);
-
-    await auth.signIn({ email: 'user@test.com', password: 'pass' });
+    mockFetchSequence([{ body: currentUserResponse }]);
+    auth.setSession({ accessToken: 'access-123', refreshToken: 'refresh-456' });
+    await auth.checkAuth();
     expect(auth.isAuthenticated).toBe(true);
   });
 
@@ -903,7 +855,7 @@ describe('AuthModule', () => {
     expect(locationMock.href).toBe('/login?returnUrl=%2F');
   });
 
-  it('should call onAuthStateChange listener immediately and on sign in', async () => {
+  it('should call onAuthStateChange listener immediately and after session hydration', async () => {
     const auth = new AuthModule(APP_ID, IAM_URL);
     const listener = vi.fn();
 
@@ -913,12 +865,9 @@ describe('AuthModule', () => {
     expect(listener).toHaveBeenCalledTimes(1);
     expect(listener).toHaveBeenCalledWith(null);
 
-    mockFetchSequence([
-      { body: fakeTokenResponse },
-      { body: currentUserResponse },
-    ]);
-
-    await auth.signIn({ email: 'user@test.com', password: 'pass' });
+    mockFetchSequence([{ body: currentUserResponse }]);
+    auth.setSession({ accessToken: 'access-123', refreshToken: 'refresh-456' });
+    await auth.checkAuth();
 
     // Called again with the user
     expect(listener).toHaveBeenCalledTimes(2);
@@ -934,12 +883,9 @@ describe('AuthModule', () => {
 
     unsub();
 
-    mockFetchSequence([
-      { body: fakeTokenResponse },
-      { body: currentUserResponse },
-    ]);
-
-    await auth.signIn({ email: 'user@test.com', password: 'pass' });
+    mockFetchSequence([{ body: currentUserResponse }]);
+    auth.setSession({ accessToken: 'access-123', refreshToken: 'refresh-456' });
+    await auth.checkAuth();
 
     // Should NOT have been called again after unsubscribe
     expect(listener).toHaveBeenCalledTimes(1);

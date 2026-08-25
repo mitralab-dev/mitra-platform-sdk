@@ -155,22 +155,17 @@ describe('LegacySessionBridge', () => {
     expect(getConfig().refreshToken).toBeUndefined();
   });
 
-  it('should propagate a native sign-in to the legacy SDK without another auth request', async () => {
+  it('should propagate an adopted native session to the legacy SDK', async () => {
     const mitra = createClient({ appId: APP_ID, apiUrl: API_URL });
-    const fetchMock = mockFetchSequence([
-      {
-        body: {
-          accessToken: 'native-access-token',
-          refreshToken: appScopedRefreshToken,
-          tokenType: 'Bearer',
-        },
-      },
-      { body: currentUserResponse },
-    ]);
+    const fetchMock = mockFetchSequence([{ body: currentUserResponse }]);
 
-    await mitra.auth.signIn({ email: 'user@test.com', password: 'password' });
+    mitra.auth.setSession({
+      accessToken: 'native-access-token',
+      refreshToken: appScopedRefreshToken,
+    });
+    await mitra.auth.checkAuth();
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledOnce();
     expect(getConfig()).toMatchObject({
       baseURL: LEGACY_URL,
       authUrl: LEGACY_URL,

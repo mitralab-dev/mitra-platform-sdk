@@ -131,7 +131,6 @@ export interface MitraClient {
   /**
    * Initializes the client by resolving app config from the server.
    *
-   * Must be called before using `auth.signUp()` when its availability depends on app config.
    * Fetches the compatibility dataSourceId and allowSignup from the public app info endpoint.
    *
    * Safe to call multiple times. Subsequent calls are no-ops.
@@ -150,8 +149,7 @@ export interface MitraClient {
   /**
    * Authentication module for managing user sessions.
    *
-   * Handles Google SSO and session lifecycle. Email/password methods remain
-   * available for compatibility with Platform SDK 1.0.9.
+   * Handles Google SSO, trusted preview sessions, and session lifecycle.
    *
    * @example
    * ```typescript

@@ -51,7 +51,7 @@ The client derives service endpoints from `apiUrl`: `/iam`, `/data-manager`, `/f
 The Platform SDK owns:
 
 - browser Google SSO, logout, and session refresh
-- compatibility email/password methods already present in Platform SDK 1.0.9
+- trusted session adoption for the embedded app preview
 - session persistence in `localStorage`
 - auth-state listeners
 - proactive token refresh before authenticated native requests
@@ -76,10 +76,13 @@ unsubscribe()
 
 Authentication state is stored under `mitra_auth_{appId}`. Before each authenticated native request, the SDK checks a JWT's `exp` claim with a 30-second safety window and refreshes directly through IAM when needed. Opaque tokens, malformed JWTs, and JWTs without a numeric `exp` remain server-authoritative and proceed to the request. A `401` still triggers reactive recovery and at most one retry. If another login or bridged session replaced the token while the request was in flight, the retry uses that current token without refreshing its session. If sign-out cleared the token, the old `401` neither refreshes nor retries.
 
-The generated-application authentication flow is Google SSO. `signIn` and `signUp` remain available for compatibility because they were already public in Platform SDK 1.0.9, but they are not the new template flow:
+The generated-application authentication flow is Google SSO. The old native `signIn` and `signUp` names fail locally with `UNSUPPORTED_AUTH_METHOD` because IAM has no email/password endpoints. Deprecated login bindings remain available only through the legacy reexports.
+
+An embedded preview can adopt the app-scoped session it receives from the platform without exchanging it:
 
 ```typescript
-await mitra.auth.signIn({ email: "user@example.com", password: "password123" })
+mitra.auth.setSession({ accessToken, refreshToken })
+await mitra.auth.checkAuth()
 ```
 
 Proactive and reactive callers share one in-flight refresh. Successful refresh rotates and persists both tokens and updates the legacy session bridge without calling `auth.me()` or notifying public auth-state listeners. A refresh response that arrives after sign-out or after another login/session replacement is discarded and cannot restore or overwrite that newer state. Network failures, `408`, `429`, and `5xx` responses preserve the current session; the original HTTP request proceeds with the current token so a later `401` can use the reactive fallback. `auth.me()` also preserves that retained session when the fallback refresh is transient. Other IAM `4xx` responses are definitive and clear the session.

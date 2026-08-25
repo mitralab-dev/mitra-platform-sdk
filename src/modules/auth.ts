@@ -6,6 +6,7 @@ import type {
   User,
   SignInCredentials,
   SignUpData,
+  AuthSession,
   AuthTokenResponse,
   AuthStateChangeCallback,
   GoogleSignInOptions,
@@ -15,6 +16,7 @@ export type {
   User,
   SignInCredentials,
   SignUpData,
+  AuthSession,
   AuthStateChangeCallback,
   GoogleSignInOptions,
 } from './auth.types';
@@ -93,8 +95,7 @@ function isDefinitiveRefreshFailure(error: unknown): boolean {
 /**
  * Authentication module for managing user sessions.
  *
- * Handles Google SSO, sign-out, and automatic token refresh. Email/password
- * methods remain available for compatibility with Platform SDK 1.0.9.
+ * Handles Google SSO, trusted session adoption, sign-out, and automatic token refresh.
  * Auth state is persisted to localStorage with key `mitra_auth_{appId}`
  * and restored on page reload.
  *
@@ -167,33 +168,14 @@ export class AuthModule {
     return this._currentUser !== null && this.#accessToken !== null;
   }
 
-  /**
-   * Signs in a user with email and password.
-   *
-   * On success, stores access token, refresh token, and user data.
-   * Subsequent API requests use the token automatically.
-   *
-   * @param credentials - Email and password.
-   * @returns The authenticated user.
-   * @throws {MitraApiError} On invalid credentials (401).
-   *
-   * @example
-   * ```typescript
-   * const user = await mitra.auth.signIn({
-   *   email: 'user@example.com',
-   *   password: 'password123',
-   * });
-   * ```
-   */
+  /** @deprecated Email/password authentication is not implemented by IAM. Use Google SSO. */
   async signIn(credentials: SignInCredentials): Promise<User> {
-    const tokenResponse = expectAuthTokenResponse(
-      await this.publicClient.post<unknown>(
-        '/api/v1/auth/login',
-        { ...credentials, appId: this.appId }
-      )
+    void credentials;
+    throw new MitraApiError(
+      'Email/password authentication is not available. Use signInWithGoogle().',
+      0,
+      'UNSUPPORTED_AUTH_METHOD'
     );
-
-    return this.establishSession(tokenResponse);
   }
 
   /**
@@ -250,29 +232,14 @@ export class AuthModule {
     return tokenResponse ? this.establishSession(tokenResponse) : null;
   }
 
-  /**
-   * Registers a new user and signs them in automatically.
-   *
-   * @param data - Email, password, and optional name.
-   * @returns The newly created and authenticated user.
-   * @throws {MitraApiError} On duplicate email (409) or validation error (400).
-   *
-   * @example
-   * ```typescript
-   * const user = await mitra.auth.signUp({
-   *   email: 'new@example.com',
-   *   password: 'securepassword',
-   *   name: 'Jane Doe',
-   * });
-   * ```
-   */
+  /** @deprecated Email/password registration is not implemented by IAM. Use Google SSO. */
   async signUp(data: SignUpData): Promise<User> {
-    await this.publicClient.post<User>('/api/v1/auth/register', {
-      ...data,
-      appId: this.appId,
-    });
-
-    return this.signIn({ email: data.email, password: data.password });
+    void data;
+    throw new MitraApiError(
+      'Email/password registration is not available. Use signInWithGoogle().',
+      0,
+      'UNSUPPORTED_AUTH_METHOD'
+    );
   }
 
   /**
@@ -450,6 +417,20 @@ export class AuthModule {
    */
   private readSessionTokens(): AuthSessionTokens {
     return { token: this.#accessToken, refreshToken: this.#refreshToken };
+  }
+
+  /**
+   * Adopts an app-scoped session received from a trusted platform boundary.
+   *
+   * This preserves the access and refresh tokens together so the normal refresh
+   * lifecycle continues after an embedded preview hands its session to the app.
+   * Call {@link checkAuth} afterward to validate the token and hydrate the user.
+   */
+  setSession(session: AuthSession): boolean {
+    return this.adoptSession({
+      token: session.accessToken,
+      refreshToken: session.refreshToken ?? null,
+    });
   }
 
   /**
