@@ -62,7 +62,7 @@
     "url": "https://github.com/mitralab-dev/mitra-platform-sdk/issues"
   },
   "dependencies": {
-    "@mitralab.io/sdk-core": "npm:@joaoluistq/mitra-sdk-core-validation@0.2.0-beta.6",
+    "@mitralab.io/sdk-core": "npm:@joaoluistq/mitra-sdk-core-validation@0.2.0-beta.8",
     "mitra-interactions-sdk": "1.0.60-beta.45"
   },
   "devDependencies": {
