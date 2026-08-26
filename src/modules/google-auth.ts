@@ -6,7 +6,13 @@ import { resolveAuthPageUrl } from './auth-page-url';
 import type { AuthTokenResponse, GoogleSignInOptions } from './auth.types';
 
 const RESULT_TYPE = 'mitra-oauth-result';
-const REDIRECT_STORAGE_PREFIX = 'mitra_google_redirect_';
+
+export type AuthPageProvider = 'google' | 'microsoft';
+
+const PROVIDER_LABELS: Record<AuthPageProvider, string> = {
+  google: 'Google',
+  microsoft: 'Microsoft',
+};
 const POPUP_WIDTH = 480;
 const POPUP_HEIGHT = 600;
 const POPUP_TIMEOUT_MS = 5 * 60 * 1_000;
@@ -17,6 +23,8 @@ interface GoogleAuthFlowConfig {
   apiUrl: string;
   authPageUrl?: string;
   client: HttpClient;
+  /** Which provider the auth page starts. Defaults to Google. */
+  provider?: AuthPageProvider;
 }
 
 interface RedirectContext {
@@ -48,12 +56,14 @@ export function expectAuthTokenResponse(value: unknown): AuthTokenResponse {
   };
 }
 
-/** Coordinates the browser-only Google OAuth handshake and returns IAM tokens. */
+/** Coordinates the browser-only OAuth handshake through the brand auth page (Google or Microsoft) and returns IAM tokens. */
 export class GoogleAuthFlow {
   private readonly appId: string;
   private readonly apiUrl: string;
   private readonly configuredAuthPageUrl?: string;
   private readonly client: HttpClient;
+  private readonly provider: AuthPageProvider;
+  private readonly providerLabel: string;
   private readonly redirectStorageKey: string;
   private popupPromise: Promise<AuthTokenResponse> | null = null;
 
@@ -62,7 +72,9 @@ export class GoogleAuthFlow {
     this.apiUrl = stripTrailingSlashes(config.apiUrl);
     this.configuredAuthPageUrl = config.authPageUrl;
     this.client = config.client;
-    this.redirectStorageKey = `${REDIRECT_STORAGE_PREFIX}${config.appId}`;
+    this.provider = config.provider ?? 'google';
+    this.providerLabel = PROVIDER_LABELS[this.provider];
+    this.redirectStorageKey = `mitra_${this.provider}_redirect_${config.appId}`;
   }
 
   signIn(options: GoogleSignInOptions = {}): Promise<AuthTokenResponse> {
@@ -73,7 +85,7 @@ export class GoogleAuthFlow {
     }
 
     if (options.mode !== undefined && options.mode !== 'popup') {
-      return Promise.reject(new Error(`Unsupported Google sign-in mode: ${String(options.mode)}`));
+      return Promise.reject(new Error(`Unsupported ${this.providerLabel} sign-in mode: ${String(options.mode)}`));
     }
 
     if (this.popupPromise) return this.popupPromise;
@@ -95,27 +107,27 @@ export class GoogleAuthFlow {
 
     const context = this.readRedirectContext(browserWindow);
     if (!state?.trim()) {
-      throw new Error('Google sign-in redirect is missing state.');
+      throw new Error(`${this.providerLabel} sign-in redirect is missing state.`);
     }
     if (context?.state !== state) {
-      throw new Error('Invalid Google sign-in state (possible CSRF).');
+      throw new Error(`Invalid ${this.providerLabel} sign-in state (possible CSRF).`);
     }
 
     const expectedRedirectUri = this.getRedirectUri(
       resolveAuthPageUrl(this.apiUrl, this.configuredAuthPageUrl, browserWindow)
     );
     if (context.redirectUri !== expectedRedirectUri) {
-      throw new Error('Google sign-in redirect context is invalid.');
+      throw new Error(`${this.providerLabel} sign-in redirect context is invalid.`);
     }
 
     this.cleanRedirectFragment(browserWindow);
     this.clearRedirectContext(browserWindow);
 
     if (code === 'error' || error !== null) {
-      throw new Error(error || 'Google sign-in failed.');
+      throw new Error(error || `${this.providerLabel} sign-in failed.`);
     }
     if (!code?.trim()) {
-      throw new Error('Google sign-in redirect is missing code.');
+      throw new Error(`${this.providerLabel} sign-in redirect is missing code.`);
     }
 
     return this.exchangeCode(code, context.redirectUri);
@@ -159,7 +171,7 @@ export class GoogleAuthFlow {
     code: string,
     redirectUri: string
   ): Promise<AuthTokenResponse> {
-    const response = await this.client.post<unknown>('/api/v1/auth/google', {
+    const response = await this.client.post<unknown>(`/api/v1/auth/${this.provider}`, {
       appId: this.appId,
       code,
       redirectUri,
@@ -174,7 +186,7 @@ export class GoogleAuthFlow {
     state: string
   ): URL {
     const startUrl = new URL(authPageUrl);
-    startUrl.searchParams.set('provider', 'google');
+    startUrl.searchParams.set('provider', this.provider);
     startUrl.searchParams.set('state', state);
     startUrl.searchParams.set('appId', this.appId);
     startUrl.searchParams.set('apiUrl', this.apiUrl);
@@ -189,7 +201,7 @@ export class GoogleAuthFlow {
 
   private generateState(): string {
     if (!globalThis.crypto?.getRandomValues) {
-      throw new Error('Google sign-in requires crypto.getRandomValues.');
+      throw new Error(`${this.providerLabel} sign-in requires crypto.getRandomValues.`);
     }
     const bytes = new Uint8Array(16);
     globalThis.crypto.getRandomValues(bytes);
@@ -207,7 +219,7 @@ export class GoogleAuthFlow {
       `width=${POPUP_WIDTH},height=${POPUP_HEIGHT},left=${left},top=${top},menubar=no,toolbar=no,status=no`
     );
     if (!popup) {
-      throw new Error('Google sign-in popup was blocked by the browser.');
+      throw new Error(`${this.providerLabel} sign-in popup was blocked by the browser.`);
     }
     return popup;
   }
@@ -221,12 +233,12 @@ export class GoogleAuthFlow {
     return new Promise((resolve, reject) => {
       const timeout = globalThis.setTimeout(() => {
         cleanup();
-        reject(new Error('Google sign-in timed out.'));
+        reject(new Error(`${this.providerLabel} sign-in timed out.`));
       }, POPUP_TIMEOUT_MS);
       const closedPoll = globalThis.setInterval(() => {
         if (popup.closed) {
           cleanup();
-          reject(new Error('Google sign-in was cancelled.'));
+          reject(new Error(`${this.providerLabel} sign-in was cancelled.`));
         }
       }, POPUP_CLOSED_POLL_MS);
 
@@ -238,14 +250,14 @@ export class GoogleAuthFlow {
         if (data.type !== RESULT_TYPE) return;
         if (data.state !== expectedState) {
           cleanup();
-          reject(new Error('Invalid Google sign-in state (possible CSRF).'));
+          reject(new Error(`Invalid ${this.providerLabel} sign-in state (possible CSRF).`));
           return;
         }
         if (data.success !== true) {
           cleanup();
           reject(new Error(typeof data.error === 'string' && data.error.trim()
             ? data.error
-            : 'Google sign-in failed.'));
+            : `${this.providerLabel} sign-in failed.`));
           return;
         }
 
@@ -275,7 +287,7 @@ export class GoogleAuthFlow {
     try {
       browserWindow.sessionStorage.setItem(this.redirectStorageKey, JSON.stringify(context));
     } catch {
-      throw new Error('Google sign-in redirect requires sessionStorage.');
+      throw new Error(`${this.providerLabel} sign-in redirect requires sessionStorage.`);
     }
   }
 
@@ -312,7 +324,7 @@ export class GoogleAuthFlow {
 
   private requireBrowser(): MitraWindow {
     if (globalThis.window === undefined) {
-      throw new Error('Google sign-in is only available in a browser.');
+      throw new Error(`${this.providerLabel} sign-in is only available in a browser.`);
     }
     return globalThis.window as MitraWindow;
   }

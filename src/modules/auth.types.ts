@@ -35,6 +35,9 @@ export interface GoogleSignInOptions {
   mode?: 'popup' | 'redirect';
 }
 
+/** Options for Microsoft SSO. Same handshake as Google, through the brand auth page. */
+export type MicrosoftSignInOptions = GoogleSignInOptions;
+
 /**
  * Response from authentication token endpoints.
  * @internal

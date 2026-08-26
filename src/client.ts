@@ -406,6 +406,7 @@ export type {
   SignInCredentials,
   SignUpData,
   GoogleSignInOptions,
+  MicrosoftSignInOptions,
 } from './modules/auth';
 export type { EntityListOptions, EntityTable } from './modules/entities';
 export type { FunctionExecution } from './modules/functions';

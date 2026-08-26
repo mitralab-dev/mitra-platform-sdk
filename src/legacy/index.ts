@@ -3,9 +3,9 @@
  * swap the legacy package for `@mitralab.io/platform-sdk` without rewriting
  * call sites first.
  *
- * Everything here is deprecated. Microsoft SSO is the only login without a
- * native replacement. The other capabilities remain available during migration
- * even when the native API has different input or response semantics.
+ * Everything here is deprecated. The capabilities remain available during
+ * migration even when the native API has different input or response
+ * semantics.
  *
  * The four legacy entry points that produce a session are wrapped so the
  * resulting session also lands in this SDK. Every other export is the legacy
@@ -65,8 +65,7 @@ export const loginWithGoogleMitra: typeof legacyLoginWithGoogleMitra = async (op
 };
 
 /**
- * @deprecated No replacement yet; Microsoft SSO remains supported through the
- * legacy surface.
+ * @deprecated Use `mitra.auth.signInWithMicrosoft()`.
  */
 export const loginWithMicrosoftMitra: typeof legacyLoginWithMicrosoftMitra = async (options) => {
   const session = await legacyLoginWithMicrosoftMitra(options);

@@ -125,6 +125,32 @@ describe('Google SSO', () => {
     vi.unstubAllGlobals();
   });
 
+  it('signs in with Microsoft through the same auth page and IAM exchange', async () => {
+    mockLocalStorage();
+    const browser = mockBrowser();
+    const fetchMock = mockFetchSequence([
+      { body: TOKEN_RESPONSE },
+      { body: CURRENT_USER_RESPONSE },
+    ]);
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    const signIn = auth.signInWithMicrosoft({ mode: 'popup' });
+    const startUrl = browser.getStartUrl();
+    const state = startUrl.searchParams.get('state')!;
+    browser.dispatchMessage(popupResult(state, { code: 'microsoft-code' }));
+
+    await expect(signIn).resolves.toEqual(USER);
+    expect(startUrl.origin + startUrl.pathname).toBe(AUTH_PAGE_URL);
+    expect(startUrl.searchParams.get('provider')).toBe('microsoft');
+    expect(fetchMock.mock.calls[0][0]).toBe(`${IAM_URL}/api/v1/auth/microsoft`);
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      appId: APP_ID,
+      code: 'microsoft-code',
+      redirectUri: AUTH_PAGE_URL,
+    });
+    expect(auth.currentUser).toEqual(USER);
+  });
+
   it('exchanges the popup code directly with IAM and hydrates the session', async () => {
     const storage = mockLocalStorage();
     const browser = mockBrowser();

@@ -11,6 +11,7 @@ import type {
   AuthTokenResponse,
   AuthStateChangeCallback,
   GoogleSignInOptions,
+  MicrosoftSignInOptions,
 } from './auth.types';
 
 export type {
@@ -20,6 +21,7 @@ export type {
   AuthSession,
   AuthStateChangeCallback,
   GoogleSignInOptions,
+  MicrosoftSignInOptions,
 } from './auth.types';
 
 interface AuthModuleOptions {
@@ -121,6 +123,7 @@ export class AuthModule {
   private readonly authedClient: HttpClient;
   private readonly currentUserApi: CoreAuthModule;
   private readonly googleAuth: GoogleAuthFlow;
+  private readonly microsoftAuth: GoogleAuthFlow;
 
   constructor(appId: string, iamBaseUrl: string, options: AuthModuleOptions = {}) {
     this.appId = appId;
@@ -145,6 +148,13 @@ export class AuthModule {
       apiUrl,
       authPageUrl: options.authPageUrl,
       client: this.publicClient,
+    });
+    this.microsoftAuth = new GoogleAuthFlow({
+      appId,
+      apiUrl,
+      authPageUrl: options.authPageUrl,
+      client: this.publicClient,
+      provider: 'microsoft',
     });
     this.loadFromStorage();
     const readAccessToken = () => this.#accessToken;
@@ -175,10 +185,10 @@ export class AuthModule {
     return this._currentUser !== null && this.#accessToken !== null;
   }
 
-  /** @deprecated Email/password authentication is not implemented by IAM. Use Google SSO. */
+  /** @deprecated Email/password authentication is not implemented by IAM. Use Google or Microsoft SSO. */
   async signIn(_credentials: SignInCredentials): Promise<User> {
     throw new MitraApiError(
-      'Email/password authentication is not available. Use signInWithGoogle().',
+      'Email/password authentication is not available. Use signInWithGoogle() or signInWithMicrosoft().',
       0,
       'UNSUPPORTED_AUTH_METHOD'
     );
@@ -238,10 +248,33 @@ export class AuthModule {
     return tokenResponse ? this.establishSession(tokenResponse) : null;
   }
 
-  /** @deprecated Email/password registration is not implemented by IAM. Use Google SSO. */
+  /**
+   * Signs in with Microsoft SSO: the same auth-page handshake as Google, exchanged
+   * at IAM's `/auth/microsoft`. Popup by default; redirect mode navigates away.
+   *
+   * @example
+   * ```typescript
+   * const user = await mitra.auth.signInWithMicrosoft();
+   * ```
+   */
+  async signInWithMicrosoft(options: MicrosoftSignInOptions = {}): Promise<User> {
+    return this.establishSession(await this.microsoftAuth.signIn(options));
+  }
+
+  /**
+   * Completes a Microsoft redirect response from `#codeMitra` and `#stateMitra`.
+   * Mirrors {@link completeGoogleSignInRedirect}; returns `null` when the current
+   * URL is not a Microsoft SSO redirect.
+   */
+  async completeMicrosoftSignInRedirect(): Promise<User | null> {
+    const tokenResponse = await this.microsoftAuth.completeRedirect();
+    return tokenResponse ? this.establishSession(tokenResponse) : null;
+  }
+
+  /** @deprecated Email/password registration is not implemented by IAM. Use Google or Microsoft SSO. */
   async signUp(_data: SignUpData): Promise<User> {
     throw new MitraApiError(
-      'Email/password registration is not available. Use signInWithGoogle().',
+      'Email/password registration is not available. Use signInWithGoogle() or signInWithMicrosoft().',
       0,
       'UNSUPPORTED_AUTH_METHOD'
     );

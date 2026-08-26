@@ -38,6 +38,7 @@ export type {
   SignInCredentials,
   SignUpData,
   GoogleSignInOptions,
+  MicrosoftSignInOptions,
   EntityListOptions,
   EntityTable,
   FunctionExecution,
