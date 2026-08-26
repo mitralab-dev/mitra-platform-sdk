@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, expectTypeOf } from 'vitest';
 import * as legacyPackage from 'mitra-interactions-sdk';
 import * as platformSdk from '../index';
 import {
@@ -124,13 +124,11 @@ describe('legacy surface', () => {
     const session: LoginResponse = { token: 'token', baseURL: config.baseURL as string };
     const execute: ExecuteServerFunctionOptions = { serverFunctionId: 1 };
     const list: ListRecordsOptions = { tableName: 'Task' };
-    const instance: MitraInstance | undefined = undefined;
-    const task: AgentTaskSession | undefined = undefined;
 
     expect(session.token).toBe('token');
     expect(execute.serverFunctionId).toBe(1);
     expect(list.tableName).toBe('Task');
-    expect(instance).toBeUndefined();
-    expect(task).toBeUndefined();
+    expectTypeOf<MitraInstance>().not.toBeNever();
+    expectTypeOf<AgentTaskSession>().not.toBeNever();
   });
 });

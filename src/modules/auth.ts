@@ -1,3 +1,4 @@
+import { stripTrailingSlashes } from '../utils/url';
 import { createAuthModule, type AuthModule as CoreAuthModule } from '@mitralab.io/sdk-core';
 import { coreErrors } from '../core-errors';
 import { HttpClient, MitraApiError } from '../utils/http-client';
@@ -62,7 +63,7 @@ function decodeJwtPayload(token: string): Record<string, unknown> | null {
   try {
     const part = token.replace(/^Bearer\s+/i, '').split('.')[1];
     if (!part || typeof globalThis.atob !== 'function') return null;
-    const base64 = part.replace(/-/g, '+').replace(/_/g, '/');
+    const base64 = part.replaceAll('-', '+').replaceAll('_', '/');
     const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
     const value: unknown = JSON.parse(globalThis.atob(padded));
     if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
@@ -123,7 +124,13 @@ export class AuthModule {
 
   constructor(appId: string, iamBaseUrl: string, options: AuthModuleOptions = {}) {
     this.appId = appId;
-    const apiUrl = (options.apiUrl ?? iamBaseUrl.replace(/\/iam\/?$/, '')).replace(/\/+$/, '');
+    const trimmedIamBaseUrl = stripTrailingSlashes(iamBaseUrl);
+    const apiUrl = stripTrailingSlashes(
+      options.apiUrl ??
+        (trimmedIamBaseUrl.endsWith('/iam')
+          ? trimmedIamBaseUrl.slice(0, -'/iam'.length)
+          : trimmedIamBaseUrl)
+    );
     this.storageKey = `mitra_auth_${appId}`;
     this.publicClient = new HttpClient({ baseUrl: iamBaseUrl, getToken: () => null });
     this.authedClient = new HttpClient({
@@ -169,8 +176,7 @@ export class AuthModule {
   }
 
   /** @deprecated Email/password authentication is not implemented by IAM. Use Google SSO. */
-  async signIn(credentials: SignInCredentials): Promise<User> {
-    void credentials;
+  async signIn(_credentials: SignInCredentials): Promise<User> {
     throw new MitraApiError(
       'Email/password authentication is not available. Use signInWithGoogle().',
       0,
@@ -233,8 +239,7 @@ export class AuthModule {
   }
 
   /** @deprecated Email/password registration is not implemented by IAM. Use Google SSO. */
-  async signUp(data: SignUpData): Promise<User> {
-    void data;
+  async signUp(_data: SignUpData): Promise<User> {
     throw new MitraApiError(
       'Email/password registration is not available. Use signInWithGoogle().',
       0,

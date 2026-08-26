@@ -18,7 +18,8 @@ export function resolveAuthPageUrl(
         ? injectedAuthPageUrl
         : new URL('/sdk-auth.html', apiUrl).toString());
     const url = new URL(candidate);
-    if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new Error();
+    if (url.protocol !== 'https:' && url.protocol !== 'http:')
+      throw new Error('authPageUrl must be an absolute HTTP or HTTPS URL.');
     return url;
   } catch {
     throw new Error('authPageUrl must be an absolute HTTP or HTTPS URL.');

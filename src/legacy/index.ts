@@ -15,33 +15,10 @@
  */
 
 import {
-  callIntegrationMitra as legacyCallIntegrationMitra,
-  configureSdkMitra as legacyConfigureSdkMitra,
-  createMitraInstance as legacyCreateMitraInstance,
-  createRecordMitra as legacyCreateRecordMitra,
-  createRecordsBatchMitra as legacyCreateRecordsBatchMitra,
-  deleteRecordMitra as legacyDeleteRecordMitra,
   exchangeSsoCodeMitra as legacyExchangeSsoCodeMitra,
-  executePublicServerFunctionAsyncMitra as legacyExecutePublicServerFunctionAsyncMitra,
-  executePublicServerFunctionMitra as legacyExecutePublicServerFunctionMitra,
-  executeServerFunctionAsyncMitra as legacyExecuteServerFunctionAsyncMitra,
-  executeServerFunctionMitra as legacyExecuteServerFunctionMitra,
-  getAgentTaskMitra as legacyGetAgentTaskMitra,
-  getConfig as legacyGetConfig,
-  getPublicServerFunctionExecutionMitra as legacyGetPublicServerFunctionExecutionMitra,
-  getRecordMitra as legacyGetRecordMitra,
-  listIntegrationsMitra as legacyListIntegrationsMitra,
-  listRecordsMitra as legacyListRecordsMitra,
   loginMitra as legacyLoginMitra,
   loginWithGoogleMitra as legacyLoginWithGoogleMitra,
   loginWithMicrosoftMitra as legacyLoginWithMicrosoftMitra,
-  manageAgentChatMitra as legacyManageAgentChatMitra,
-  manageAgentCredentialMitra as legacyManageAgentCredentialMitra,
-  patchRecordMitra as legacyPatchRecordMitra,
-  refreshTokenSilently as legacyRefreshTokenSilently,
-  resolveProjectId as legacyResolveProjectId,
-  stopServerFunctionExecutionMitra as legacyStopServerFunctionExecutionMitra,
-  updateRecordMitra as legacyUpdateRecordMitra,
 } from 'mitra-interactions-sdk';
 import type * as LegacyTypes from 'mitra-interactions-sdk';
 import { adoptLegacySession } from './bridge';
@@ -51,22 +28,22 @@ import { adoptLegacySession } from './bridge';
  * Calling this directly replaces the legacy configuration and refresh hook
  * until the next bridged session change.
  */
-export const configureSdkMitra = legacyConfigureSdkMitra;
+export { configureSdkMitra } from 'mitra-interactions-sdk';
 
 /**
  * @deprecated Use `createClient` instead.
  */
-export const createMitraInstance = legacyCreateMitraInstance;
+export { createMitraInstance } from 'mitra-interactions-sdk';
 
 /**
  * @deprecated Use `mitra.config` instead.
  */
-export const getConfig = legacyGetConfig;
+export { getConfig } from 'mitra-interactions-sdk';
 
 /**
  * @deprecated Use `mitra.config.appId` instead.
  */
-export const resolveProjectId = legacyResolveProjectId;
+export { resolveProjectId } from 'mitra-interactions-sdk';
 
 /**
  * @deprecated Use `mitra.auth.signInWithGoogle()` when `method` is Google.
@@ -112,101 +89,101 @@ export const exchangeSsoCodeMitra: typeof legacyExchangeSsoCodeMitra = async (op
  * @deprecated Use `mitra.auth.refreshSession` instead. This is the low-level
  * primitive: it returns a session without applying it to either SDK.
  */
-export const refreshTokenSilently = legacyRefreshTokenSilently;
+export { refreshTokenSilently } from 'mitra-interactions-sdk';
 
 /**
  * @deprecated Use `mitra.functions.execute` instead. The native method invokes
  * the synchronous Functions endpoint and returns its execution contract.
  */
-export const executeServerFunctionMitra = legacyExecuteServerFunctionMitra;
+export { executeServerFunctionMitra } from 'mitra-interactions-sdk';
 
 /**
  * @deprecated Use `mitra.functions.executeAsync` instead, then poll or cancel
  * the returned execution ID through the same module.
  */
-export const executeServerFunctionAsyncMitra = legacyExecuteServerFunctionAsyncMitra;
+export { executeServerFunctionAsyncMitra } from 'mitra-interactions-sdk';
 
 /**
  * @deprecated Use `mitra.publicFunctions.execute` instead.
  */
-export const executePublicServerFunctionMitra = legacyExecutePublicServerFunctionMitra;
+export { executePublicServerFunctionMitra } from 'mitra-interactions-sdk';
 
 /**
  * @deprecated Use `mitra.publicFunctions.executeAsync` instead.
  */
-export const executePublicServerFunctionAsyncMitra = legacyExecutePublicServerFunctionAsyncMitra;
+export { executePublicServerFunctionAsyncMitra } from 'mitra-interactions-sdk';
 
 /**
  * @deprecated Kept for backward compatibility. The direct public API has no anonymous polling;
  * use `mitra.functions.getExecution` only in an authenticated flow.
  */
-export const getPublicServerFunctionExecutionMitra = legacyGetPublicServerFunctionExecutionMitra;
+export { getPublicServerFunctionExecutionMitra } from 'mitra-interactions-sdk';
 
 /**
  * @deprecated Use `mitra.functions.cancelExecution` instead.
  */
-export const stopServerFunctionExecutionMitra = legacyStopServerFunctionExecutionMitra;
+export { stopServerFunctionExecutionMitra } from 'mitra-interactions-sdk';
 
 /**
  * @deprecated Use `mitra.integration.execute` instead.
  */
-export const callIntegrationMitra = legacyCallIntegrationMitra;
+export { callIntegrationMitra } from 'mitra-interactions-sdk';
 
 /**
  * @deprecated Use `mitra.integration.list()` instead.
  */
-export const listIntegrationsMitra = legacyListIntegrationsMitra;
+export { listIntegrationsMitra } from 'mitra-interactions-sdk';
 
 /**
  * @deprecated Use `mitra.entities.<Table>.list` instead.
  */
-export const listRecordsMitra = legacyListRecordsMitra;
+export { listRecordsMitra } from 'mitra-interactions-sdk';
 
 /**
  * @deprecated Use `mitra.entities.<Table>.get` instead.
  */
-export const getRecordMitra = legacyGetRecordMitra;
+export { getRecordMitra } from 'mitra-interactions-sdk';
 
 /**
  * @deprecated Use `mitra.entities.<Table>.create` instead.
  */
-export const createRecordMitra = legacyCreateRecordMitra;
+export { createRecordMitra } from 'mitra-interactions-sdk';
 
 /**
  * @deprecated Use `mitra.entities.<Table>.bulkCreate` instead.
  */
-export const createRecordsBatchMitra = legacyCreateRecordsBatchMitra;
+export { createRecordsBatchMitra } from 'mitra-interactions-sdk';
 
 /**
  * @deprecated Use `mitra.entities.<Table>.update` instead.
  */
-export const updateRecordMitra = legacyUpdateRecordMitra;
+export { updateRecordMitra } from 'mitra-interactions-sdk';
 
 /**
  * @deprecated Use `mitra.entities.<Table>.update` instead, which also sends a
  * partial payload.
  */
-export const patchRecordMitra = legacyPatchRecordMitra;
+export { patchRecordMitra } from 'mitra-interactions-sdk';
 
 /**
  * @deprecated Use `mitra.entities.<Table>.delete` instead.
  */
-export const deleteRecordMitra = legacyDeleteRecordMitra;
+export { deleteRecordMitra } from 'mitra-interactions-sdk';
 
 /**
  * @deprecated Use `mitra.agentTasks.session` instead.
  */
-export const getAgentTaskMitra = legacyGetAgentTaskMitra;
+export { getAgentTaskMitra } from 'mitra-interactions-sdk';
 
 /**
  * @deprecated Use `mitra.agentTasks.list`, `rename`, and `archive` instead.
  */
-export const manageAgentChatMitra = legacyManageAgentChatMitra;
+export { manageAgentChatMitra } from 'mitra-interactions-sdk';
 
 /**
  * @deprecated Use `mitra.agentCredentials` instead.
  */
-export const manageAgentCredentialMitra = legacyManageAgentCredentialMitra;
+export { manageAgentCredentialMitra } from 'mitra-interactions-sdk';
 
 /** @deprecated Legacy compatibility type. */
 export type AgentChat = LegacyTypes.AgentChat;

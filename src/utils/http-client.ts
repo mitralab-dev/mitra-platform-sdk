@@ -209,20 +209,28 @@ export class HttpClient implements Transport {
         }
       }
 
-      const errorBody: unknown = await response.json().catch(() => ({}));
-      const errorPayload = asErrorPayload(errorBody);
-      const rawMessage = optionalString(errorPayload.message);
-      const rawCode = optionalString(errorPayload.error_code);
-      const error = new MitraApiError(
-        redactText(rawMessage || `Request failed with status ${response.status}`, token),
-        response.status,
-        rawCode === undefined ? undefined : redactText(rawCode, token),
-        redactDetails(errorBody, token)
-      );
+      const error = await this.errorFromResponse(response, token);
       this.onError?.(error);
       throw error;
     }
 
+    return this.parseResponseBody<T>(response, path);
+  }
+
+  private async errorFromResponse(response: Response, token: string | null): Promise<MitraApiError> {
+    const errorBody: unknown = await response.json().catch(() => ({}));
+    const errorPayload = asErrorPayload(errorBody);
+    const rawMessage = optionalString(errorPayload.message);
+    const rawCode = optionalString(errorPayload.error_code);
+    return new MitraApiError(
+      redactText(rawMessage || `Request failed with status ${response.status}`, token),
+      response.status,
+      rawCode === undefined ? undefined : redactText(rawCode, token),
+      redactDetails(errorBody, token)
+    );
+  }
+
+  private async parseResponseBody<T>(response: Response, path: string): Promise<T> {
     if (response.status === 204) {
       return undefined as T;
     }

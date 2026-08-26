@@ -1,3 +1,4 @@
+import { stripTrailingSlashes } from './utils/url';
 import {
   createPublicFunctionsModule,
   encodePathSegment,
@@ -278,7 +279,7 @@ export interface MitraClient {
  */
 export function createClient(config: MitraClientConfig): MitraClient {
   const { appId, apiUrl, authPageUrl, onError } = config;
-  const gatewayUrl = apiUrl.replace(/\/+$/, '');
+  const gatewayUrl = stripTrailingSlashes(apiUrl);
 
   // Determine service URLs from base API URL
   const iamUrl = `${gatewayUrl}/iam`;

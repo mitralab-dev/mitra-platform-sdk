@@ -1,3 +1,4 @@
+import { stripTrailingSlashes } from '../utils/url';
 import { configureSdkMitra, getConfig, type LoginResponse } from 'mitra-interactions-sdk';
 import type { AuthSessionPort } from '../modules/auth';
 import { resolveAuthPageUrl } from '../modules/auth-page-url';
@@ -31,7 +32,7 @@ export class LegacySessionBridge {
     this.appId = appId;
     this.apiUrl = apiUrl;
     this.configuredAuthPageUrl = authPageUrl;
-    const gatewayUrl = apiUrl.replace(/\/+$/, '');
+    const gatewayUrl = stripTrailingSlashes(apiUrl);
     this.legacyUrl = gatewayUrl ? `${gatewayUrl}/legacy` : '';
   }
 

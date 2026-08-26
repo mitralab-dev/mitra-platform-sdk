@@ -1,3 +1,4 @@
+import { stripTrailingSlashes } from '../utils/url';
 import { expectObject } from '@mitralab.io/sdk-core';
 import { coreErrors } from '../core-errors';
 import type { HttpClient } from '../utils/http-client';
@@ -58,7 +59,7 @@ export class GoogleAuthFlow {
 
   constructor(config: GoogleAuthFlowConfig) {
     this.appId = config.appId;
-    this.apiUrl = config.apiUrl.replace(/\/+$/, '');
+    this.apiUrl = stripTrailingSlashes(config.apiUrl);
     this.configuredAuthPageUrl = config.authPageUrl;
     this.client = config.client;
     this.redirectStorageKey = `${REDIRECT_STORAGE_PREFIX}${config.appId}`;
@@ -96,7 +97,7 @@ export class GoogleAuthFlow {
     if (!state?.trim()) {
       throw new Error('Google sign-in redirect is missing state.');
     }
-    if (!context || context.state !== state) {
+    if (context?.state !== state) {
       throw new Error('Invalid Google sign-in state (possible CSRF).');
     }
 

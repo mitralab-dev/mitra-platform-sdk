@@ -1,3 +1,4 @@
+import { stripTrailingSlashes } from '../utils/url';
 import type {
   AgentSessionTransport,
   AgentTaskEvent,
@@ -58,7 +59,7 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
     private readonly auth: AuthSessionPort,
     apiUrl: string
   ) {
-    this.apiUrl = apiUrl.replace(/\/+$/, '');
+    this.apiUrl = stripTrailingSlashes(apiUrl);
   }
 
   async open(
@@ -116,7 +117,7 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
     signal?: AbortSignal
   ): Promise<AgentTaskEventConnection> {
     if (typeof globalThis.WebSocket !== 'function') {
-      throw new Error('WebSocket is not available.');
+      throw new TypeError('WebSocket is not available.');
     }
     if (signal?.aborted) throw signal.reason ?? new Error('Agent WebSocket connection aborted.');
 
