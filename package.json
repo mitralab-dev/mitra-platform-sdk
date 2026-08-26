@@ -63,7 +63,7 @@
   },
   "dependencies": {
     "@mitralab.io/sdk-core": "npm:@joaoluistq/mitra-sdk-core-validation@0.2.0-beta.8",
-    "mitra-interactions-sdk": "1.0.60-beta.45"
+    "mitra-interactions-sdk": "1.0.60-beta.48"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
