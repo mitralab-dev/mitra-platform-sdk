@@ -29,7 +29,13 @@ describe('EntitiesModule compatibility facade', () => {
     expect(dynamic).toBe(entities.Task);
     await expect(
       entities.getTable<{ id: number }>('Order items').list('-created_at', 10, 5)
-    ).resolves.toEqual([{ id: 1 }]);
+    ).resolves.toEqual({
+      data: [{ id: 1 }],
+      limit: 10,
+      skip: 5,
+      total: 1,
+      hasMore: false,
+    });
 
     const calledUrl = String(fetchMock.mock.calls[0][0]);
     expect(calledUrl).toContain('/api/v1/tables/Order%20items/records');

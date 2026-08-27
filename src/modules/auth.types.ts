@@ -23,6 +23,21 @@ export interface SignUpData {
   name?: string;
 }
 
+/** App-scoped session received from a trusted platform boundary. */
+export interface AuthSession {
+  accessToken: string;
+  refreshToken?: string | null;
+}
+
+/** Options for Google SSO. */
+export interface GoogleSignInOptions {
+  /** Opens a popup by default. Redirect mode navigates the current page. */
+  mode?: 'popup' | 'redirect';
+}
+
+/** Options for Microsoft SSO. Same handshake as Google, through the brand auth page. */
+export type MicrosoftSignInOptions = GoogleSignInOptions;
+
 /**
  * Response from authentication token endpoints.
  * @internal

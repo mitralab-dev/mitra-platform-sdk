@@ -13,20 +13,35 @@ export class FunctionsModule {
   private readonly core: CoreFunctionsModule;
 
   constructor(httpClient: HttpClient) {
-    this.core = createFunctionsModule(httpClient, { emptyInput: 'omit-body' }, coreErrors);
+    this.core = createFunctionsModule(
+      httpClient,
+      { emptyInput: 'omit-body', executeInvocationType: 'sync' },
+      coreErrors
+    );
   }
 
   /**
-   * Executes a Function using the Platform SDK 1.x server-default invocation semantics.
-   * The runtime SDK uses an explicit invocation header instead.
+   * Executes a Function synchronously and waits for its terminal result.
    */
   async execute(functionId: string, input?: Record<string, unknown>): Promise<FunctionExecution> {
-    const execution = await this.core.execute(functionId, input);
-    if (execution.input === null) {
-      throw coreErrors.invalidResponse(
-        'Function execution response has an invalid input field'
-      );
-    }
-    return { ...execution, input: execution.input };
+    return this.core.execute(functionId, input);
+  }
+
+  /** Queues a Function and returns its initial execution record. */
+  async executeAsync(
+    functionId: string,
+    input?: Record<string, unknown>
+  ): Promise<FunctionExecution> {
+    return this.core.executeAsync(functionId, input);
+  }
+
+  /** Reads the current state of an asynchronous Function execution. */
+  async getExecution(executionId: string): Promise<FunctionExecution> {
+    return this.core.getExecution(executionId);
+  }
+
+  /** Requests cancellation of a queued or running Function execution. */
+  cancelExecution(executionId: string): Promise<void> {
+    return this.core.cancelExecution(executionId);
   }
 }
