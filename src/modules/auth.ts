@@ -2,11 +2,12 @@ import { stripTrailingSlashes } from '../utils/url';
 import { createAuthModule, type AuthModule as CoreAuthModule } from '@mitralab.io/sdk-core';
 import { coreErrors } from '../core-errors';
 import { HttpClient, MitraApiError } from '../utils/http-client';
-import { expectAuthTokenResponse, GoogleAuthFlow } from './google-auth';
+import { expectAuthTokenResponse, GoogleAuthFlow, normalizeAllTokens } from './google-auth';
 import type {
   User,
   SignInCredentials,
   SignUpData,
+  AllTokens,
   AuthSession,
   AuthTokenResponse,
   AuthStateChangeCallback,
@@ -18,6 +19,9 @@ export type {
   User,
   SignInCredentials,
   SignUpData,
+  AllTokens,
+  MitraSpaceToken,
+  PlatformSessionTokens,
   AuthSession,
   AuthStateChangeCallback,
   GoogleSignInOptions,
@@ -50,6 +54,7 @@ export interface AuthSessionPort {
   readSessionTokens(): AuthSessionTokens;
   onSessionChange(callback: AuthSessionChangeCallback): () => void;
   adoptSession(session: { token: string; refreshToken?: string | null }): boolean;
+  rotateSession(session: { token: string; refreshToken?: string | null }): boolean;
 }
 
 const sessionPorts = new WeakMap<AuthModule, AuthSessionPort>();
@@ -87,6 +92,24 @@ function isTokenExpiring(token: string, minValidityMs: number): boolean {
   return exp * 1_000 - Date.now() < minValidityMs;
 }
 
+/**
+ * `platform` is taken from the response as is, including `null`, because IAM is
+ * authoritative on the membership that backs it. `mitraSpace` is long-lived and
+ * only issued at login, so a refresh omitting it keeps the current one. A
+ * malformed part normalizes to `null`, so it reads as no membership for
+ * `platform` and keeps the previous token for `mitraSpace`.
+ */
+function mergeAllTokens(
+  current: AllTokens | null,
+  incoming: AllTokens | undefined
+): AllTokens | null {
+  if (!incoming) return current;
+  return {
+    platform: incoming.platform,
+    mitraSpace: incoming.mitraSpace ?? current?.mitraSpace ?? null,
+  };
+}
+
 function isDefinitiveRefreshFailure(error: unknown): boolean {
   return error instanceof MitraApiError
     && error.status >= 400
@@ -113,6 +136,7 @@ export class AuthModule {
   private _currentUser: User | null = null;
   #accessToken: string | null = null;
   #refreshToken: string | null = null;
+  #allTokens: AllTokens | null = null;
   private sessionGeneration = 0;
   private refreshFlight: RefreshFlight | null = null;
   private transientRefreshFailureGeneration: number | null = null;
@@ -167,6 +191,7 @@ export class AuthModule {
       readSessionTokens: () => this.readSessionTokens(),
       onSessionChange: (callback) => this.onSessionChange(callback),
       adoptSession: (session) => this.adoptSession(session),
+      rotateSession: (session) => this.rotateSession(session),
     });
   }
 
@@ -178,6 +203,26 @@ export class AuthModule {
   /** The current JWT access token, or null. */
   get accessToken(): string | null {
     return this.#accessToken;
+  }
+
+  /**
+   * Extra tokens IAM issues alongside the app session, or `null`.
+   *
+   * The getter is `null` whenever IAM did not send the field, which is the case
+   * for every app that is not enabled server-side. `platform` carries a
+   * session-scoped token pair for the tenant that owns
+   * the app and is refreshed together with the app session, so read it from this
+   * getter right before use instead of caching it. `mitraSpace` is long-lived,
+   * comes only from login, and is kept across refreshes. Auth-state listeners are
+   * not notified when a refresh rotates `platform`.
+   *
+   * @example
+   * ```typescript
+   * const spaceToken = mitra.auth.allTokens?.mitraSpace?.token;
+   * ```
+   */
+  get allTokens(): AllTokens | null {
+    return this.#allTokens;
   }
 
   /** Whether a user is currently authenticated (local check, not server-validated). */
@@ -419,7 +464,8 @@ export class AuthModule {
   /**
    * Sets the access token manually (e.g., from SSO/OAuth callback).
    *
-   * Call `me()` afterwards to fetch the associated user data.
+   * Call `me()` afterwards to fetch the associated user data. The extra tokens
+   * are dropped because they belong to the session being replaced.
    *
    * @param token - JWT access token.
    * @param saveToStorage - Whether to persist to localStorage (default: true).
@@ -437,6 +483,7 @@ export class AuthModule {
     }
     this.invalidatePendingRefreshes();
     this.#accessToken = token;
+    this.#allTokens = null;
     if (saveToStorage) {
       this.saveToStorage();
     }
@@ -463,6 +510,8 @@ export class AuthModule {
    * This preserves the access and refresh tokens together so the normal refresh
    * lifecycle continues after an embedded preview hands its session to the app.
    * Call {@link checkAuth} afterward to validate the token and hydrate the user.
+   * {@link allTokens} goes back to `null` because the extra tokens belong to the
+   * session being replaced.
    */
   setSession(session: AuthSession): boolean {
     return this.adoptSession({
@@ -522,13 +571,36 @@ export class AuthModule {
    *
    * Replaces the in-memory tokens and persists them under the same storage key
    * the rest of the module uses. The current user is left untouched because the
-   * legacy SDK does not return one; call `me()` to hydrate it.
+   * legacy SDK does not return one; call `me()` to hydrate it. The extra tokens
+   * are dropped because they belong to the session being replaced.
    *
    * @param session - Access token and, when the issuer returned one, refresh token.
    *
    * @internal
    */
   private adoptSession(session: { token: string; refreshToken?: string | null }): boolean {
+    return this.applySession(session, false);
+  }
+
+  /**
+   * Stores tokens another issuer rotated for the session already in place, such
+   * as a silent refresh performed by the legacy SDK.
+   *
+   * This is not a login, so the extra tokens are kept: the user and the session
+   * behind them did not change.
+   *
+   * @param session - Rotated access token and, when the issuer returned one, refresh token.
+   *
+   * @internal
+   */
+  private rotateSession(session: { token: string; refreshToken?: string | null }): boolean {
+    return this.applySession(session, true);
+  }
+
+  private applySession(
+    session: { token: string; refreshToken?: string | null },
+    keepAllTokens: boolean
+  ): boolean {
     if (
       !this.belongsToConfiguredApp(session.token)
       || (
@@ -540,6 +612,7 @@ export class AuthModule {
       return false;
     }
     this.invalidatePendingRefreshes();
+    if (!keepAllTokens) this.#allTokens = null;
     this.#accessToken = session.token;
     if (session.refreshToken !== undefined) {
       this.#refreshToken = session.refreshToken;
@@ -624,6 +697,7 @@ export class AuthModule {
 
     this.#accessToken = tokenResponse.accessToken;
     this.#refreshToken = tokenResponse.refreshToken;
+    this.#allTokens = mergeAllTokens(this.#allTokens, tokenResponse.allTokens);
     this.transientRefreshFailureGeneration = null;
     this.saveToStorage();
     this.notifySessionListeners();
@@ -642,6 +716,7 @@ export class AuthModule {
     const generation = this.sessionGeneration;
     this.#accessToken = tokenResponse.accessToken;
     this.#refreshToken = tokenResponse.refreshToken;
+    this.#allTokens = tokenResponse.allTokens ?? null;
 
     try {
       const user = await this.getCurrentUser();
@@ -680,6 +755,7 @@ export class AuthModule {
     this._currentUser = null;
     this.#accessToken = null;
     this.#refreshToken = null;
+    this.#allTokens = null;
     this.removeFromStorage();
     if (hadAuthState) {
       this.notifySessionListeners();
@@ -732,6 +808,8 @@ export class AuthModule {
           user: this._currentUser,
           token: this.#accessToken,
           refreshToken: this.#refreshToken,
+          // Omitted for apps without the extra tokens, keeping the stored shape unchanged.
+          ...(this.#allTokens ? { allTokens: this.#allTokens } : {}),
         })
       );
     } catch {
@@ -745,7 +823,7 @@ export class AuthModule {
     try {
       const stored = localStorage.getItem(this.storageKey);
       if (stored) {
-        const { user, token, refreshToken } = JSON.parse(stored);
+        const { user, token, refreshToken, allTokens } = JSON.parse(stored);
         if (
           typeof token !== 'string'
           || (refreshToken !== null && refreshToken !== undefined && typeof refreshToken !== 'string')
@@ -761,6 +839,7 @@ export class AuthModule {
         this._currentUser = user;
         this.#accessToken = token;
         this.#refreshToken = refreshToken ?? null;
+        this.#allTokens = normalizeAllTokens(allTokens) ?? null;
         this.invalidatePendingRefreshes();
       }
     } catch {

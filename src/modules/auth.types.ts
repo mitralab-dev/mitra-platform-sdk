@@ -38,6 +38,27 @@ export interface GoogleSignInOptions {
 /** Options for Microsoft SSO. Same handshake as Google, through the brand auth page. */
 export type MicrosoftSignInOptions = GoogleSignInOptions;
 
+/** Session-scoped platform tokens, usable against the tenant endpoints of IAM. */
+export interface PlatformSessionTokens {
+  accessToken: string;
+  refreshToken: string;
+  tokenType: string;
+}
+
+/** Long-lived mitraSpace token issued at login. It has no refresh flow. */
+export interface MitraSpaceToken {
+  token: string;
+  tokenType: string;
+}
+
+/** Extra tokens returned by IAM only for apps enabled server-side. */
+export interface AllTokens {
+  /** Null when the user has no membership in the tenant that owns the app. */
+  platform: PlatformSessionTokens | null;
+  /** Null when mitraSpace is unreachable or the user has no account there. */
+  mitraSpace: MitraSpaceToken | null;
+}
+
 /**
  * Response from authentication token endpoints.
  * @internal
@@ -46,6 +67,7 @@ export interface AuthTokenResponse {
   accessToken: string;
   refreshToken: string;
   tokenType: string;
+  allTokens?: AllTokens;
 }
 
 /** Callback for auth state changes. Receives the user on login, null on logout. */

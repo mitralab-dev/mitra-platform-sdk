@@ -31,6 +31,19 @@ const currentUserResponse = {
 };
 const apiUser = { ...currentUserResponse, tenantId: 't1' };
 const fakeTokenResponse = { accessToken: 'access-123', refreshToken: 'refresh-456', tokenType: 'Bearer' };
+const fakeAllTokens = {
+  platform: {
+    accessToken: 'session-access',
+    refreshToken: 'session-refresh',
+    tokenType: 'Bearer',
+  },
+  mitraSpace: { token: 'space-token', tokenType: 'Bearer' },
+};
+const rotatedPlatform = {
+  accessToken: 'new-session-access',
+  refreshToken: 'new-session-refresh',
+  tokenType: 'Bearer',
+};
 
 function jwt(payload: Record<string, unknown>): string {
   const encode = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url');
@@ -253,6 +266,113 @@ describe('AuthModule', () => {
       refreshToken: fakeTokenResponse.refreshToken,
     });
     expect(storage.removeItem).not.toHaveBeenCalled();
+  });
+
+  it('should keep the login mitraSpace token when refresh only rotates the platform pair', async () => {
+    storage._store[STORAGE_KEY] = JSON.stringify({
+      user: fakeUser,
+      token: 'old-access',
+      refreshToken: 'old-refresh',
+      allTokens: fakeAllTokens,
+    });
+    mockFetchSequence([{
+      body: {
+        ...fakeTokenResponse,
+        allTokens: { platform: rotatedPlatform, mitraSpace: null },
+      },
+    }]);
+
+    const auth = new AuthModule(APP_ID, IAM_URL);
+    expect(auth.allTokens).toEqual(fakeAllTokens);
+
+    await expect(auth.refreshSession()).resolves.toBe(true);
+
+    const merged = { platform: rotatedPlatform, mitraSpace: fakeAllTokens.mitraSpace };
+    expect(auth.allTokens).toEqual(merged);
+    expect(JSON.parse(storage._store[STORAGE_KEY]).allTokens).toEqual(merged);
+  });
+
+  it('should drop the platform pair when the refresh response reports no membership', async () => {
+    storage._store[STORAGE_KEY] = JSON.stringify({
+      user: fakeUser,
+      token: 'old-access',
+      refreshToken: 'old-refresh',
+      allTokens: fakeAllTokens,
+    });
+    mockFetchSequence([{
+      body: { ...fakeTokenResponse, allTokens: { platform: null, mitraSpace: null } },
+    }]);
+
+    const auth = new AuthModule(APP_ID, IAM_URL);
+
+    await expect(auth.refreshSession()).resolves.toBe(true);
+
+    expect(auth.allTokens).toEqual({ platform: null, mitraSpace: fakeAllTokens.mitraSpace });
+  });
+
+  it('should keep the extra tokens when the refresh response omits them', async () => {
+    storage._store[STORAGE_KEY] = JSON.stringify({
+      user: fakeUser,
+      token: 'old-access',
+      refreshToken: 'old-refresh',
+      allTokens: fakeAllTokens,
+    });
+    mockFetchSequence([{ body: fakeTokenResponse }]);
+
+    const auth = new AuthModule(APP_ID, IAM_URL);
+
+    await expect(auth.refreshSession()).resolves.toBe(true);
+
+    expect(auth.allTokens).toEqual(fakeAllTokens);
+    expect(JSON.parse(storage._store[STORAGE_KEY]).allTokens).toEqual(fakeAllTokens);
+  });
+
+  it('should drop the extra tokens of the replaced session when adopting another one', () => {
+    storage._store[STORAGE_KEY] = JSON.stringify({
+      user: fakeUser,
+      token: 'old-access',
+      refreshToken: 'old-refresh',
+      allTokens: fakeAllTokens,
+    });
+
+    const auth = new AuthModule(APP_ID, IAM_URL);
+    expect(auth.setSession({ accessToken: 'adopted-access', refreshToken: 'adopted-refresh' })).toBe(true);
+
+    expect(auth.allTokens).toBeNull();
+    expect(JSON.parse(storage._store[STORAGE_KEY]).allTokens).toBeUndefined();
+  });
+
+  it('should clear the extra tokens on sign out', () => {
+    storage._store[STORAGE_KEY] = JSON.stringify({
+      user: fakeUser,
+      token: 'old-access',
+      refreshToken: 'old-refresh',
+      allTokens: fakeAllTokens,
+    });
+
+    const auth = new AuthModule(APP_ID, IAM_URL);
+    expect(auth.allTokens).toEqual(fakeAllTokens);
+
+    auth.signOut();
+
+    expect(auth.allTokens).toBeNull();
+  });
+
+  it.each([
+    ['a session stored before the field existed', undefined],
+    ['malformed stored extra tokens', 'not-an-object'],
+  ])('should read no extra tokens from %s', (_case, allTokens) => {
+    storage._store[STORAGE_KEY] = JSON.stringify({
+      user: fakeUser,
+      token: 'old-access',
+      refreshToken: 'old-refresh',
+      allTokens,
+    });
+
+    const auth = new AuthModule(APP_ID, IAM_URL);
+
+    expect(auth.allTokens).toBeNull();
+    expect(auth.accessToken).toBe('old-access');
   });
 
   it('should refresh proactively when the access token is inside the default skew', async () => {
@@ -817,11 +937,19 @@ describe('AuthModule', () => {
   });
 
   it('should set token manually via setToken()', () => {
+    storage._store[STORAGE_KEY] = JSON.stringify({
+      user: fakeUser,
+      token: 'old-access',
+      refreshToken: 'old-refresh',
+      allTokens: fakeAllTokens,
+    });
     const auth = new AuthModule(APP_ID, IAM_URL);
 
     auth.setToken('manual-token');
 
     expect(auth.accessToken).toBe('manual-token');
+    expect(auth.allTokens).toBeNull();
+    expect(JSON.parse(storage._store[STORAGE_KEY]).allTokens).toBeUndefined();
     expect(storage.setItem).toHaveBeenCalled();
   });
 

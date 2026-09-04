@@ -3,7 +3,13 @@ import { expectObject } from '@mitralab.io/sdk-core';
 import { coreErrors } from '../core-errors';
 import type { HttpClient } from '../utils/http-client';
 import { resolveAuthPageUrl } from './auth-page-url';
-import type { AuthTokenResponse, GoogleSignInOptions } from './auth.types';
+import type {
+  AllTokens,
+  AuthTokenResponse,
+  GoogleSignInOptions,
+  MitraSpaceToken,
+  PlatformSessionTokens,
+} from './auth.types';
 
 const RESULT_TYPE = 'mitra-oauth-result';
 
@@ -34,6 +40,44 @@ interface RedirectContext {
 
 type MitraWindow = Window & { __mitraEnv?: { authPageUrl?: unknown } };
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim() !== '';
+}
+
+function readPlatformTokens(value: unknown): PlatformSessionTokens | null {
+  if (!isPlainObject(value)) return null;
+  const { accessToken, refreshToken, tokenType } = value;
+  if (!isNonEmptyString(accessToken) || !isNonEmptyString(refreshToken) || !isNonEmptyString(tokenType)) {
+    return null;
+  }
+  return { accessToken, refreshToken, tokenType };
+}
+
+function readMitraSpaceToken(value: unknown): MitraSpaceToken | null {
+  if (!isPlainObject(value)) return null;
+  const { token, tokenType } = value;
+  if (!isNonEmptyString(token) || !isNonEmptyString(tokenType)) return null;
+  return { token, tokenType };
+}
+
+/**
+ * Normalizes the optional `allTokens` field. Only apps enabled server-side receive
+ * it, so anything absent or malformed is dropped instead of failing the login.
+ *
+ * @internal
+ */
+export function normalizeAllTokens(value: unknown): AllTokens | undefined {
+  if (!isPlainObject(value)) return undefined;
+  return {
+    platform: readPlatformTokens(value.platform),
+    mitraSpace: readMitraSpaceToken(value.mitraSpace),
+  };
+}
+
 export function expectAuthTokenResponse(value: unknown): AuthTokenResponse {
   const response = expectObject<Record<string, unknown>>(
     value,
@@ -42,17 +86,20 @@ export function expectAuthTokenResponse(value: unknown): AuthTokenResponse {
   );
 
   for (const field of ['accessToken', 'refreshToken', 'tokenType'] as const) {
-    if (typeof response[field] !== 'string' || !response[field].trim()) {
+    if (!isNonEmptyString(response[field])) {
       throw coreErrors.invalidResponse(
         `Authentication token response has an invalid ${field} field`
       );
     }
   }
 
+  const allTokens = normalizeAllTokens(response.allTokens);
+
   return {
     accessToken: response.accessToken as string,
     refreshToken: response.refreshToken as string,
     tokenType: response.tokenType as string,
+    ...(allTokens ? { allTokens } : {}),
   };
 }
 

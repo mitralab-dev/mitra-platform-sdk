@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## Unreleased
+
+- Expose `auth.allTokens` with the platform session pair and the mitraSpace token returned by IAM for apps enabled server-side.
+- Persist the extra tokens with the session, rotate `platform` on refresh, and keep the `mitraSpace` token issued at login.
+
 ## 1.1.0-beta.0
 
 - Complete native Function sync, async, polling, cancellation, and anonymous public execution.

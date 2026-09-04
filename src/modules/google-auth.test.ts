@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mockFetchSequence, mockLocalStorage, mockSessionStorage } from '../test-utils';
 import { AuthModule } from './auth';
+import { expectAuthTokenResponse } from './google-auth';
 
 const APP_ID = '11111111-1111-1111-1111-111111111111';
 const API_URL = 'https://api.mitra.io';
@@ -34,6 +35,14 @@ const CURRENT_USER_RESPONSE = {
   language: 'pt-BR',
 };
 const USER = { ...CURRENT_USER_RESPONSE, tenantId: 't1' };
+const ALL_TOKENS = {
+  platform: {
+    accessToken: 'session-access',
+    refreshToken: 'session-refresh',
+    tokenType: 'Bearer',
+  },
+  mitraSpace: { token: 'space-token', tokenType: 'Bearer' },
+};
 
 function jwt(payload: Record<string, unknown>): string {
   const encode = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url');
@@ -181,6 +190,7 @@ describe('Google SSO', () => {
     });
     expect(auth.accessToken).toBe('access-123');
     expect(auth.currentUser).toEqual(USER);
+    expect(auth.allTokens).toBeNull();
     expect(listener).toHaveBeenLastCalledWith(USER);
     expect(JSON.parse(storage._store[`mitra_auth_${APP_ID}`])).toEqual({
       user: USER,
@@ -188,6 +198,24 @@ describe('Google SSO', () => {
       refreshToken: 'refresh-456',
     });
     expect(fetchMock.mock.calls[0][1].headers).not.toHaveProperty('Authorization');
+  });
+
+  it('keeps and persists the extra tokens returned for an enabled app', async () => {
+    const storage = mockLocalStorage();
+    const browser = mockBrowser();
+    mockFetchSequence([
+      { body: { ...TOKEN_RESPONSE, allTokens: ALL_TOKENS } },
+      { body: CURRENT_USER_RESPONSE },
+    ]);
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    const signIn = auth.signInWithGoogle({ mode: 'popup' });
+    const state = browser.getStartUrl().searchParams.get('state')!;
+    browser.dispatchMessage(popupResult(state, { code: 'google-code' }));
+
+    await expect(signIn).resolves.toEqual(USER);
+    expect(auth.allTokens).toEqual(ALL_TOKENS);
+    expect(JSON.parse(storage._store[`mitra_auth_${APP_ID}`]).allTokens).toEqual(ALL_TOKENS);
   });
 
   it('accepts the structurally valid token returned by the current main auth page', async () => {
@@ -465,5 +493,50 @@ describe('Google SSO', () => {
 
     await expect(auth.signInWithGoogle()).rejects.toThrow('only available in a browser');
     await expect(auth.completeGoogleSignInRedirect()).rejects.toThrow('only available in a browser');
+  });
+});
+
+describe('expectAuthTokenResponse', () => {
+  it('keeps the extra tokens of an enabled app', () => {
+    expect(expectAuthTokenResponse({ ...TOKEN_RESPONSE, allTokens: ALL_TOKENS })).toEqual({
+      ...TOKEN_RESPONSE,
+      allTokens: ALL_TOKENS,
+    });
+  });
+
+  it('drops malformed parts of the extra tokens instead of failing the login', () => {
+    const response = expectAuthTokenResponse({
+      ...TOKEN_RESPONSE,
+      allTokens: {
+        platform: { accessToken: 'session-access', tokenType: 'Bearer' },
+        mitraSpace: { token: 42, tokenType: 'Bearer' },
+      },
+    });
+
+    expect(response.allTokens).toEqual({ platform: null, mitraSpace: null });
+  });
+
+  it('rejects blank strings inside the extra tokens', () => {
+    const response = expectAuthTokenResponse({
+      ...TOKEN_RESPONSE,
+      allTokens: {
+        platform: { ...ALL_TOKENS.platform, tokenType: '' },
+        mitraSpace: { token: '   ', tokenType: 'Bearer' },
+      },
+    });
+
+    expect(response.allTokens).toEqual({ platform: null, mitraSpace: null });
+  });
+
+  it.each([
+    ['absent', {}],
+    ['null', { allTokens: null }],
+    ['not an object', { allTokens: 'nope' }],
+    ['an array', { allTokens: [] }],
+  ])('omits the extra tokens when the field is %s', (_case, extra) => {
+    const response = expectAuthTokenResponse({ ...TOKEN_RESPONSE, ...extra });
+
+    expect(response).toEqual(TOKEN_RESPONSE);
+    expect(response.allTokens).toBeUndefined();
   });
 });
