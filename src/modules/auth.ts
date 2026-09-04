@@ -92,23 +92,29 @@ function isTokenExpiring(token: string, minValidityMs: number): boolean {
   return exp * 1_000 - Date.now() < minValidityMs;
 }
 
+/** A value carrying neither token says nothing, so it reads as no field at all. */
+function discardEmptyAllTokens(tokens: AllTokens | null | undefined): AllTokens | null {
+  if (!tokens || (!tokens.platform && !tokens.mitraSpace)) return null;
+  return tokens;
+}
+
 /**
  * `platform` always comes from the response, never from the previous value: IAM
  * is authoritative on the membership behind it, and it stops sending the field
  * once the app leaves the flag, so a kept pair would expire silently. A malformed
  * `platform` normalizes to `null` and reads the same way, as no membership.
  * `mitraSpace` is long-lived and only issued at login, so a refresh that carries
- * none, absent or malformed, keeps the current token.
+ * none, absent or malformed, keeps the current token. Once nothing is left, the
+ * merge collapses to `null` instead of an all-null value.
  */
 function mergeAllTokens(
   current: AllTokens | null,
   incoming: AllTokens | undefined
 ): AllTokens | null {
-  if (!current && !incoming) return null;
-  return {
+  return discardEmptyAllTokens({
     platform: incoming?.platform ?? null,
     mitraSpace: incoming?.mitraSpace ?? current?.mitraSpace ?? null,
-  };
+  });
 }
 
 function isDefinitiveRefreshFailure(error: unknown): boolean {
@@ -210,7 +216,8 @@ export class AuthModule {
    * Extra tokens IAM issues alongside the app session, or `null`.
    *
    * The getter is `null` whenever IAM did not send the field, which is the case
-   * for every app that is not enabled server-side. `platform` carries a
+   * for every app that is not enabled server-side, and whenever what it sent
+   * carries neither token. `platform` carries a
    * session-scoped token pair for the tenant that owns
    * the app and is refreshed together with the app session, so read it from this
    * getter right before use instead of caching it. `mitraSpace` is long-lived,
@@ -724,7 +731,7 @@ export class AuthModule {
     const generation = this.sessionGeneration;
     this.#accessToken = tokenResponse.accessToken;
     this.#refreshToken = tokenResponse.refreshToken;
-    this.#allTokens = tokenResponse.allTokens ?? null;
+    this.#allTokens = discardEmptyAllTokens(tokenResponse.allTokens);
 
     try {
       const user = await this.getCurrentUser();
@@ -847,7 +854,7 @@ export class AuthModule {
         this._currentUser = user;
         this.#accessToken = token;
         this.#refreshToken = refreshToken ?? null;
-        this.#allTokens = normalizeAllTokens(allTokens) ?? null;
+        this.#allTokens = discardEmptyAllTokens(normalizeAllTokens(allTokens));
         this.invalidatePendingRefreshes();
       }
     } catch {

@@ -330,6 +330,23 @@ describe('AuthModule', () => {
     expect(JSON.parse(storage._store[STORAGE_KEY]).allTokens).toEqual(kept);
   });
 
+  it('should read no extra tokens once a refresh leaves neither of them', async () => {
+    storage._store[STORAGE_KEY] = JSON.stringify({
+      user: fakeUser,
+      token: 'old-access',
+      refreshToken: 'old-refresh',
+      allTokens: { platform: fakeAllTokens.platform, mitraSpace: null },
+    });
+    mockFetchSequence([{ body: fakeTokenResponse }]);
+
+    const auth = new AuthModule(APP_ID, IAM_URL);
+
+    await expect(auth.refreshSession()).resolves.toBe(true);
+
+    expect(auth.allTokens).toBeNull();
+    expect(JSON.parse(storage._store[STORAGE_KEY])).not.toHaveProperty('allTokens');
+  });
+
   it('should drop the extra tokens of the replaced session when adopting another one', () => {
     storage._store[STORAGE_KEY] = JSON.stringify({
       user: fakeUser,
