@@ -87,7 +87,20 @@ await mitra.auth.checkAuth()
 
 Proactive and reactive callers share one in-flight refresh. Successful refresh rotates and persists both tokens and updates the legacy session bridge without calling `auth.me()` or notifying public auth-state listeners. A refresh response that arrives after sign-out or after another login/session replacement is discarded and cannot restore or overwrite that newer state. Network failures, `408`, `429`, and `5xx` responses preserve the current session; the original HTTP request proceeds with the current token so a later `401` can use the reactive fallback. `auth.me()` also preserves that retained session when the fallback refresh is transient. Other IAM `4xx` responses are definitive and clear the session.
 
-JWT decoding is not user authentication. It schedules refresh and prevents cross-app session adoption. Every decodable access and refresh token must contain `app_id` exactly equal to the client's configured `appId`; opaque tokens are kept for rollout compatibility and remain validated by the server.
+Apps enabled server-side receive an extra `allTokens` field on login. The getter is `null` whenever IAM did not send the field, which is the case for every app that is not enabled, and whenever what it sent carries neither token. A malformed field never fails the login:
+
+```typescript
+const platformAccessToken = mitra.auth.allTokens?.platform?.accessToken
+const mitraSpaceToken = mitra.auth.allTokens?.mitraSpace?.token
+```
+
+`platform` carries a session-scoped IAM token pair for the tenant that owns the app, or `null` when the user has no membership there. `mitraSpace` carries a long-lived mitraSpace token, or `null` when mitraSpace is unreachable or the user has no account there. Auth-state listeners are not notified when only these tokens change, so read them from `mitra.auth.allTokens` right before use instead of caching them. They survive token refreshes of the same session, including the silent refresh of the legacy SDK, and go back to `null` after `setSession`, `setToken`, or a legacy login, because those replace the session they belong to.
+
+Refresh takes `platform` from the response and never from the previous value: a response without `allTokens`, which is what IAM returns once the app leaves the flag, leaves `platform` as `null` instead of keeping a pair that would expire silently. A malformed `platform` is read the same way, as no membership. `mitraSpace` is different: it is only issued at login, so a refresh that carries no `mitraSpace`, malformed or absent, keeps the token issued at login. When nothing is left after a refresh, the getter goes back to `null` and the stored session drops the field.
+
+These tokens are wider than the app session: `platform` is a tenant-scoped session pair that reaches tenant endpoints the app token cannot, and the mitraSpace token is very long-lived and has no refresh flow. Like the rest of the session, they are persisted in `localStorage` under `mitra_auth_{appId}`, so they survive reloads and any script running on the application origin can read them. The only gate is the server-side per-app flag: IAM sends the field to enabled apps alone.
+
+JWT decoding is not user authentication. It schedules refresh and prevents cross-app session adoption. Every decodable access and refresh token must contain `app_id` exactly equal to the client's configured `appId`; opaque tokens are kept for rollout compatibility and remain validated by the server. The tokens inside `allTokens` are the exception: they are issued for another scope, are never checked against `appId`, and stay validated by the server.
 
 Custom WebSocket or Server-Sent Events boundaries can refresh explicitly before connecting:
 

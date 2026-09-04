@@ -67,7 +67,7 @@ export class LegacySessionBridge {
         authUrl: this.legacyUrl,
         authPageUrl,
         projectId: this.appId,
-        onTokenRefresh: (session) => this.adopt(session),
+        onTokenRefresh: (session) => this.rotate(session),
         ...(session.token ? { token: session.token } : {}),
         ...(session.refreshToken ? { refreshToken: session.refreshToken } : {}),
       });
@@ -85,16 +85,33 @@ export class LegacySessionBridge {
   }
 
   /**
-   * Stores a session produced by the legacy SDK. The AuthModule subscription
+   * Stores a session produced by a legacy login. The AuthModule subscription
    * then writes that session back to the process-wide legacy config and
-   * reinstates the refresh hook removed by legacy login.
+   * reinstates the refresh hook removed by legacy login. It is a new session, so
+   * the extra login tokens of the previous one are dropped.
    */
   adopt(session: LoginResponse): void {
-    const adopted = this.auth.adoptSession({
+    this.applyLegacySession(session, false);
+  }
+
+  /**
+   * Stores tokens the legacy SDK silently refreshed for the session already in
+   * place. Unlike a legacy login, this keeps the extra login tokens, because the
+   * session behind them did not change.
+   */
+  private rotate(session: LoginResponse): void {
+    this.applyLegacySession(session, true);
+  }
+
+  private applyLegacySession(session: LoginResponse, isRotation: boolean): void {
+    const tokens = {
       token: stripBearer(session.token),
       refreshToken: session.refreshToken ?? null,
-    });
-    if (!adopted) this.syncToLegacy(this.auth.readSessionTokens());
+    };
+    const applied = isRotation
+      ? this.auth.rotateSession(tokens)
+      : this.auth.adoptSession(tokens);
+    if (!applied) this.syncToLegacy(this.auth.readSessionTokens());
   }
 }
 

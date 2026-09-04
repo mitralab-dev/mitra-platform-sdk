@@ -405,6 +405,9 @@ export type {
   User,
   SignInCredentials,
   SignUpData,
+  AllTokens,
+  MitraSpaceToken,
+  PlatformSessionTokens,
   GoogleSignInOptions,
   MicrosoftSignInOptions,
 } from './modules/auth';

@@ -36,6 +36,7 @@ const auth: AuthSessionPort = {
   readSessionTokens: vi.fn().mockReturnValue({ token: 'access', refreshToken: 'refresh' }),
   onSessionChange: vi.fn().mockReturnValue(() => undefined),
   adoptSession: vi.fn(),
+  rotateSession: vi.fn(),
 };
 
 describe('createBrowserAgentTasksModule', () => {
