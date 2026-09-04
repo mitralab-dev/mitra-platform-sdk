@@ -218,6 +218,31 @@ describe('Google SSO', () => {
     expect(JSON.parse(storage._store[`mitra_auth_${APP_ID}`]).allTokens).toEqual(ALL_TOKENS);
   });
 
+  it('drops the extra tokens of the previous session when the next login has none', async () => {
+    const storage = mockLocalStorage();
+    storage._store[`mitra_auth_${APP_ID}`] = JSON.stringify({
+      user: USER,
+      token: 'old-access',
+      refreshToken: 'old-refresh',
+      allTokens: ALL_TOKENS,
+    });
+    const browser = mockBrowser();
+    mockFetchSequence([
+      { body: TOKEN_RESPONSE },
+      { body: CURRENT_USER_RESPONSE },
+    ]);
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+    expect(auth.allTokens).toEqual(ALL_TOKENS);
+
+    const signIn = auth.signInWithGoogle({ mode: 'popup' });
+    const state = browser.getStartUrl().searchParams.get('state')!;
+    browser.dispatchMessage(popupResult(state, { code: 'google-code' }));
+
+    await expect(signIn).resolves.toEqual(USER);
+    expect(auth.allTokens).toBeNull();
+    expect(JSON.parse(storage._store[`mitra_auth_${APP_ID}`])).not.toHaveProperty('allTokens');
+  });
+
   it('accepts the structurally valid token returned by the current main auth page', async () => {
     const browser = mockBrowser();
     const fetchMock = mockFetchSequence([{ body: CURRENT_USER_RESPONSE }]);

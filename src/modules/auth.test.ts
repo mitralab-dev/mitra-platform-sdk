@@ -183,11 +183,13 @@ describe('AuthModule', () => {
     expect(result).toBe(true);
     expect(auth.accessToken).toBe('new-access');
     expect(auth.currentUser).toEqual(fakeUser);
+    expect(auth.allTokens).toBeNull();
     expect(JSON.parse(storage._store[STORAGE_KEY])).toMatchObject({
       user: fakeUser,
       token: 'new-access',
       refreshToken: 'new-refresh',
     });
+    expect(JSON.parse(storage._store[STORAGE_KEY]).allTokens).toBeUndefined();
 
     // Verify refresh call
     const [url, options] = fetchMock.mock.calls[0];
@@ -310,7 +312,7 @@ describe('AuthModule', () => {
     expect(auth.allTokens).toEqual({ platform: null, mitraSpace: fakeAllTokens.mitraSpace });
   });
 
-  it('should keep the extra tokens when the refresh response omits them', async () => {
+  it('should drop the platform pair and keep mitraSpace when the refresh response omits the extra tokens', async () => {
     storage._store[STORAGE_KEY] = JSON.stringify({
       user: fakeUser,
       token: 'old-access',
@@ -323,8 +325,9 @@ describe('AuthModule', () => {
 
     await expect(auth.refreshSession()).resolves.toBe(true);
 
-    expect(auth.allTokens).toEqual(fakeAllTokens);
-    expect(JSON.parse(storage._store[STORAGE_KEY]).allTokens).toEqual(fakeAllTokens);
+    const kept = { platform: null, mitraSpace: fakeAllTokens.mitraSpace };
+    expect(auth.allTokens).toEqual(kept);
+    expect(JSON.parse(storage._store[STORAGE_KEY]).allTokens).toEqual(kept);
   });
 
   it('should drop the extra tokens of the replaced session when adopting another one', () => {

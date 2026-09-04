@@ -93,20 +93,21 @@ function isTokenExpiring(token: string, minValidityMs: number): boolean {
 }
 
 /**
- * `platform` is taken from the response as is, including `null`, because IAM is
- * authoritative on the membership that backs it. `mitraSpace` is long-lived and
- * only issued at login, so a refresh omitting it keeps the current one. A
- * malformed part normalizes to `null`, so it reads as no membership for
- * `platform` and keeps the previous token for `mitraSpace`.
+ * `platform` always comes from the response, never from the previous value: IAM
+ * is authoritative on the membership behind it, and it stops sending the field
+ * once the app leaves the flag, so a kept pair would expire silently. A malformed
+ * `platform` normalizes to `null` and reads the same way, as no membership.
+ * `mitraSpace` is long-lived and only issued at login, so a refresh that carries
+ * none, absent or malformed, keeps the current token.
  */
 function mergeAllTokens(
   current: AllTokens | null,
   incoming: AllTokens | undefined
 ): AllTokens | null {
-  if (!incoming) return current;
+  if (!current && !incoming) return null;
   return {
-    platform: incoming.platform,
-    mitraSpace: incoming.mitraSpace ?? current?.mitraSpace ?? null,
+    platform: incoming?.platform ?? null,
+    mitraSpace: incoming?.mitraSpace ?? current?.mitraSpace ?? null,
   };
 }
 
@@ -215,6 +216,13 @@ export class AuthModule {
    * getter right before use instead of caching it. `mitraSpace` is long-lived,
    * comes only from login, and is kept across refreshes. Auth-state listeners are
    * not notified when a refresh rotates `platform`.
+   *
+   * These tokens are wider than the app session: `platform` reaches tenant
+   * endpoints the app token cannot, and the mitraSpace token is very long-lived
+   * and has no refresh flow. Like the rest of the session they are persisted in
+   * `localStorage` under `mitra_auth_{appId}`, so they survive reloads and any
+   * script on the application origin can read them. The only gate is the
+   * server-side per-app flag.
    *
    * @example
    * ```typescript
