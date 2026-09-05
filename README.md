@@ -335,7 +335,7 @@ npm install
 npm run check
 ```
 
-Platform `1.1.0-beta.1` targets exactly `@mitralab.io/sdk-core@0.2.0-beta.1`, published on the `beta` dist-tag. The manifest and lock keep the registry spec and its verified integrity, so `npm ci` resolves Core from a clean checkout. To validate against a Core prerelease that is not published yet, point `MITRA_SDK_CORE_TARBALL` at its tarball for the package smoke test. Do not commit a `file:` dependency.
+Platform `1.1.0-beta.2` targets exactly `@mitralab.io/sdk-core@0.2.0-beta.1`, published on the `beta` dist-tag. The manifest and lock keep the registry spec and its verified integrity, so `npm ci` resolves Core from a clean checkout. To validate against a Core prerelease that is not published yet, point `MITRA_SDK_CORE_TARBALL` at its tarball for the package smoke test. Do not commit a `file:` dependency.
 
 The build produces ESM, CommonJS, `.d.ts`, and `.d.cts` artifacts. Package checks inspect the public tarball with Are The Types Wrong, install it into an isolated consumer, and validate ESM, CommonJS, and TypeScript resolution.
 

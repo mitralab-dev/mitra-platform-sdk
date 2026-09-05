@@ -2,7 +2,9 @@
 
 All notable changes to this project are documented in this file.
 
-## 1.1.0-beta.1
+## 1.1.0-beta.2
+
+`1.1.0-beta.1` was published from `main` before this change landed, so it still depends on Core `0.2.0-beta.0`; use `1.1.0-beta.2`.
 
 - Depend on `@mitralab.io/sdk-core@0.2.0-beta.1`, which reads back integration configs with a
   null `templateId` (configs born from an inline definition). The browser adapter still only
