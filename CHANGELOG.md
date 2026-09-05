@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file.
 
+## 1.1.0-beta.1
+
+- Depend on `@mitralab.io/sdk-core@0.2.0-beta.1`, which reads back integration configs with a
+  null `templateId` (configs born from an inline definition). The browser adapter still only
+  lists and executes integration configs; authoring stays in the studio SDK and the MCP.
+
 ## 1.1.0-beta.0
 
 - Complete native Function sync, async, polling, cancellation, and anonymous public execution.

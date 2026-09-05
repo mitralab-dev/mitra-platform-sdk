@@ -250,7 +250,7 @@ List the current app's saved configs without exposing the Core admin module:
 const configs = await mitra.integration.list({ page: 0, size: 20, sort: "alias,asc" })
 ```
 
-The Integration producer derives the app from the authenticated token, so this list is app-scoped.
+The Integration producer derives the app from the authenticated token, so this list is app-scoped. A listed config carries `templateId: null` when it was created from an inline definition instead of a catalog template.
 
 Execute a predefined resource:
 
@@ -335,7 +335,7 @@ npm install
 npm run check
 ```
 
-Platform `1.1.0-beta.0` targets exactly `@mitralab.io/sdk-core@0.2.0-beta.0`. Until that Core prerelease is published, local validation uses its matching tarball through `MITRA_SDK_CORE_TARBALL`. The manifest and lock keep the registry spec and the tarball's verified integrity; root `npm ci` becomes available after Core is published. Do not commit a `file:` dependency.
+Platform `1.1.0-beta.1` targets exactly `@mitralab.io/sdk-core@0.2.0-beta.1`, published on the `beta` dist-tag. The manifest and lock keep the registry spec and its verified integrity, so `npm ci` resolves Core from a clean checkout. To validate against a Core prerelease that is not published yet, point `MITRA_SDK_CORE_TARBALL` at its tarball for the package smoke test. Do not commit a `file:` dependency.
 
 The build produces ESM, CommonJS, `.d.ts`, and `.d.cts` artifacts. Package checks inspect the public tarball with Are The Types Wrong, install it into an isolated consumer, and validate ESM, CommonJS, and TypeScript resolution.
 
