@@ -31,6 +31,12 @@ export interface MitraClientConfig {
   appId: string;
 
   /**
+   * Api key for server-side authentication, used by `auth.signInWithApiKey()`.
+   * Never set this in code that reaches a browser: it would ship in the bundle.
+   */
+  apiKey?: string;
+
+  /**
    * Base URL for the Mitra API (Kong Gateway).
    * Injected automatically via `VITE_MITRA_API_URL` environment variable
    * during the Code Studio build process.
@@ -278,7 +284,7 @@ export interface MitraClient {
  * ```
  */
 export function createClient(config: MitraClientConfig): MitraClient {
-  const { appId, apiUrl, authPageUrl, onError } = config;
+  const { appId, apiUrl, apiKey, authPageUrl, onError } = config;
   const gatewayUrl = stripTrailingSlashes(apiUrl);
 
   // Determine service URLs from base API URL
@@ -290,7 +296,7 @@ export function createClient(config: MitraClientConfig): MitraClient {
   const copilotUrl = `${gatewayUrl}/copilot`;
 
   // Create auth module first (manages tokens)
-  const authModule = new AuthModule(appId, iamUrl, { apiUrl: gatewayUrl, authPageUrl });
+  const authModule = new AuthModule(appId, iamUrl, { apiUrl: gatewayUrl, authPageUrl, apiKey });
   const authSession = getAuthSessionPort(authModule);
 
   const onUnauthorized = (requestToken: string | null) =>
