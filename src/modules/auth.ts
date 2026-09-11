@@ -2,6 +2,7 @@ import { stripTrailingSlashes } from '../utils/url';
 import { createAuthModule, type AuthModule as CoreAuthModule } from '@mitralab.io/sdk-core';
 import { coreErrors } from '../core-errors';
 import { HttpClient, MitraApiError } from '../utils/http-client';
+import { assertServerRuntime, resolveApiKeySession } from './api-key-auth';
 import { expectAuthTokenResponse, GoogleAuthFlow } from './google-auth';
 import type {
   User,
@@ -27,6 +28,8 @@ export type {
 interface AuthModuleOptions {
   apiUrl?: string;
   authPageUrl?: string;
+  /** Default api key for `signInWithApiKey`, taken from the client configuration. */
+  apiKey?: string;
 }
 
 interface AuthSessionTokens {
@@ -110,6 +113,7 @@ function isDefinitiveRefreshFailure(error: unknown): boolean {
  */
 export class AuthModule {
   private readonly appId: string;
+  private readonly defaultApiKey: string | undefined;
   private _currentUser: User | null = null;
   #accessToken: string | null = null;
   #refreshToken: string | null = null;
@@ -134,6 +138,7 @@ export class AuthModule {
           ? trimmedIamBaseUrl.slice(0, -'/iam'.length)
           : trimmedIamBaseUrl)
     );
+    this.defaultApiKey = options.apiKey;
     this.storageKey = `mitra_auth_${appId}`;
     this.publicClient = new HttpClient({ baseUrl: iamBaseUrl, getToken: () => null });
     this.authedClient = new HttpClient({
@@ -224,6 +229,56 @@ export class AuthModule {
    */
   async signInWithGoogle(options: GoogleSignInOptions = {}): Promise<User> {
     return this.establishSession(await this.googleAuth.signIn(options));
+  }
+
+  /**
+   * Signs in as a process, with an api key instead of a person's SSO session.
+   *
+   * Use this where nobody can complete a redirect: a cron, a background collector, another
+   * service. Create the key in Settings -> API keys. A Business key reaches the published
+   * product, a Developer key adds authoring, and an Administrator key belongs to a workspace -
+   * from that one the platform issues this app's token, deciding then and there what the key's
+   * owner actually reaches here.
+   *
+   * The session is not written to storage and carries no refresh token: the key does not
+   * expire and is revoked by deleting it, so renewing means signing in again.
+   *
+   * Server runtimes only. In a browser the key would ship inside the bundle, so this method
+   * refuses to run there.
+   *
+   * @param apiKey - The key to use. Defaults to `apiKey` from the client configuration.
+   * @returns The user the key belongs to.
+   *
+   * @example
+   * ```typescript
+   * const mitra = createClient({ appId, apiUrl, apiKey: process.env.MITRA_API_KEY });
+   * await mitra.auth.signInWithApiKey();
+   * ```
+   */
+  async signInWithApiKey(apiKey: string | undefined = this.defaultApiKey): Promise<User> {
+    assertServerRuntime();
+
+    if (!apiKey?.trim()) {
+      throw new MitraApiError(
+        'No api key was given. Pass one to signInWithApiKey, or set apiKey when creating the client.',
+        400
+      );
+    }
+
+    const token = await resolveApiKeySession(this.publicClient, this.appId, apiKey);
+    if (!this.belongsToConfiguredApp(token)) {
+      throw new MitraApiError('This api key does not reach the app this client is configured for.', 403);
+    }
+
+    this.invalidatePendingRefreshes();
+    this.#accessToken = token;
+    this.#refreshToken = null;
+
+    const user = await this.getCurrentUser();
+    this._currentUser = user;
+    this.notifySessionListeners();
+    this.notifyListeners();
+    return user;
   }
 
   /**

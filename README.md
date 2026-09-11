@@ -78,6 +78,30 @@ Authentication state is stored under `mitra_auth_{appId}`. Before each authentic
 
 The generated-application authentication flow is Google SSO. The old native `signIn` and `signUp` names fail locally with `UNSUPPORTED_AUTH_METHOD` because IAM has no email/password endpoints. Deprecated login bindings remain available only through the legacy reexports.
 
+### Signing in as a process
+
+Google and Microsoft SSO both need a person to complete a redirect. A process that runs on its own -
+a cron, a background collector, another service - signs in with an api key created in
+**Settings -> API keys**:
+
+```typescript
+const mitra = createClient({ appId, apiUrl, apiKey: process.env.MITRA_API_KEY })
+
+await mitra.auth.signInWithApiKey()
+```
+
+Which key to create depends on what the process does. A **Business** key reaches the published
+product: read and write records, run queries, execute functions and integrations. A **Developer**
+key adds authoring. An **Administrator** key belongs to a workspace rather than a product; the SDK
+issues this app's token from it, and the platform decides on that call what the key's owner
+actually reaches here, so the key never widens anyone's access.
+
+This session is not written to storage and carries no refresh token. The key does not expire and is
+revoked by deleting it, so renewing means signing in again rather than holding a second secret.
+
+**Server runtimes only.** In a browser the key would be served to every visitor inside the bundle,
+so the method refuses to run when a `window` exists.
+
 An embedded preview can adopt the app-scoped session it receives from the platform without exchanging it:
 
 ```typescript
