@@ -34,7 +34,7 @@ async function withoutLeakingKey<T>(apiKey: string, call: () => Promise<T>): Pro
  * for a person in front of a screen, this one for a process holding a long-lived credential.
  */
 export function assertServerRuntime(): void {
-  if (typeof globalThis.window !== 'undefined') {
+  if (globalThis.window !== undefined) {
     throw new MitraApiError(
       'Api key authentication runs only on a server. In a browser the key would be served to every visitor; sign in with Google or Microsoft instead.',
       400
