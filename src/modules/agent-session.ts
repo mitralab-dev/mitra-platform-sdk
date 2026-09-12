@@ -10,6 +10,13 @@ import type { AuthSessionPort } from './auth';
 
 const CONNECT_TIMEOUT_MS = 15_000;
 /**
+ * A caixa que serve o chat pode estar subindo quando o canal e pedido. O copilot responde 202
+ * enquanto ela nao esta pronta, e este e o orcamento total da espera antes de desistir dela e
+ * seguir pelo socket do copilot, que atende a mesma conversa.
+ */
+const CHANNEL_BOOT_TIMEOUT_MS = 90_000;
+const CHANNEL_BOOT_RETRY_MS = 2_000;
+/**
  * Silence that counts as a dead channel. The copilot pings every 25 s on both transports, so
  * two missed pings is a network, proxy or suspended tab that killed the channel without closing
  * it. Without this a half-open channel never produces `onclose` nor ends the SSE read, so
@@ -67,6 +74,49 @@ function expectEvent(value: unknown): AgentTaskEvent | null {
   };
 }
 
+/** Onde a conversa e servida quando o copilot oferece a caixa, e onde o log dela estava. */
+interface DirectChannel {
+  readonly wsUrl: string;
+  readonly lastSequence: number;
+}
+
+/**
+ * O endereco tem de ser o mesmo gateway que esta SDK ja usa. A resposta do canal e confiavel,
+ * mas ela carrega uma credencial na query: seguir um host arbitrario entregaria essa credencial
+ * a quem devolvesse o corpo.
+ */
+function isSameGateway(candidate: string, apiUrl: string): boolean {
+  try {
+    const target = new URL(candidate);
+    if (target.protocol !== 'ws:' && target.protocol !== 'wss:') return false;
+    return target.host === new URL(apiUrl).host;
+  } catch {
+    return false;
+  }
+}
+
+function toDirectChannel(body: unknown, apiUrl: string): DirectChannel | null {
+  if (typeof body !== 'object' || body === null) return null;
+  const channel = body as { wsUrl?: unknown; lastSequence?: unknown };
+  if (typeof channel.wsUrl !== 'string' || !isSameGateway(channel.wsUrl, apiUrl)) return null;
+  return {
+    wsUrl: channel.wsUrl,
+    lastSequence: typeof channel.lastSequence === 'number' && channel.lastSequence > 0
+      ? channel.lastSequence
+      : 0,
+  };
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = globalThis.setTimeout(resolve, ms);
+    signal?.addEventListener('abort', () => {
+      globalThis.clearTimeout(timer);
+      resolve();
+    }, { once: true });
+  });
+}
+
 function parseEvent(raw: unknown): AgentTaskEvent | null {
   if (typeof raw !== 'string') return expectEvent(raw);
   try {
@@ -84,6 +134,12 @@ function isNormalClose(event: CloseEvent): boolean {
 export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
   private readonly apiUrl: string;
   private readonly sseFallbackTasks = new Set<string>();
+  /**
+   * Ate onde esta sessao ja viu o log da caixa, por conversa. Estar no mapa tambem significa que
+   * a conversa ja foi servida pela caixa uma vez: e a diferenca entre entrar num chat, onde nao
+   * ha buraco a cobrir, e voltar de uma queda, onde o que passou no silencio precisa ser repetido.
+   */
+  private readonly boxCursors = new Map<string, number>();
 
   constructor(
     private readonly auth: AuthSessionPort,
@@ -127,6 +183,7 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
     return {
       close: () => {
         this.sseFallbackTasks.delete(taskId);
+        this.boxCursors.delete(taskId);
         connection.close();
       },
     };
@@ -141,6 +198,46 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
     return token;
   }
 
+  /**
+   * Pergunta ao copilot onde esta conversa e servida. Nada aqui e fatal: uma recusa, uma
+   * resposta que nao entendemos ou uma rede que falhou significam apenas que a conversa segue
+   * pelo socket do copilot, que e como toda conversa era servida antes da caixa existir.
+   */
+  private async requestDirectChannel(
+    taskId: string,
+    token: string,
+    signal?: AbortSignal
+  ): Promise<DirectChannel | null> {
+    const url = `${this.apiUrl}/copilot/api/v1/tasks/${encodeURIComponent(taskId)}/channel`;
+    const deadline = Date.now() + CHANNEL_BOOT_TIMEOUT_MS;
+    for (;;) {
+      if (signal?.aborted) return null;
+      let response: Response;
+      try {
+        response = await globalThis.fetch(url, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${stripBearer(token)}` },
+          ...(signal ? { signal } : {}),
+        });
+      } catch {
+        return null;
+      }
+      // 202: a caixa esta subindo. Esperar por ela e melhor do que abrir a conversa no caminho
+      // antigo, que e o que o usuario veria como duas conversas com comportamentos diferentes.
+      if (response.status === 202) {
+        if (Date.now() >= deadline) return null;
+        await sleep(CHANNEL_BOOT_RETRY_MS, signal);
+        continue;
+      }
+      if (!response.ok) return null;
+      try {
+        return toDirectChannel(await response.json(), this.apiUrl);
+      } catch {
+        return null;
+      }
+    }
+  }
+
   private async openWebSocket(
     taskId: string,
     observer: AgentTaskEventObserver,
@@ -152,7 +249,15 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
     if (signal?.aborted) throw signal.reason ?? new Error('Agent WebSocket connection aborted.');
 
     const token = await this.requireFreshToken();
-    const url = `${this.apiUrl.replace(/^http/i, 'ws')}/copilot/ws/tasks/${encodeURIComponent(taskId)}?token=${encodeURIComponent(stripBearer(token))}`;
+    // O caminho da conversa e escolhido pelo servidor, nao por configuracao do app: quando o
+    // copilot oferece a caixa, e com ela que se fala, e o socket do copilot fica como a queda
+    // automatica que mantem funcionando quem ainda nao pode ser atendido pela caixa.
+    const direct = await this.requestDirectChannel(taskId, token, signal);
+    const replayFrom = direct ? this.boxCursors.get(taskId) : undefined;
+    if (direct && replayFrom === undefined) this.boxCursors.set(taskId, direct.lastSequence);
+    const url = direct
+      ? direct.wsUrl
+      : `${this.apiUrl.replace(/^http/i, 'ws')}/copilot/ws/tasks/${encodeURIComponent(taskId)}?token=${encodeURIComponent(stripBearer(token))}`;
 
     return new Promise((resolve, reject) => {
       const socket = new globalThis.WebSocket(url);
@@ -209,6 +314,16 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
         settled = true;
         globalThis.clearTimeout(timer);
         watchdog.touch();
+        // Voltando de uma queda: a caixa guarda o log por `sequence` e repete o que esta sessao
+        // nao viu. Pedir a partir do cursor e nunca do zero, que jogaria a conversa inteira na
+        // tela de novo.
+        if (replayFrom !== undefined) {
+          try {
+            socket.send(JSON.stringify({ type: 'replay', fromSequence: replayFrom }));
+          } catch {
+            // Um socket que ja nasceu morto cai no onclose; a repeticao segue na proxima volta.
+          }
+        }
         resolve({ close });
       };
       socket.onerror = () => {
@@ -218,7 +333,12 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
         // Any frame proves the channel is alive, ping included: touch before parsing.
         watchdog.touch();
         const event = parseEvent(message.data);
-        if (event) observer.onEvent(event);
+        if (!event) return;
+        if (direct && typeof event.sequence === 'number') {
+          const seen = this.boxCursors.get(taskId) ?? 0;
+          if (event.sequence > seen) this.boxCursors.set(taskId, event.sequence);
+        }
+        observer.onEvent(event);
       };
       socket.onclose = (event) => {
         globalThis.clearTimeout(timer);

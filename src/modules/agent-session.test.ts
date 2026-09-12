@@ -11,7 +11,11 @@ class FakeWebSocket {
   onerror: (() => void) | null = null;
   onmessage: ((event: MessageEvent) => void) | null = null;
   onclose: ((event: CloseEvent) => void) | null = null;
+  readonly sent: string[] = [];
   close = vi.fn((code = 1000) => this.onclose?.({ code } as CloseEvent));
+  send = vi.fn((data: string) => {
+    this.sent.push(data);
+  });
 
   constructor(url: string) {
     this.url = url;
@@ -50,11 +54,37 @@ function openStream(): ReadableStream<Uint8Array> {
   return new ReadableStream<Uint8Array>({ start() {} });
 }
 
+/**
+ * O copilot passou a ser perguntado onde a conversa e servida antes de qualquer conexao. Um
+ * teste que quer o socket do copilot precisa dizer que o canal da caixa nao foi oferecido,
+ * senao a recusa vira acidente do mock em vez de intencao do teste.
+ */
+function channelRefused(rest?: (url: string) => unknown): ReturnType<typeof vi.fn> {
+  return vi.fn((input: unknown) => {
+    const url = String(input);
+    if (url.includes('/channel')) return Promise.resolve({ ok: false, status: 404 });
+    return Promise.resolve(rest ? rest(url) : { ok: true, status: 200, body: openStream() });
+  });
+}
+
+function channelOffered(wsUrl: string, lastSequence = 0): ReturnType<typeof vi.fn> {
+  return vi.fn((input: unknown) => {
+    const url = String(input);
+    if (url.includes('/channel')) {
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ wsUrl, lastSequence }) });
+    }
+    return Promise.resolve({ ok: true, status: 200, body: openStream() });
+  });
+}
+
+const BOX_WS_URL = 'wss://api.mitra.io/__ide/3773-box.e2b.app/api/mitra/chat/ws?grant=g&ticket=t';
+
 describe('BrowserAgentTaskEventSource', () => {
   beforeEach(() => {
     FakeWebSocket.instances.length = 0;
     FakeWebSocket.autoOpen = true;
     vi.stubGlobal('WebSocket', FakeWebSocket);
+    vi.stubGlobal('fetch', channelRefused());
   });
 
   afterEach(() => {
@@ -87,6 +117,103 @@ describe('BrowserAgentTaskEventSource', () => {
     connection.close();
     expect(socket.close).toHaveBeenCalledWith(1000, 'Client closed');
     expect(events.onDisconnect).not.toHaveBeenCalled();
+  });
+
+  it('serves the chat from the box when the copilot offers the channel', async () => {
+    vi.stubGlobal('fetch', channelOffered(BOX_WS_URL, 7));
+    const source = new BrowserAgentTaskEventSource(auth(), 'https://api.mitra.io');
+
+    const connection = await source.open('task-1', observer(), undefined, 'websocket');
+
+    // Nada de config no app: quem oferece o caminho e o servidor, e a caixa e onde a conversa vive.
+    expect(FakeWebSocket.instances[0].url).toBe(BOX_WS_URL);
+    // Entrar num chat nao tem buraco a cobrir; repetir aqui jogaria a conversa inteira na tela.
+    expect(FakeWebSocket.instances[0].sent).toEqual([]);
+    connection.close();
+  });
+
+  it('keeps the copilot socket when the channel is not offered', async () => {
+    vi.stubGlobal('fetch', channelRefused());
+    const source = new BrowserAgentTaskEventSource(auth(), 'https://api.mitra.io');
+
+    const connection = await source.open('task-1', observer(), undefined, 'websocket');
+
+    // O interruptor vive no servidor: sem canal oferecido a conversa segue como sempre foi.
+    expect(FakeWebSocket.instances[0].url).toBe(
+      'wss://api.mitra.io/copilot/ws/tasks/task-1?token=app-access'
+    );
+    connection.close();
+  });
+
+  it('refuses a channel that points somewhere else, which would leak the credential', async () => {
+    vi.stubGlobal('fetch', channelOffered('wss://attacker.example/api/mitra/chat/ws?grant=g'));
+    const source = new BrowserAgentTaskEventSource(auth(), 'https://api.mitra.io');
+
+    const connection = await source.open('task-1', observer(), undefined, 'websocket');
+
+    expect(FakeWebSocket.instances[0].url).toContain('api.mitra.io/copilot/ws/tasks/task-1');
+    connection.close();
+  });
+
+  it('waits for a box that is still booting instead of opening the old path', async () => {
+    vi.useFakeTimers();
+    let asks = 0;
+    vi.stubGlobal('fetch', vi.fn((input: unknown) => {
+      if (!String(input).includes('/channel')) {
+        return Promise.resolve({ ok: true, status: 200, body: openStream() });
+      }
+      asks += 1;
+      if (asks === 1) return Promise.resolve({ ok: true, status: 202 });
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({ wsUrl: BOX_WS_URL, lastSequence: 0 }),
+      });
+    }));
+    const source = new BrowserAgentTaskEventSource(auth(), 'https://api.mitra.io');
+
+    const opening = source.open('task-1', observer(), undefined, 'websocket');
+    await vi.advanceTimersByTimeAsync(2_100);
+    const connection = await opening;
+
+    expect(asks).toBe(2);
+    expect(FakeWebSocket.instances[0].url).toBe(BOX_WS_URL);
+    connection.close();
+    vi.useRealTimers();
+  });
+
+  it('asks the box to repeat what the session missed when the channel is opened again', async () => {
+    vi.stubGlobal('fetch', channelOffered(BOX_WS_URL, 4));
+    const source = new BrowserAgentTaskEventSource(auth(), 'https://api.mitra.io');
+    const events = observer();
+
+    await source.open('task-1', events, undefined, 'websocket');
+    FakeWebSocket.instances[0].message({
+      type: 'textDelta',
+      payload: { text: 'oi' },
+      timestamp: 1,
+      sequence: 6,
+    });
+    // O core reabre a mesma conversa depois de uma queda, sem fechar a sessao.
+    await source.open('task-1', events, undefined, 'websocket');
+
+    expect(FakeWebSocket.instances[1].sent).toEqual([
+      JSON.stringify({ type: 'replay', fromSequence: 6 }),
+    ]);
+  });
+
+  it('repeats from where the box log was when no numbered frame arrived before the drop', async () => {
+    vi.stubGlobal('fetch', channelOffered(BOX_WS_URL, 4));
+    const source = new BrowserAgentTaskEventSource(auth(), 'https://api.mitra.io');
+    const events = observer();
+
+    await source.open('task-1', events, undefined, 'websocket');
+    await source.open('task-1', events, undefined, 'websocket');
+
+    // Sem o piso do canal a sessao pediria do zero e a conversa inteira voltaria para a tela.
+    expect(FakeWebSocket.instances[1].sent).toEqual([
+      JSON.stringify({ type: 'replay', fromSequence: 4 }),
+    ]);
   });
 
   it('uses an authenticated SSE stream for the http preference', async () => {
@@ -142,22 +269,23 @@ describe('BrowserAgentTaskEventSource', () => {
 
   it('falls back from auto WebSocket to SSE and preserves explicit websocket errors', async () => {
     FakeWebSocket.autoOpen = false;
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, body: openStream() });
+    const fetchMock = channelRefused();
     vi.stubGlobal('fetch', fetchMock);
+    const sseCalls = () => fetchMock.mock.calls.filter((c) => !String(c[0]).includes('/channel')).length;
     const source = new BrowserAgentTaskEventSource(auth(), 'https://api.mitra.io');
 
     const auto = source.open('task-1', observer(), undefined, 'auto');
     await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     FakeWebSocket.instances[0].onerror?.();
     const connection = await auto;
-    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(sseCalls()).toBe(1);
     connection.close();
 
     const explicit = source.open('task-2', observer(), undefined, 'websocket');
     await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
     FakeWebSocket.instances[1].onerror?.();
     await expect(explicit).rejects.toThrow('Failed to connect');
-    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(sseCalls()).toBe(1);
   });
 
   it('reports a WebSocket that went silent as disconnected, and a ping keeps it alive', async () => {
