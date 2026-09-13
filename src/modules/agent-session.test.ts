@@ -333,6 +333,30 @@ describe('BrowserAgentTaskEventSource', () => {
     }
   });
 
+  it('asks for the box channel again after the box closed, instead of falling to SSE', async () => {
+    // Dev, 2026-09-13: with the close reported, the next open went to the copilot's SSE for
+    // good, because any WebSocket disconnect used to mean "WebSockets do not work here". A box
+    // closing is not that: the conversation is still served by a box, and the copilot says which.
+    const events = observer();
+    const fetchMock = channelOffered(BOX_WS_URL, 3);
+    vi.stubGlobal('fetch', fetchMock);
+    const source = new BrowserAgentTaskEventSource(auth(), 'https://api.mitra.io');
+    await source.open('task-1', events, undefined, 'auto');
+    const first = FakeWebSocket.instances.at(-1)!;
+    expect(first.url).toBe(BOX_WS_URL);
+
+    first.onclose?.({ code: 1000 } as CloseEvent);
+    expect(events.onDisconnect).toHaveBeenCalledTimes(1);
+
+    await source.open('task-1', events, undefined, 'auto');
+    const second = FakeWebSocket.instances.at(-1)!;
+    expect(second).not.toBe(first);
+    expect(second.url).toBe(BOX_WS_URL);
+    // Two channel requests, no SSE stream: the box path was asked for again, not abandoned.
+    expect(fetchMock.mock.calls.filter((c) => String(c[0]).includes('/channel')).length).toBe(2);
+    expect(fetchMock.mock.calls.filter((c) => !String(c[0]).includes('/channel')).length).toBe(0);
+  });
+
   it('does not count a socket the caller closed as silent', async () => {
     vi.useFakeTimers();
     const events = observer();

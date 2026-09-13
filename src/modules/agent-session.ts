@@ -130,6 +130,10 @@ function parseEvent(raw: unknown): AgentTaskEvent | null {
 export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
   private readonly apiUrl: string;
   private readonly sseFallbackTasks = new Set<string>();
+  // Tasks whose last WebSocket was the box itself. A box socket that closes says nothing about
+  // WebSockets: the box went idle or the channel was superseded, and the answer is to ask the
+  // copilot for the channel again. Only the copilot's own socket failing sends a task to SSE.
+  private readonly directTasks = new Set<string>();
   /**
    * Ate onde esta sessao ja viu o log da caixa, por conversa. Estar no mapa tambem significa que
    * a conversa ja foi servida pela caixa uma vez: e a diferenca entre entrar num chat, onde nao
@@ -161,13 +165,13 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
       const connection = await this.openWebSocket(taskId, {
         ...observer,
         onDisconnect: (error) => {
-          this.sseFallbackTasks.add(taskId);
+          if (!this.directTasks.has(taskId)) this.sseFallbackTasks.add(taskId);
           observer.onDisconnect(error);
         },
       }, signal);
       return this.wrapAutoConnection(taskId, connection);
     } catch {
-      this.sseFallbackTasks.add(taskId);
+      if (!this.directTasks.has(taskId)) this.sseFallbackTasks.add(taskId);
       return this.wrapAutoConnection(taskId, await this.openSse(taskId, observer, signal));
     }
   }
@@ -179,6 +183,7 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
     return {
       close: () => {
         this.sseFallbackTasks.delete(taskId);
+        this.directTasks.delete(taskId);
         this.boxCursors.delete(taskId);
         connection.close();
       },
@@ -249,6 +254,8 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
     // copilot oferece a caixa, e com ela que se fala, e o socket do copilot fica como a queda
     // automatica que mantem funcionando quem ainda nao pode ser atendido pela caixa.
     const direct = await this.requestDirectChannel(taskId, token, signal);
+    if (direct) this.directTasks.add(taskId);
+    else this.directTasks.delete(taskId);
     const replayFrom = direct ? this.boxCursors.get(taskId) : undefined;
     if (direct && replayFrom === undefined) this.boxCursors.set(taskId, direct.lastSequence);
     const url = direct
