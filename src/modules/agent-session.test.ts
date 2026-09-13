@@ -537,6 +537,33 @@ describe('BrowserAgentTaskEventSource', () => {
       expect(channelEvents(idle)).toEqual([]);
     });
 
+    it('leaves the box alone after a cancel the box acknowledged', async () => {
+      // A turn ends the way the core reads it: stop, endTurn or interrupted, or a lifecycle
+      // that says the interrupt was terminal. A drop after that is an idle box, not a lost turn.
+      vi.useFakeTimers();
+      vi.stubGlobal('fetch', channelOffered(BOX_WS_URL, 0));
+      const source = new BrowserAgentTaskEventSource(auth(), 'https://api.mitra.io');
+      const endings = [
+        { reason: 'interrupted' },
+        { reason: 'toolUse', lifecycle: { interruptTerminal: true } },
+      ];
+
+      for (const [index, payload] of endings.entries()) {
+        const events = observer();
+        await source.open(`task-${index}`, events, undefined, 'auto');
+        const socket = FakeWebSocket.instances[index];
+        streamed(socket);
+        socket.message({ type: 'stepFinish', payload, timestamp: 2, sequence: 1 });
+
+        socket.onclose?.({ code: 1006 } as CloseEvent);
+
+        expect(events.onDisconnect).toHaveBeenCalledTimes(1);
+        expect(channelEvents(events)).toEqual([]);
+      }
+      await vi.advanceTimersByTimeAsync(RECONNECT_DELAYS_MS[0] * 2);
+      expect(FakeWebSocket.instances).toHaveLength(endings.length);
+    });
+
     it('treats a box that went silent mid-turn like a drop', async () => {
       vi.useFakeTimers();
       vi.stubGlobal('fetch', channelOffered(BOX_WS_URL, 0));

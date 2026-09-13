@@ -149,13 +149,16 @@ function asDelta(event: AgentTaskEvent): AgentTaskEvent {
 
 const TURN_FRAME_TYPES: ReadonlySet<string> = new Set(['textDelta', 'thinking', 'toolCall', 'toolResult']);
 
+const TURN_END_REASONS: ReadonlySet<unknown> = new Set(['stop', 'endTurn', 'interrupted']);
+
 /** Whether a turn is still in flight after this frame, read the way the core reads its status. */
 function turnAfter(event: AgentTaskEvent, inTurn: boolean): boolean {
   if (TURN_FRAME_TYPES.has(event.type)) return true;
   if (event.type === 'error') return false;
   if (event.type === 'stepFinish') {
-    const reason = asObject(event.payload)?.reason;
-    return reason !== 'stop' && reason !== 'endTurn';
+    const payload = asObject(event.payload);
+    if (TURN_END_REASONS.has(payload?.reason)) return false;
+    return asObject(payload?.lifecycle)?.interruptTerminal !== true;
   }
   return inTurn;
 }
