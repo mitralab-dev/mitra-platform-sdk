@@ -23,6 +23,15 @@ const CHANNEL_BOOT_RETRY_MS = 2_000;
  * `onDisconnect` never fires and the recovery the core already has never starts.
  */
 export const SILENCE_TIMEOUT_MS = 60_000;
+/**
+ * Waits between attempts to dial the box again after it dropped mid-turn. Bounded: a box that
+ * cannot be reached by the end of the list is reported to the core as disconnected, and only
+ * then. Each attempt also carries the channel request, which waits on its own for a box that
+ * is still booting.
+ */
+export const RECONNECT_DELAYS_MS: readonly number[] = [1_000, 2_000, 4_000, 8_000, 16_000];
+/** The copilot closes the older socket with this code when the same chat is opened elsewhere. */
+const SUPERSEDED_CLOSE_CODE = 4409;
 
 /** Rearmed by every frame, ping included. Firing means the channel is gone, not idle. */
 class SilenceWatchdog {
@@ -126,6 +135,51 @@ function parseEvent(raw: unknown): AgentTaskEvent | null {
   }
 }
 
+/**
+ * The box logs streamed text as `textChunk` rows and repeats them on replay, while the core
+ * only streams `textDelta` and `thinking`. A chunk is that same text, so it takes the same
+ * path: the screen keeps streaming after a drop instead of freezing until the turn is
+ * reconciled from history.
+ */
+function asDelta(event: AgentTaskEvent): AgentTaskEvent {
+  if (event.type !== 'textChunk') return event;
+  const kind = asObject(event.payload)?.kind;
+  return { ...event, type: kind === 'thinking' ? 'thinking' : 'textDelta' };
+}
+
+const TURN_FRAME_TYPES: ReadonlySet<string> = new Set(['textDelta', 'thinking', 'toolCall', 'toolResult']);
+
+/** Whether a turn is still in flight after this frame, read the way the core reads its status. */
+function turnAfter(event: AgentTaskEvent, inTurn: boolean): boolean {
+  if (TURN_FRAME_TYPES.has(event.type)) return true;
+  if (event.type === 'error') return false;
+  if (event.type === 'stepFinish') {
+    const reason = asObject(event.payload)?.reason;
+    return reason !== 'stop' && reason !== 'endTurn';
+  }
+  return inTurn;
+}
+
+/**
+ * Frames this layer adds to the stream so the app can show the channel's state. The core has
+ * no session status for a channel being redialed; it forwards these through `raw` untouched.
+ */
+function channelEvent(type: 'channelReconnecting' | 'channelConnected', payload: object): AgentTaskEvent {
+  return { type, payload, timestamp: Date.now() };
+}
+
+interface LiveSocket {
+  close(): void;
+}
+
+interface DialOptions {
+  readonly replayFrom?: number;
+  readonly signal?: AbortSignal;
+  onFrame(event: AgentTaskEvent): void;
+  /** An unrequested close or a silent socket, after the handshake. Handshake failures reject. */
+  onLost(error: Error, code?: number): void;
+}
+
 /** Browser WebSocket and SSE boundary for the Core-owned Agent session lifecycle. */
 export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
   private readonly apiUrl: string;
@@ -204,7 +258,16 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
    * resposta que nao entendemos ou uma rede que falhou significam apenas que a conversa segue
    * pelo socket do copilot, que e como toda conversa era servida antes da caixa existir.
    */
-  private async requestDirectChannel(
+  private requestDirectChannel(
+    taskId: string,
+    token: string,
+    signal?: AbortSignal
+  ): Promise<DirectChannel | null> {
+    return this.askDirectChannel(taskId, token, signal).catch(() => null);
+  }
+
+  /** Like `requestDirectChannel`, but a request the network lost is thrown, not a refusal. */
+  private async askDirectChannel(
     taskId: string,
     token: string,
     signal?: AbortSignal
@@ -213,16 +276,11 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
     const deadline = Date.now() + CHANNEL_BOOT_TIMEOUT_MS;
     for (;;) {
       if (signal?.aborted) return null;
-      let response: Response;
-      try {
-        response = await globalThis.fetch(url, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${stripBearer(token)}` },
-          ...(signal ? { signal } : {}),
-        });
-      } catch {
-        return null;
-      }
+      const response = await globalThis.fetch(url, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${stripBearer(token)}` },
+        ...(signal ? { signal } : {}),
+      });
       // 202: a caixa esta subindo. Esperar por ela e melhor do que abrir a conversa no caminho
       // antigo, que e o que o usuario veria como duas conversas com comportamentos diferentes.
       if (response.status === 202) {
@@ -256,12 +314,117 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
     const direct = await this.requestDirectChannel(taskId, token, signal);
     if (direct) this.directTasks.add(taskId);
     else this.directTasks.delete(taskId);
-    const replayFrom = direct ? this.boxCursors.get(taskId) : undefined;
-    if (direct && replayFrom === undefined) this.boxCursors.set(taskId, direct.lastSequence);
-    const url = direct
-      ? direct.wsUrl
-      : `${this.apiUrl.replace(/^http/i, 'ws')}/copilot/ws/tasks/${encodeURIComponent(taskId)}?token=${encodeURIComponent(stripBearer(token))}`;
+    if (direct) return this.openDirect(taskId, direct, observer, signal);
 
+    const url = `${this.apiUrl.replace(/^http/i, 'ws')}/copilot/ws/tasks/${encodeURIComponent(taskId)}?token=${encodeURIComponent(stripBearer(token))}`;
+    const socket = await this.dial(url, {
+      signal,
+      onFrame: (event) => observer.onEvent(event),
+      onLost: (error) => observer.onDisconnect(error),
+    });
+    return { close: () => socket.close() };
+  }
+
+  /**
+   * The box path. A drop in the middle of a turn is redialed from here, with the replay the
+   * box offers, so the core keeps one connection and one stream: reporting the drop instead
+   * would make it reconcile the turn from persisted history, which is the screen freezing and
+   * the rest of the answer landing at once. The core hears a disconnect only when the redial
+   * gives up, when the copilot no longer offers the box, or when there is no turn to resume:
+   * the sandbox pauses an idle box, and dialing it again would wake it for nobody.
+   */
+  private async openDirect(
+    taskId: string,
+    channel: DirectChannel,
+    observer: AgentTaskEventObserver,
+    signal?: AbortSignal
+  ): Promise<AgentTaskEventConnection> {
+    const replayFrom = this.boxCursors.get(taskId);
+    if (replayFrom === undefined) this.boxCursors.set(taskId, channel.lastSequence);
+
+    const link = new AbortController();
+    const onAbort = () => link.abort(signal?.reason);
+    signal?.addEventListener('abort', onAbort, { once: true });
+    let inTurn = false;
+    let current: LiveSocket | null = null;
+
+    const onFrame = (event: AgentTaskEvent) => {
+      if (typeof event.sequence === 'number') {
+        const seen = this.boxCursors.get(taskId) ?? 0;
+        if (event.sequence > seen) this.boxCursors.set(taskId, event.sequence);
+      }
+      inTurn = turnAfter(event, inTurn);
+      observer.onEvent(event);
+    };
+    const onLost = (error: Error, code?: number) => {
+      current = null;
+      if (link.signal.aborted) return;
+      if (!inTurn || code === SUPERSEDED_CLOSE_CODE) {
+        observer.onDisconnect(error);
+        return;
+      }
+      void this.redial(taskId, error, link.signal, observer, { onFrame, onLost }).then((socket) => {
+        current = socket;
+      });
+    };
+
+    current = await this.dial(channel.wsUrl, { replayFrom, signal: link.signal, onFrame, onLost });
+    return {
+      close: () => {
+        signal?.removeEventListener('abort', onAbort);
+        link.abort();
+        current?.close();
+      },
+    };
+  }
+
+  private async redial(
+    taskId: string,
+    cause: Error,
+    signal: AbortSignal,
+    observer: AgentTaskEventObserver,
+    handlers: Pick<DialOptions, 'onFrame' | 'onLost'>
+  ): Promise<LiveSocket | null> {
+    let lastError = cause;
+    for (const [index, delayMs] of RECONNECT_DELAYS_MS.entries()) {
+      const attempt = index + 1;
+      observer.onEvent(channelEvent('channelReconnecting', {
+        attempt,
+        maxAttempts: RECONNECT_DELAYS_MS.length,
+        reason: lastError.message,
+      }));
+      await sleep(delayMs, signal);
+      if (signal.aborted) return null;
+      try {
+        const token = await this.requireFreshToken();
+        const channel = await this.askDirectChannel(taskId, token, signal);
+        if (signal.aborted) return null;
+        if (!channel) {
+          observer.onDisconnect(new Error(
+            `The copilot no longer offers the box channel (after: ${cause.message})`
+          ));
+          return null;
+        }
+        const socket = await this.dial(channel.wsUrl, {
+          ...handlers,
+          signal,
+          replayFrom: this.boxCursors.get(taskId),
+        });
+        observer.onEvent(channelEvent('channelConnected', { attempt }));
+        return socket;
+      } catch (error) {
+        if (signal.aborted) return null;
+        lastError = error instanceof Error ? error : new Error(String(error));
+      }
+    }
+    observer.onDisconnect(new Error(
+      `Agent box channel could not be reopened after ${RECONNECT_DELAYS_MS.length} attempts: ${lastError.message}`
+    ));
+    return null;
+  }
+
+  private dial(url: string, options: DialOptions): Promise<LiveSocket> {
+    const { signal, replayFrom } = options;
     return new Promise((resolve, reject) => {
       const socket = new globalThis.WebSocket(url);
       let opened = false;
@@ -287,7 +450,7 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
         // CLOSING for as long as the browser waits for a peer that is already gone.
         intentionalClose = true;
         removeAbortListener();
-        observer.onDisconnect(silenceError('WebSocket'));
+        options.onLost(silenceError('WebSocket'));
         socket.close(1000, 'Client closed');
       });
       const close = () => {
@@ -336,12 +499,7 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
         // Any frame proves the channel is alive, ping included: touch before parsing.
         watchdog.touch();
         const event = parseEvent(message.data);
-        if (!event) return;
-        if (direct && typeof event.sequence === 'number') {
-          const seen = this.boxCursors.get(taskId) ?? 0;
-          if (event.sequence > seen) this.boxCursors.set(taskId, event.sequence);
-        }
-        observer.onEvent(event);
+        if (event) options.onFrame(asDelta(event));
       };
       socket.onclose = (event) => {
         globalThis.clearTimeout(timer);
@@ -357,7 +515,7 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
         // gone. Staying quiet on a "normal" code is how a follow-up after a deploy was sent
         // and answered on the server while the session waited on a socket that no longer existed.
         if (!intentionalClose) {
-          observer.onDisconnect(new Error(`Agent WebSocket closed (${event.code}).`));
+          options.onLost(new Error(`Agent WebSocket closed (${event.code}).`), event.code);
         }
       };
     });

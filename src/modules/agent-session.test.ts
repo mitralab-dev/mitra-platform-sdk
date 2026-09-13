@@ -1,7 +1,7 @@
 import type { AgentTaskEventObserver } from '@mitralab.io/sdk-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthSessionPort } from './auth';
-import { BrowserAgentTaskEventSource, SILENCE_TIMEOUT_MS } from './agent-session';
+import { BrowserAgentTaskEventSource, RECONNECT_DELAYS_MS, SILENCE_TIMEOUT_MS } from './agent-session';
 
 class FakeWebSocket {
   static readonly instances: FakeWebSocket[] = [];
@@ -355,6 +355,222 @@ describe('BrowserAgentTaskEventSource', () => {
     // Two channel requests, no SSE stream: the box path was asked for again, not abandoned.
     expect(fetchMock.mock.calls.filter((c) => String(c[0]).includes('/channel')).length).toBe(2);
     expect(fetchMock.mock.calls.filter((c) => !String(c[0]).includes('/channel')).length).toBe(0);
+  });
+
+  it('hands a replayed textChunk to the core as the delta it stands for', async () => {
+    // Dev, 2026-09-13: after a drop the box repeats the missed text as textChunk rows, which
+    // the core does not know; the screen froze and the whole answer landed at once on turn end.
+    vi.stubGlobal('fetch', channelOffered(BOX_WS_URL, 1));
+    const events = observer();
+    const source = new BrowserAgentTaskEventSource(auth(), 'https://api.mitra.io');
+    await source.open('task-1', events, undefined, 'websocket');
+    const socket = FakeWebSocket.instances[0];
+
+    socket.message({
+      type: 'textChunk',
+      payload: { text: 'oi', kind: 'text', lifecycle: 'turn' },
+      timestamp: 1,
+      sequence: 2,
+    });
+    socket.message({ type: 'textChunk', payload: { text: 'hmm', kind: 'thinking' }, timestamp: 2, sequence: 3 });
+
+    expect(events.onEvent).toHaveBeenNthCalledWith(1, {
+      type: 'textDelta',
+      payload: { text: 'oi', kind: 'text', lifecycle: 'turn' },
+      timestamp: 1,
+      sequence: 2,
+    });
+    expect(events.onEvent).toHaveBeenNthCalledWith(2, {
+      type: 'thinking',
+      payload: { text: 'hmm', kind: 'thinking' },
+      timestamp: 2,
+      sequence: 3,
+    });
+  });
+
+  describe('box channel reconnection', () => {
+    const streamed = (socket: FakeWebSocket) => {
+      socket.message({ type: 'textDelta', payload: { text: 'a' }, timestamp: 1 });
+    };
+    const channelEvents = (events: ReturnType<typeof observer>) => events.onEvent.mock.calls
+      .map((call) => call[0] as { type: string; payload: unknown })
+      .filter((event) => event.type.startsWith('channel'))
+      .map(({ type, payload }) => ({ type, payload }));
+
+    it('reconnects on its own when the box drops mid-turn, and the core keeps streaming', async () => {
+      // Testers, 2026-09-13: the stream stopped, then the rest of the answer appeared at once,
+      // sometimes after an error. The drop reached the core as a disconnect, and the core's
+      // recovery is a reconcile of persisted history, not a resumed stream.
+      vi.useFakeTimers();
+      const fetchMock = channelOffered(BOX_WS_URL, 3);
+      vi.stubGlobal('fetch', fetchMock);
+      const events = observer();
+      const source = new BrowserAgentTaskEventSource(auth(), 'https://api.mitra.io');
+      const connection = await source.open('task-1', events, undefined, 'auto');
+      const first = FakeWebSocket.instances[0];
+      streamed(first);
+      first.message({ type: 'toolCall', payload: { name: 'read' }, timestamp: 2, sequence: 5 });
+
+      first.onclose?.({ code: 1006 } as CloseEvent);
+
+      // The core never hears a disconnect: what it hears is that the channel is reconnecting.
+      expect(events.onDisconnect).not.toHaveBeenCalled();
+      expect(channelEvents(events)).toEqual([{
+        type: 'channelReconnecting',
+        payload: {
+          attempt: 1,
+          maxAttempts: RECONNECT_DELAYS_MS.length,
+          reason: 'Agent WebSocket closed (1006).',
+        },
+      }]);
+
+      await vi.advanceTimersByTimeAsync(RECONNECT_DELAYS_MS[0]);
+      const second = FakeWebSocket.instances[1];
+      expect(second.url).toBe(BOX_WS_URL);
+      expect(second.sent).toEqual([JSON.stringify({ type: 'replay', fromSequence: 5 })]);
+      expect(fetchMock.mock.calls.filter((c) => String(c[0]).includes('/channel')).length).toBe(2);
+      expect(channelEvents(events).at(-1)).toEqual({ type: 'channelConnected', payload: { attempt: 1 } });
+
+      // Replayed and live frames of the new socket reach the same observer, same delta path.
+      second.message({ type: 'textChunk', payload: { text: 'b', kind: 'text' }, timestamp: 3, sequence: 6 });
+      expect(events.onEvent).toHaveBeenLastCalledWith(
+        expect.objectContaining({ type: 'textDelta', payload: { text: 'b', kind: 'text' } })
+      );
+      expect(events.onDisconnect).not.toHaveBeenCalled();
+
+      // Closing the session closes the socket that is live now, not the one that died.
+      connection.close();
+      expect(second.close).toHaveBeenCalledWith(1000, 'Client closed');
+    });
+
+    it('backs off between attempts and reports the disconnect only when it gives up', async () => {
+      vi.useFakeTimers();
+      vi.stubGlobal('fetch', channelOffered(BOX_WS_URL, 0));
+      const events = observer();
+      const source = new BrowserAgentTaskEventSource(auth(), 'https://api.mitra.io');
+      await source.open('task-1', events, undefined, 'auto');
+      const first = FakeWebSocket.instances[0];
+      streamed(first);
+
+      FakeWebSocket.autoOpen = false;
+      first.onclose?.({ code: 1006 } as CloseEvent);
+
+      for (const [index, delayMs] of RECONNECT_DELAYS_MS.entries()) {
+        expect(events.onDisconnect).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(delayMs);
+        expect(FakeWebSocket.instances).toHaveLength(index + 2);
+        FakeWebSocket.instances.at(-1)!.onerror?.();
+        await vi.advanceTimersByTimeAsync(0);
+      }
+
+      expect(events.onDisconnect).toHaveBeenCalledTimes(1);
+      const reported = String(events.onDisconnect.mock.calls[0][0]);
+      expect(reported).toContain(`${RECONNECT_DELAYS_MS.length} attempts`);
+      expect(reported).toContain('Failed to connect');
+      expect(channelEvents(events).map((event) => event.type)).toEqual(
+        RECONNECT_DELAYS_MS.map(() => 'channelReconnecting')
+      );
+    });
+
+    it('keeps trying through a channel request the network lost, and stops when the copilot refuses', async () => {
+      vi.useFakeTimers();
+      let asks = 0;
+      vi.stubGlobal('fetch', vi.fn((input: unknown) => {
+        if (!String(input).includes('/channel')) {
+          return Promise.resolve({ ok: true, status: 200, body: openStream() });
+        }
+        asks += 1;
+        if (asks === 1) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({ wsUrl: BOX_WS_URL, lastSequence: 0 }),
+          });
+        }
+        if (asks === 2) return Promise.reject(new TypeError('Failed to fetch'));
+        return Promise.resolve({ ok: false, status: 404 });
+      }));
+      const events = observer();
+      const source = new BrowserAgentTaskEventSource(auth(), 'https://api.mitra.io');
+      await source.open('task-1', events, undefined, 'auto');
+      streamed(FakeWebSocket.instances[0]);
+
+      FakeWebSocket.instances[0].onclose?.({ code: 1006 } as CloseEvent);
+      await vi.advanceTimersByTimeAsync(RECONNECT_DELAYS_MS[0]);
+      // A request the network lost is a failed attempt, not a refusal.
+      expect(asks).toBe(2);
+      expect(events.onDisconnect).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(RECONNECT_DELAYS_MS[1]);
+      // A refusal is final: the box is no longer where this chat is served.
+      expect(asks).toBe(3);
+      expect(events.onDisconnect).toHaveBeenCalledTimes(1);
+      expect(String(events.onDisconnect.mock.calls[0][0])).toContain('no longer offers');
+      expect(FakeWebSocket.instances).toHaveLength(1);
+    });
+
+    it('does not reconnect a channel another tab took over, nor an idle box', async () => {
+      vi.useFakeTimers();
+      vi.stubGlobal('fetch', channelOffered(BOX_WS_URL, 0));
+      const source = new BrowserAgentTaskEventSource(auth(), 'https://api.mitra.io');
+
+      // 4409: the copilot handed the slot to a newer socket; dialing again would take it back.
+      const superseded = observer();
+      await source.open('task-1', superseded, undefined, 'auto');
+      streamed(FakeWebSocket.instances[0]);
+      FakeWebSocket.instances[0].onclose?.({ code: 4409 } as CloseEvent);
+      expect(superseded.onDisconnect).toHaveBeenCalledTimes(1);
+
+      // No turn in flight: the sandbox pauses an idle box, and dialing again would wake it for
+      // nobody. The next send reopens the channel, as it always did.
+      const idle = observer();
+      await source.open('task-2', idle, undefined, 'auto');
+      const socket = FakeWebSocket.instances[1];
+      streamed(socket);
+      socket.message({ type: 'stepFinish', payload: { reason: 'stop' }, timestamp: 2, sequence: 1 });
+      socket.onclose?.({ code: 1006 } as CloseEvent);
+      expect(idle.onDisconnect).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(RECONNECT_DELAYS_MS[0] * 2);
+      expect(FakeWebSocket.instances).toHaveLength(2);
+      expect(channelEvents(superseded)).toEqual([]);
+      expect(channelEvents(idle)).toEqual([]);
+    });
+
+    it('treats a box that went silent mid-turn like a drop', async () => {
+      vi.useFakeTimers();
+      vi.stubGlobal('fetch', channelOffered(BOX_WS_URL, 0));
+      const events = observer();
+      const source = new BrowserAgentTaskEventSource(auth(), 'https://api.mitra.io');
+      await source.open('task-1', events, undefined, 'auto');
+      streamed(FakeWebSocket.instances[0]);
+
+      await vi.advanceTimersByTimeAsync(SILENCE_TIMEOUT_MS);
+
+      expect(events.onDisconnect).not.toHaveBeenCalled();
+      expect(channelEvents(events)[0]).toMatchObject({
+        type: 'channelReconnecting',
+        payload: { reason: expect.stringContaining('silent') },
+      });
+      await vi.advanceTimersByTimeAsync(RECONNECT_DELAYS_MS[0]);
+      expect(FakeWebSocket.instances).toHaveLength(2);
+    });
+
+    it('stops reconnecting when the session closes in the middle of the backoff', async () => {
+      vi.useFakeTimers();
+      vi.stubGlobal('fetch', channelOffered(BOX_WS_URL, 0));
+      const events = observer();
+      const source = new BrowserAgentTaskEventSource(auth(), 'https://api.mitra.io');
+      const connection = await source.open('task-1', events, undefined, 'auto');
+      streamed(FakeWebSocket.instances[0]);
+      FakeWebSocket.instances[0].onclose?.({ code: 1006 } as CloseEvent);
+
+      connection.close();
+      await vi.advanceTimersByTimeAsync(RECONNECT_DELAYS_MS[0] * 2);
+
+      expect(FakeWebSocket.instances).toHaveLength(1);
+      expect(events.onDisconnect).not.toHaveBeenCalled();
+    });
   });
 
   it('does not count a socket the caller closed as silent', async () => {
