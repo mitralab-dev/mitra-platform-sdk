@@ -126,10 +126,6 @@ function parseEvent(raw: unknown): AgentTaskEvent | null {
   }
 }
 
-function isNormalClose(event: CloseEvent): boolean {
-  return event.code === 1000 || event.code === 4409;
-}
-
 /** Browser WebSocket and SSE boundary for the Core-owned Agent session lifecycle. */
 export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
   private readonly apiUrl: string;
@@ -348,8 +344,13 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
           rejectHandshake(new Error(`Agent WebSocket closed during handshake (${event.code}).`));
           return;
         }
-        if (!intentionalClose && !isNormalClose(event)) {
-          observer.onDisconnect(new Error(`Agent WebSocket disconnected (${event.code}).`));
+        // Any close the session did not ask for leaves it deaf, whatever the code: the box
+        // closes with 1000 when it goes idle and with 4409 when the channel is superseded, and
+        // the core only reopens the channel on the next send once it hears the connection is
+        // gone. Staying quiet on a "normal" code is how a follow-up after a deploy was sent
+        // and answered on the server while the session waited on a socket that no longer existed.
+        if (!intentionalClose) {
+          observer.onDisconnect(new Error(`Agent WebSocket closed (${event.code}).`));
         }
       };
     });

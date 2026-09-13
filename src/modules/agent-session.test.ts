@@ -317,6 +317,22 @@ describe('BrowserAgentTaskEventSource', () => {
     expect(events.onDisconnect).toHaveBeenCalledTimes(1);
   });
 
+  it('reports a close the session did not ask for, whatever its code', async () => {
+    // Dev, 2026-09-13: the box closed the socket, the core never heard, the next send went out
+    // and was answered on the server, and the session waited on a socket that no longer existed.
+    for (const code of [1000, 4409, 1006]) {
+      const events = observer();
+      const source = new BrowserAgentTaskEventSource(auth(), 'https://api.mitra.io');
+      await source.open('task-1', events, undefined, 'websocket');
+      const socket = FakeWebSocket.instances.at(-1)!;
+
+      socket.onclose?.({ code } as CloseEvent);
+
+      expect(events.onDisconnect).toHaveBeenCalledTimes(1);
+      expect(String(events.onDisconnect.mock.calls[0][0])).toContain(String(code));
+    }
+  });
+
   it('does not count a socket the caller closed as silent', async () => {
     vi.useFakeTimers();
     const events = observer();
