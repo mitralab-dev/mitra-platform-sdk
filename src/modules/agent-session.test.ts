@@ -78,6 +78,7 @@ function channelOffered(wsUrl: string, lastSequence = 0): ReturnType<typeof vi.f
 }
 
 const BOX_WS_URL = 'wss://api.mitra.io/__ide/3773-box.e2b.app/api/mitra/chat/ws?grant=g&ticket=t';
+const OTHER_BOX_WS_URL = 'wss://api.mitra.io/__ide/9120-box.e2b.app/api/mitra/chat/ws?grant=g2&ticket=t2';
 
 describe('BrowserAgentTaskEventSource', () => {
   beforeEach(() => {
@@ -182,38 +183,55 @@ describe('BrowserAgentTaskEventSource', () => {
     vi.useRealTimers();
   });
 
-  it('asks the box to repeat what the session missed when the channel is opened again', async () => {
+  it('a session opened again after an idle close does not ask the box to replay', async () => {
+    // Beta.21, 2026-09-14: a tab open since the day before had its box replaced. The open
+    // that followed replayed from the cursor of the old box, and every old turn past it
+    // landed on the screen as live text. What an idle chat missed is history, loaded by REST.
     vi.stubGlobal('fetch', channelOffered(BOX_WS_URL, 4));
     const source = new BrowserAgentTaskEventSource(auth(), 'https://api.mitra.io');
     const events = observer();
 
     await source.open('task-1', events, undefined, 'websocket');
-    FakeWebSocket.instances[0].message({
-      type: 'textDelta',
-      payload: { text: 'oi' },
-      timestamp: 1,
-      sequence: 6,
-    });
-    // O core reabre a mesma conversa depois de uma queda, sem fechar a sessao.
-    await source.open('task-1', events, undefined, 'websocket');
+    const first = FakeWebSocket.instances[0];
+    first.message({ type: 'textDelta', payload: { text: 'oi' }, timestamp: 1, sequence: 6 });
+    first.message({ type: 'stepFinish', payload: { reason: 'stop' }, timestamp: 2, sequence: 7 });
+    first.onclose?.({ code: 1000 } as CloseEvent);
+    expect(events.onDisconnect).toHaveBeenCalledTimes(1);
 
-    expect(FakeWebSocket.instances[1].sent).toEqual([
-      JSON.stringify({ type: 'replay', fromSequence: 6 }),
-    ]);
+    vi.stubGlobal('fetch', channelOffered(BOX_WS_URL, 12));
+    await source.open('task-1', events, undefined, 'websocket');
+    const second = FakeWebSocket.instances[1];
+
+    expect(second.sent).toEqual([]);
+    // Nothing between 7 and 12 reaches the core through this socket, as deltas or otherwise.
+    const delivered = events.onEvent.mock.calls.map((call) => (call[0] as { sequence?: number }).sequence);
+    expect(delivered).toEqual([6, 7]);
   });
 
-  it('repeats from where the box log was when no numbered frame arrived before the drop', async () => {
-    vi.stubGlobal('fetch', channelOffered(BOX_WS_URL, 4));
+  it('a cursor from a previous box never reaches a new one', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', channelOffered(BOX_WS_URL, 3));
     const source = new BrowserAgentTaskEventSource(auth(), 'https://api.mitra.io');
     const events = observer();
 
     await source.open('task-1', events, undefined, 'websocket');
-    await source.open('task-1', events, undefined, 'websocket');
+    const first = FakeWebSocket.instances[0];
+    first.message({ type: 'textDelta', payload: { text: 'a' }, timestamp: 1, sequence: 14 });
 
-    // Sem o piso do canal a sessao pediria do zero e a conversa inteira voltaria para a tela.
-    expect(FakeWebSocket.instances[1].sent).toEqual([
-      JSON.stringify({ type: 'replay', fromSequence: 4 }),
-    ]);
+    // Mid-turn, the copilot answers with another box: its log is not the one the cursor came from.
+    vi.stubGlobal('fetch', channelOffered(OTHER_BOX_WS_URL, 20));
+    first.onclose?.({ code: 1006 } as CloseEvent);
+    await vi.advanceTimersByTimeAsync(RECONNECT_DELAYS_MS[0]);
+    const second = FakeWebSocket.instances[1];
+    expect(second.url).toBe(OTHER_BOX_WS_URL);
+    expect(second.sent).toEqual([]);
+
+    // The cursor is now where the new box's log was: a drop on it resumes from there, not from 14.
+    second.message({ type: 'textDelta', payload: { text: 'b' }, timestamp: 2 });
+    second.onclose?.({ code: 1006 } as CloseEvent);
+    await vi.advanceTimersByTimeAsync(RECONNECT_DELAYS_MS[0]);
+    expect(FakeWebSocket.instances[2].sent).toEqual([JSON.stringify({ type: 'replay', fromSequence: 20 })]);
+    expect(events.onDisconnect).not.toHaveBeenCalled();
   });
 
   it('uses an authenticated SSE stream for the http preference', async () => {

@@ -104,6 +104,15 @@ function isSameGateway(candidate: string, apiUrl: string): boolean {
   }
 }
 
+/**
+ * Which box serves the conversation. The gateway host is the same for every box, and the query
+ * carries a grant that changes per request: the box itself is named by the path.
+ */
+function boxAddress(wsUrl: string): string {
+  const url = new URL(wsUrl);
+  return `${url.origin}${url.pathname}`;
+}
+
 function toDirectChannel(body: unknown, apiUrl: string): DirectChannel | null {
   if (typeof body !== 'object' || body === null) return null;
   const channel = body as { wsUrl?: unknown; lastSequence?: unknown };
@@ -192,11 +201,13 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
   // copilot for the channel again. Only the copilot's own socket failing sends a task to SSE.
   private readonly directTasks = new Set<string>();
   /**
-   * Ate onde esta sessao ja viu o log da caixa, por conversa. Estar no mapa tambem significa que
-   * a conversa ja foi servida pela caixa uma vez: e a diferenca entre entrar num chat, onde nao
-   * ha buraco a cobrir, e voltar de uma queda, onde o que passou no silencio precisa ser repetido.
+   * Ate onde esta sessao ja viu o log da caixa, por conversa, e de qual caixa esse log e. So o
+   * redial no meio de um turno pede repeticao a partir daqui; abrir a conversa de novo nunca
+   * pede. O cursor vale para uma caixa: outra caixa tem outro log, e um cursor da anterior
+   * repetiria turnos antigos como se fossem texto ao vivo.
    */
   private readonly boxCursors = new Map<string, number>();
+  private readonly boxAddresses = new Map<string, string>();
 
   constructor(
     private readonly auth: AuthSessionPort,
@@ -242,6 +253,7 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
         this.sseFallbackTasks.delete(taskId);
         this.directTasks.delete(taskId);
         this.boxCursors.delete(taskId);
+        this.boxAddresses.delete(taskId);
         connection.close();
       },
     };
@@ -328,6 +340,14 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
     return { close: () => socket.close() };
   }
 
+  /** Forgets the cursor when the copilot points the conversation to a box other than the last dialed. */
+  private adoptBox(taskId: string, channel: DirectChannel): void {
+    const box = boxAddress(channel.wsUrl);
+    if (this.boxAddresses.get(taskId) === box) return;
+    this.boxAddresses.set(taskId, box);
+    this.boxCursors.delete(taskId);
+  }
+
   /**
    * The box path. A drop in the middle of a turn is redialed from here, with the replay the
    * box offers, so the core keeps one connection and one stream: reporting the drop instead
@@ -335,6 +355,11 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
    * the rest of the answer landing at once. The core hears a disconnect only when the redial
    * gives up, when the copilot no longer offers the box, or when there is no turn to resume:
    * the sandbox pauses an idle box, and dialing it again would wake it for nobody.
+   *
+   * Opening never asks for a replay, whether the conversation is new to this session or was
+   * open before. What an idle conversation missed is history, which the app loads by REST. Beta
+   * 2026-09-14: a tab open overnight had its box replaced, and the open that followed replayed
+   * the old box's cursor against the new log, which put every old turn on screen as live text.
    */
   private async openDirect(
     taskId: string,
@@ -342,8 +367,8 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
     observer: AgentTaskEventObserver,
     signal?: AbortSignal
   ): Promise<AgentTaskEventConnection> {
-    const replayFrom = this.boxCursors.get(taskId);
-    if (replayFrom === undefined) this.boxCursors.set(taskId, channel.lastSequence);
+    this.adoptBox(taskId, channel);
+    this.boxCursors.set(taskId, channel.lastSequence);
 
     const link = new AbortController();
     const onAbort = () => link.abort(signal?.reason);
@@ -371,7 +396,7 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
       });
     };
 
-    current = await this.dial(channel.wsUrl, { replayFrom, signal: link.signal, onFrame, onLost });
+    current = await this.dial(channel.wsUrl, { signal: link.signal, onFrame, onLost });
     return {
       close: () => {
         signal?.removeEventListener('abort', onAbort);
@@ -408,11 +433,10 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
           ));
           return null;
         }
-        const socket = await this.dial(channel.wsUrl, {
-          ...handlers,
-          signal,
-          replayFrom: this.boxCursors.get(taskId),
-        });
+        this.adoptBox(taskId, channel);
+        const replayFrom = this.boxCursors.get(taskId);
+        if (replayFrom === undefined) this.boxCursors.set(taskId, channel.lastSequence);
+        const socket = await this.dial(channel.wsUrl, { ...handlers, signal, replayFrom });
         observer.onEvent(channelEvent('channelConnected', { attempt }));
         return socket;
       } catch (error) {
@@ -483,9 +507,9 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
         settled = true;
         globalThis.clearTimeout(timer);
         watchdog.touch();
-        // Voltando de uma queda: a caixa guarda o log por `sequence` e repete o que esta sessao
-        // nao viu. Pedir a partir do cursor e nunca do zero, que jogaria a conversa inteira na
-        // tela de novo.
+        // Voltando de uma queda no meio de um turno: a caixa guarda o log por `sequence` e
+        // repete o que esta sessao nao viu naquele socket. Pedir a partir do cursor e nunca do
+        // zero, que jogaria a conversa inteira na tela de novo.
         if (replayFrom !== undefined) {
           try {
             socket.send(JSON.stringify({ type: 'replay', fromSequence: replayFrom }));
