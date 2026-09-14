@@ -23,7 +23,11 @@ const emptyPage = {
   page: { size: 100, totalElements: 0, totalPages: 0, number: 0 },
 };
 
+/** The browser as the session sees it: whether it says it is offline, and what that does to fetch. */
+const browser = { offline: false };
+
 class FakeWebSocket {
+  static readonly instances: FakeWebSocket[] = [];
   onopen: (() => void) | null = null;
   onerror: (() => void) | null = null;
   onmessage: ((event: MessageEvent) => void) | null = null;
@@ -32,7 +36,8 @@ class FakeWebSocket {
   send = vi.fn();
 
   constructor(readonly url: string) {
-    queueMicrotask(() => this.onopen?.());
+    FakeWebSocket.instances.push(this);
+    queueMicrotask(() => (browser.offline ? this.onerror?.() : this.onopen?.()));
   }
 }
 
@@ -63,12 +68,16 @@ function copilot(inputAnswers: InputAnswer[]) {
   const inputs = vi.fn();
   vi.stubGlobal('fetch', vi.fn((input: unknown) => {
     const url = String(input);
+    if (browser.offline) return Promise.reject(new TypeError('Failed to fetch'));
     if (url.includes('/inputs')) {
       inputs(url);
       const answer = inputAnswers[Math.min(inputs.mock.calls.length, inputAnswers.length) - 1];
       return answer();
     }
     if (url.includes('/channel')) return Promise.resolve({ ok: false, status: 404 });
+    if (url.includes('/events')) {
+      return Promise.resolve({ ok: true, status: 200, body: new ReadableStream<Uint8Array>({ start() {} }) });
+    }
     if (url.includes('/messages')) return Promise.resolve({ ok: true, status: 200, json: async () => emptyPage });
     return Promise.resolve({ ok: true, status: 200, json: async () => task });
   }));
@@ -102,8 +111,10 @@ describe('agent input outbox', () => {
 
   beforeEach(() => {
     onlineListeners = [];
+    browser.offline = false;
+    FakeWebSocket.instances.length = 0;
     vi.stubGlobal('WebSocket', FakeWebSocket);
-    vi.stubGlobal('navigator', { onLine: false });
+    vi.stubGlobal('navigator', { onLine: true });
     vi.stubGlobal('addEventListener', vi.fn((type: string, listener: () => void) => {
       if (type === 'online') onlineListeners.push(listener);
     }));
@@ -117,9 +128,10 @@ describe('agent input outbox', () => {
     vi.unstubAllGlobals();
   });
 
-  it('keeps a prompt the network lost and sends it once when the browser is back online', async () => {
-    // Tester, 2026-09-13: offline, send() failed with "Failed to send Agent prompt: Failed to
-    // fetch" and the message was gone.
+  it('keeps a prompt whose request got no response and sends it once when the browser says the network is back', async () => {
+    // Tester, 2026-09-13: send() failed with "Failed to send Agent prompt: Failed to fetch" and
+    // the message was gone. Here the browser still says it is online, so the request goes out
+    // and is what fails; the `online` event is the earliest of the two retry triggers.
     const inputs = copilot([networkLost, accepted]);
     const { session, errors, raws } = await openSession();
 
@@ -129,7 +141,7 @@ describe('agent input outbox', () => {
     expect(errors).toEqual([]);
     expect(outboxEvents(raws)).toEqual([{
       type: 'inputUnsent',
-      payload: { attempt: 1, reason: 'Failed to fetch', waitingForOnline: true },
+      payload: { attempt: 1, reason: 'Failed to fetch', waitingForOnline: false, retryInMs: OUTBOX_DELAYS_MS[0] },
     }]);
     // The turn is held, not failed: the prompt is still on its way.
     expect(session.status).toBe('streaming');
@@ -174,6 +186,77 @@ describe('agent input outbox', () => {
       error: expect.stringContaining('never sent'),
     }]);
     expect(onlineListeners).toHaveLength(0);
+  });
+
+  describe('with the browser really offline', () => {
+    // Tester, 2026-09-13, on the published beta.19: with the network off, send() still failed
+    // with "Failed to send Agent prompt: Failed to fetch" and the message was gone. Aborting
+    // only the /inputs request had passed: offline, the core's send opens the channel and reads
+    // the turn baseline first, and those requests fail before the prompt reaches /inputs.
+    const goOffline = () => {
+      browser.offline = true;
+      vi.stubGlobal('navigator', { onLine: false });
+      // The browser drops the socket it held, the way a network going away does.
+      FakeWebSocket.instances.at(-1)?.onclose?.({ code: 1006 } as CloseEvent);
+    };
+    const goOnline = () => {
+      browser.offline = false;
+      vi.stubGlobal('navigator', { onLine: true });
+      for (const listener of [...onlineListeners]) listener();
+    };
+
+    it('holds the prompt until the browser is back, then sends it once', async () => {
+      const inputs = copilot([accepted]);
+      const { session, errors, raws } = await openSession();
+      goOffline();
+
+      session.send('hello');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(errors).toEqual([]);
+      expect(inputs).not.toHaveBeenCalled();
+      expect(outboxEvents(raws)).toEqual([{
+        type: 'inputUnsent',
+        payload: { attempt: 0, reason: 'The browser is offline.', waitingForOnline: true },
+      }]);
+      expect(session.status).toBe('idle');
+
+      goOnline();
+      await vi.waitFor(() => expect(inputs).toHaveBeenCalledTimes(1));
+      expect(errors).toEqual([]);
+      expect(session.status).toBe('streaming');
+      session.close();
+    });
+
+    it('keeps the order of prompts sent while offline', async () => {
+      const inputs = copilot([accepted]);
+      const { session, errors } = await openSession();
+      goOffline();
+
+      session.send('first');
+      session.send('second');
+      goOnline();
+
+      await vi.waitFor(() => expect(inputs).toHaveBeenCalledTimes(1));
+      expect(JSON.parse(String(vi.mocked(fetch).mock.calls.at(-1)?.[1]?.body))).toMatchObject({ content: 'first' });
+      expect(session.queue.map((item) => item.text)).toEqual(['second']);
+      expect(errors).toEqual([]);
+      session.close();
+    });
+
+    it('says so when the session closes with a prompt still waiting for the network', async () => {
+      copilot([accepted]);
+      const { session, errors } = await openSession();
+      goOffline();
+      const waiting = session.sendAndWait('hello');
+      const waitingFailure = waiting.catch((error: Error) => error.message);
+
+      session.close();
+
+      expect(errors).toEqual([{ code: 'INPUT_UNSENT', error: expect.stringContaining('never sent') }]);
+      await expect(waitingFailure).resolves.toContain('never sent');
+      expect(onlineListeners).toHaveLength(0);
+    });
   });
 
   it('retries on a bounded backoff when the browser does not say it is offline, then gives up', async () => {

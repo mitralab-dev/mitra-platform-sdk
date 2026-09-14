@@ -10,13 +10,14 @@ import {
 import { coreErrors } from '../core-errors';
 import type { HttpClient } from '../utils/http-client';
 import type { AuthSessionPort } from './auth';
-import { AgentInputOutbox } from './agent-outbox';
+import { AgentInputOutbox, holdSendsWhileOffline } from './agent-outbox';
 import { BrowserAgentTaskEventSource } from './agent-session';
 
 /**
  * Composes Core's Agent lifecycle with the browser streaming boundary. The session's own
- * sends pass through the outbox, which holds a prompt the network lost until the browser is
- * back; the public REST primitive stays plain, so a direct `sendInput` fails as it always did.
+ * sends pass through the outbox, which holds a prompt while the browser is offline or when its
+ * request got no response, until the browser is back; the public REST primitive stays plain,
+ * so a direct `sendInput` fails as it always did.
  */
 export function createBrowserAgentTasksModule(
   httpClient: HttpClient,
@@ -53,7 +54,9 @@ export function createBrowserAgentTasksModule(
     tasks: { ...tasks, sendInput: (taskId, input) => outbox.sendInput(taskId, input) },
     eventSource,
   });
-  return withAgentTaskSessions(tasks, manager);
+  return withAgentTaskSessions(tasks, {
+    session: (options) => holdSendsWhileOffline(manager.session(options), outbox),
+  });
 }
 
 export type {

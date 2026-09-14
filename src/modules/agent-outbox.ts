@@ -1,4 +1,10 @@
-import type { AgentTaskEvent, AgentTaskInput, AgentTasksModule } from '@mitralab.io/sdk-core';
+import type {
+  AgentTaskEvent,
+  AgentTaskInput,
+  AgentTaskSession,
+  AgentTasksModule,
+  AgentTurnResult,
+} from '@mitralab.io/sdk-core';
 
 /**
  * Waits between retries of a prompt whose request got no response, while the browser does not
@@ -55,6 +61,19 @@ interface HeldPrompt {
   disarm(): void;
 }
 
+/** A prompt that has not entered the core yet: the browser said it was offline when it was sent. */
+interface GatedPrompt {
+  resolve(): void;
+  reject(error: Error): void;
+  disarm(): void;
+}
+
+function neverSent(pending: number): Error {
+  return new Error(
+    `Agent prompt was never sent: the session closed while it waited for the network (${pending} pending).`
+  );
+}
+
 /**
  * Prompts whose request never got a response, kept per task until the network takes them or
  * the session gives up on them. The core's `send()` awaits the promise, so the turn it started
@@ -64,6 +83,7 @@ interface HeldPrompt {
  */
 export class AgentInputOutbox {
   private readonly held = new Map<string, HeldPrompt[]>();
+  private readonly gated = new Map<object, GatedPrompt[]>();
 
   constructor(
     private readonly tasks: AgentTasksModule,
@@ -85,14 +105,62 @@ export class AgentInputOutbox {
     const pending = this.held.get(taskId);
     if (!pending?.length) return;
     this.held.delete(taskId);
-    const error = new Error(
-      `Agent prompt was never sent: the session closed while it waited for the network (${pending.length} pending).`
-    );
-    this.announce(taskId, {
-      type: 'error',
-      payload: { code: 'INPUT_UNSENT', message: error.message },
-      timestamp: Date.now(),
+    this.drop(taskId, pending);
+  }
+
+  /** True when the browser says there is no network at all. */
+  get offline(): boolean {
+    return this.network.isOffline();
+  }
+
+  /**
+   * Keeps a prompt out of the core until the browser reports the network is back, then hands it
+   * over through `deliver`. Prompts held for one session leave in the order they arrived. The
+   * promise settles when the prompt is handed over, or rejects if the session closes first.
+   */
+  holdUntilOnline(session: object, taskId: string | null, deliver: () => void): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const prompt: GatedPrompt = { resolve, reject, disarm: () => undefined };
+      this.gated.set(session, [...(this.gated.get(session) ?? []), prompt]);
+      if (taskId) {
+        this.announce(taskId, {
+          type: 'inputUnsent',
+          payload: { attempt: 0, reason: 'The browser is offline.', waitingForOnline: true },
+          timestamp: Date.now(),
+        });
+      }
+      const offOnline = this.network.onOnline(() => {
+        prompt.disarm();
+        const rest = (this.gated.get(session) ?? []).filter((candidate) => candidate !== prompt);
+        if (rest.length) this.gated.set(session, rest);
+        else this.gated.delete(session);
+        deliver();
+        resolve();
+      });
+      prompt.disarm = () => {
+        offOnline();
+        prompt.disarm = () => undefined;
+      };
     });
+  }
+
+  /** The session is closing with prompts that never entered the core: same report as `abandon`. */
+  abandonGated(session: object, taskId: string | null): void {
+    const pending = this.gated.get(session);
+    if (!pending?.length) return;
+    this.gated.delete(session);
+    this.drop(taskId, pending);
+  }
+
+  private drop(taskId: string | null, pending: GatedPrompt[]): void {
+    const error = neverSent(pending.length);
+    if (taskId) {
+      this.announce(taskId, {
+        type: 'error',
+        payload: { code: 'INPUT_UNSENT', message: error.message },
+        timestamp: Date.now(),
+      });
+    }
     for (const prompt of pending) {
       prompt.disarm();
       prompt.reject(error);
@@ -174,4 +242,45 @@ export class AgentInputOutbox {
     if (rest.length) this.held.set(taskId, rest);
     else this.held.delete(taskId);
   }
+}
+
+/**
+ * The core's send opens the channel and reads the turn baseline before the prompt goes out,
+ * and with the browser offline every one of those requests fails before `sendInput` is ever
+ * called, so the outbox above never sees the prompt and the core reports it as failed. While
+ * the browser says it is offline a prompt therefore does not enter the core at all: it waits
+ * in the outbox and is sent, in order, once the network is back. Everything else on the
+ * session is the core's, untouched.
+ */
+export function holdSendsWhileOffline(
+  session: AgentTaskSession,
+  outbox: AgentInputOutbox
+): AgentTaskSession {
+  const passThrough = (prompt: string) => !outbox.offline || !prompt.trim() || session.status === 'closed';
+  const gated: Pick<AgentTaskSession, 'send' | 'sendAndWait' | 'close'> = {
+    send: (prompt, options) => {
+      if (passThrough(prompt)) {
+        session.send(prompt, options);
+        return;
+      }
+      void outbox.holdUntilOnline(session, session.taskId, () => session.send(prompt, options))
+        .catch(() => undefined);
+    },
+    sendAndWait: (prompt, options) => {
+      if (passThrough(prompt)) return session.sendAndWait(prompt, options);
+      let turn: Promise<AgentTurnResult> | undefined;
+      return outbox
+        .holdUntilOnline(session, session.taskId, () => {
+          turn = session.sendAndWait(prompt, options);
+        })
+        .then(() => turn as Promise<AgentTurnResult>);
+    },
+    close: () => {
+      outbox.abandonGated(session, session.taskId);
+      session.close();
+    },
+  };
+  return new Proxy(session, {
+    get: (target, key) => (key in gated ? gated[key as keyof typeof gated] : Reflect.get(target, key, target)),
+  });
 }
