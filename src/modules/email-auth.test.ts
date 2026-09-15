@@ -230,7 +230,18 @@ describe('Email sign-in', () => {
     expect(fetchMock).not.toHaveBeenCalled();
     expect(browser.localStorage.removeItem).not.toHaveBeenCalled();
     expect(browser.localStorage._store[PENDING_KEY]).toBeDefined();
-    expect(browser.window.history.replaceState).not.toHaveBeenCalled();
+    expect(browser.window.history.replaceState).toHaveBeenCalledWith({}, '', '/orders?status=open');
+  });
+
+  it('drops its own fragment from the URL when it cannot be completed', async () => {
+    const browser = mockBrowser();
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    void auth.signInWithEmail({ mode: 'redirect' });
+    browser.window.location.hash = '#codeMitra=redirect-code&stateMitra=email.attacker';
+
+    await expect(auth.completeEmailSignInRedirect()).rejects.toThrow('possible CSRF');
+    expect(browser.window.history.replaceState).toHaveBeenCalledWith({}, '', '/orders?status=open');
   });
 
   it('completes the tab opened by the link from the request another tab left pending', async () => {
@@ -263,7 +274,7 @@ describe('Email sign-in', () => {
 
     await expect(auth.completeEmailSignInRedirect()).rejects.toThrow('possible CSRF');
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(browser.window.history.replaceState).not.toHaveBeenCalled();
+    expect(browser.window.history.replaceState).toHaveBeenCalled();
   });
 
   it('refuses an email fragment whose state is not the pending one', async () => {
@@ -277,7 +288,7 @@ describe('Email sign-in', () => {
     await expect(auth.completeEmailSignInRedirect()).rejects.toThrow('possible CSRF');
     expect(fetchMock).not.toHaveBeenCalled();
     expect(browser.localStorage._store[PENDING_KEY]).toBeDefined();
-    expect(browser.window.history.replaceState).not.toHaveBeenCalled();
+    expect(browser.window.history.replaceState).toHaveBeenCalled();
   });
 
   it('keeps the request pending when the popup is cancelled, so the link can still finish it', async () => {
@@ -294,6 +305,23 @@ describe('Email sign-in', () => {
     expect(browser.localStorage.removeItem).not.toHaveBeenCalledWith(PENDING_KEY);
   });
 
+  it('refuses and discards a pending request that carries no creation time', async () => {
+    const browser = mockBrowser();
+    const fetchMock = mockFetchSequence([]);
+    browser.localStorage._store[PENDING_KEY] = JSON.stringify({
+      state: OTHER_TAB_STATE,
+      redirectUri: AUTH_PAGE_URL,
+    });
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    browser.window.location.hash = `#codeMitra=link-code&stateMitra=${OTHER_TAB_STATE}`;
+
+    await expect(auth.completeEmailSignInRedirect()).rejects.toThrow('expired');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(browser.localStorage._store[PENDING_KEY]).toBeUndefined();
+    expect(browser.window.history.replaceState).toHaveBeenCalled();
+  });
+
   it('refuses and discards a pending request older than ten minutes', async () => {
     const browser = mockBrowser();
     const fetchMock = mockFetchSequence([]);
@@ -305,6 +333,7 @@ describe('Email sign-in', () => {
     await expect(auth.completeEmailSignInRedirect()).rejects.toThrow('expired');
     expect(fetchMock).not.toHaveBeenCalled();
     expect(browser.localStorage._store[PENDING_KEY]).toBeUndefined();
+    expect(browser.window.history.replaceState).toHaveBeenCalled();
   });
 
   it('refuses an exchanged token issued for another app before persisting or hydrating', async () => {
