@@ -1,7 +1,7 @@
 import type { AgentTaskEventObserver } from '@mitralab.io/sdk-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthSessionPort } from './auth';
-import { BrowserAgentTaskEventSource } from './agent-session';
+import { BrowserAgentTaskEventSource, SILENCE_TIMEOUT_MS } from './agent-session';
 
 class FakeWebSocket {
   static readonly instances: FakeWebSocket[] = [];
@@ -158,6 +158,76 @@ describe('BrowserAgentTaskEventSource', () => {
     FakeWebSocket.instances[1].onerror?.();
     await expect(explicit).rejects.toThrow('Failed to connect');
     expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it('reports a WebSocket that went silent as disconnected, and a ping keeps it alive', async () => {
+    vi.useFakeTimers();
+    const events = observer();
+    const source = new BrowserAgentTaskEventSource(auth(), 'https://api.mitra.io');
+    const connection = await source.open('task-1', events, undefined, 'websocket');
+    const socket = FakeWebSocket.instances[0];
+
+    // Just under the window: a late ping, not a dead channel.
+    await vi.advanceTimersByTimeAsync(SILENCE_TIMEOUT_MS - 1_000);
+    expect(events.onDisconnect).not.toHaveBeenCalled();
+
+    // A ping is a frame like any other, and it moves the window.
+    socket.message({ type: 'ping', payload: {}, timestamp: 1 });
+    await vi.advanceTimersByTimeAsync(SILENCE_TIMEOUT_MS - 1_000);
+    expect(events.onDisconnect).not.toHaveBeenCalled();
+
+    // Two pings missed: the channel is half-open and nothing else will ever say so. The
+    // disconnect is reported once, from here, and the socket is let go.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(events.onDisconnect).toHaveBeenCalledTimes(1);
+    expect(events.onDisconnect.mock.calls[0][0]).toBeInstanceOf(Error);
+    expect(String(events.onDisconnect.mock.calls[0][0])).toContain('silent');
+    expect(socket.close).toHaveBeenCalled();
+
+    // The close the watchdog started must not report a second disconnect.
+    connection.close();
+    expect(events.onDisconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not count a socket the caller closed as silent', async () => {
+    vi.useFakeTimers();
+    const events = observer();
+    const source = new BrowserAgentTaskEventSource(auth(), 'https://api.mitra.io');
+    const connection = await source.open('task-1', events, undefined, 'websocket');
+
+    connection.close();
+    await vi.advanceTimersByTimeAsync(SILENCE_TIMEOUT_MS * 2);
+
+    expect(events.onDisconnect).not.toHaveBeenCalled();
+  });
+
+  it('reports an SSE stream that went silent as disconnected, and bytes keep it alive', async () => {
+    vi.useFakeTimers();
+    const events = observer();
+    let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const stream = new ReadableStream<Uint8Array>({
+      start(value) { controller = value; },
+    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, body: stream }));
+    const source = new BrowserAgentTaskEventSource(auth(), 'https://api.mitra.io');
+    const connection = await source.open('task-1', events, undefined, 'http');
+
+    await vi.advanceTimersByTimeAsync(SILENCE_TIMEOUT_MS - 1_000);
+    expect(events.onDisconnect).not.toHaveBeenCalled();
+
+    // The copilot's SSE ping is `data: {}`: not an event, but bytes, and bytes move the window.
+    controller?.enqueue(new TextEncoder().encode('data: {}\r\n\r\n'));
+    await vi.advanceTimersByTimeAsync(SILENCE_TIMEOUT_MS - 1_000);
+    expect(events.onDisconnect).not.toHaveBeenCalled();
+    expect(events.onEvent).not.toHaveBeenCalled();
+
+    // A read nothing answers is what a half-open stream looks like: the fetch is aborted from
+    // here and the disconnect carries the reason.
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(events.onDisconnect).toHaveBeenCalledTimes(1);
+    expect(String(events.onDisconnect.mock.calls[0][0])).toContain('silent');
+    connection.close();
   });
 
   it('refuses both transports when proactive refresh cannot provide a token', async () => {

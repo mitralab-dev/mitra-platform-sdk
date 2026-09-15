@@ -9,6 +9,36 @@ import type {
 import type { AuthSessionPort } from './auth';
 
 const CONNECT_TIMEOUT_MS = 15_000;
+/**
+ * Silence that counts as a dead channel. The copilot pings every 25 s on both transports, so
+ * two missed pings is a network, proxy or suspended tab that killed the channel without closing
+ * it. Without this a half-open channel never produces `onclose` nor ends the SSE read, so
+ * `onDisconnect` never fires and the recovery the core already has never starts.
+ */
+export const SILENCE_TIMEOUT_MS = 60_000;
+
+/** Rearmed by every frame, ping included. Firing means the channel is gone, not idle. */
+class SilenceWatchdog {
+  private timer: ReturnType<typeof setTimeout> | null = null;
+
+  constructor(private readonly onSilence: () => void) {}
+
+  touch(): void {
+    this.clear();
+    this.timer = globalThis.setTimeout(this.onSilence, SILENCE_TIMEOUT_MS);
+  }
+
+  clear(): void {
+    if (this.timer !== null) {
+      globalThis.clearTimeout(this.timer);
+      this.timer = null;
+    }
+  }
+}
+
+function silenceError(transport: string): Error {
+  return new Error(`Agent ${transport} went silent for ${SILENCE_TIMEOUT_MS / 1000}s.`);
+}
 
 function stripBearer(token: string): string {
   return token.replace(/^Bearer\s+/i, '');
@@ -143,9 +173,19 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
         socket.close();
         reject(error);
       };
+      const watchdog = new SilenceWatchdog(() => {
+        if (intentionalClose) return;
+        // Reported from here, not from `onclose`: closing a half-open socket can sit in
+        // CLOSING for as long as the browser waits for a peer that is already gone.
+        intentionalClose = true;
+        removeAbortListener();
+        observer.onDisconnect(silenceError('WebSocket'));
+        socket.close(1000, 'Client closed');
+      });
       const close = () => {
         if (intentionalClose) return;
         intentionalClose = true;
+        watchdog.clear();
         removeAbortListener();
         socket.close(1000, 'Client closed');
       };
@@ -168,17 +208,21 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
         opened = true;
         settled = true;
         globalThis.clearTimeout(timer);
+        watchdog.touch();
         resolve({ close });
       };
       socket.onerror = () => {
         if (!opened) rejectHandshake(new Error('Failed to connect to the Agent WebSocket.'));
       };
       socket.onmessage = (message) => {
+        // Any frame proves the channel is alive, ping included: touch before parsing.
+        watchdog.touch();
         const event = parseEvent(message.data);
         if (event) observer.onEvent(event);
       };
       socket.onclose = (event) => {
         globalThis.clearTimeout(timer);
+        watchdog.clear();
         removeAbortListener();
         if (!opened) {
           rejectHandshake(new Error(`Agent WebSocket closed during handshake (${event.code}).`));
@@ -228,7 +272,7 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
       disconnected = true;
       observer.onDisconnect(error);
     };
-    void this.readSse(response.body, observer, abort.signal)
+    void this.readSse(response.body, observer, abort)
       .then(() => disconnect())
       .catch((error: unknown) => disconnect(error))
       .finally(() => signal?.removeEventListener('abort', onAbort));
@@ -246,14 +290,31 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
   private async readSse(
     body: ReadableStream<Uint8Array>,
     observer: AgentTaskEventObserver,
-    signal: AbortSignal
+    abort: AbortController
   ): Promise<void> {
     const reader = body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
+    // A read that nothing answers is the SSE shape of a half-open channel: the copilot's ping
+    // is bytes like any other, so silence past the window is the stream being gone. The read
+    // is raced against the window rather than relying on the abort to fail it, because not
+    // every fetch fails a pending read the moment its signal fires.
+    let breakSilence!: (error: Error) => void;
+    const silence = new Promise<never>((_, reject) => { breakSilence = reject; });
+    const watchdog = new SilenceWatchdog(() => breakSilence(silenceError('SSE stream')));
     try {
-      while (!signal.aborted) {
-        const { done, value } = await reader.read();
+      watchdog.touch();
+      while (!abort.signal.aborted) {
+        let chunk: ReadableStreamReadResult<Uint8Array>;
+        try {
+          chunk = await Promise.race([reader.read(), silence]);
+        } catch (error) {
+          abort.abort();
+          await reader.cancel().catch(() => undefined);
+          throw error;
+        }
+        watchdog.touch();
+        const { done, value } = chunk;
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
         let separator = /\r?\n\r?\n/.exec(buffer);
@@ -270,6 +331,7 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
         }
       }
     } finally {
+      watchdog.clear();
       reader.releaseLock();
     }
   }
