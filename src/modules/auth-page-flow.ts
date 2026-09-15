@@ -3,22 +3,59 @@ import { expectObject } from '@mitralab.io/sdk-core';
 import { coreErrors } from '../core-errors';
 import type { HttpClient } from '../utils/http-client';
 import { resolveAuthPageUrl } from './auth-page-url';
-import type { AuthTokenResponse, GoogleSignInOptions } from './auth.types';
+import type { AuthPageSignInOptions, AuthTokenResponse } from './auth.types';
 
 const RESULT_TYPE = 'mitra-oauth-result';
 
-export type AuthPageProvider = 'google' | 'microsoft';
+export type AuthPageProvider = 'google' | 'microsoft' | 'email';
 
-const PROVIDER_LABELS: Record<AuthPageProvider, string> = {
-  google: 'Google',
-  microsoft: 'Microsoft',
+interface AuthPageProviderProfile {
+  /** Name of the provider in errors handed to the application. */
+  label: string;
+  /** IAM route that turns the single-use code into an app session. */
+  exchangePath: string;
+  /** Whether the exchange binds the code to the auth page that received it. */
+  sendsRedirectUri: boolean;
+  /** Where the pending request lives between the start of the flow and its completion. */
+  redirectStorage: 'sessionStorage' | 'localStorage';
+  /**
+   * How long a pending request stays acceptable. Its presence is what says this
+   * flow can also be finished in another tab: the message the platform emails
+   * carries a link, that link opens a tab which never saw the popup this SDK
+   * opened, so the request is written even for a popup and expires on its own.
+   * Absent means the flow is finished only by the tab that started it, and the
+   * pending request lives exactly as long as that tab does.
+   */
+  pendingRequestTtlMs?: number;
+}
+
+const PROVIDERS: Record<AuthPageProvider, AuthPageProviderProfile> = {
+  google: {
+    label: 'Google',
+    exchangePath: '/api/v1/auth/google',
+    sendsRedirectUri: true,
+    redirectStorage: 'sessionStorage',
+  },
+  microsoft: {
+    label: 'Microsoft',
+    exchangePath: '/api/v1/auth/microsoft',
+    sendsRedirectUri: true,
+    redirectStorage: 'sessionStorage',
+  },
+  email: {
+    label: 'Email',
+    exchangePath: '/api/v1/auth/magic-link/exchange',
+    sendsRedirectUri: false,
+    redirectStorage: 'localStorage',
+    pendingRequestTtlMs: 10 * 60 * 1_000,
+  },
 };
 const POPUP_WIDTH = 480;
 const POPUP_HEIGHT = 600;
 const POPUP_TIMEOUT_MS = 5 * 60 * 1_000;
 const POPUP_CLOSED_POLL_MS = 500;
 
-interface GoogleAuthFlowConfig {
+interface AuthPageFlowConfig {
   appId: string;
   apiUrl: string;
   authPageUrl?: string;
@@ -30,6 +67,7 @@ interface GoogleAuthFlowConfig {
 interface RedirectContext {
   state: string;
   redirectUri: string;
+  createdAt: number;
 }
 
 type MitraWindow = Window & { __mitraEnv?: { authPageUrl?: unknown } };
@@ -56,28 +94,30 @@ export function expectAuthTokenResponse(value: unknown): AuthTokenResponse {
   };
 }
 
-/** Coordinates the browser-only OAuth handshake through the brand auth page (Google or Microsoft) and returns IAM tokens. */
-export class GoogleAuthFlow {
+/** Coordinates the browser-only handshake through the brand auth page (Google, Microsoft, or email) and returns IAM tokens. */
+export class AuthPageFlow {
   private readonly appId: string;
   private readonly apiUrl: string;
   private readonly configuredAuthPageUrl?: string;
   private readonly client: HttpClient;
   private readonly provider: AuthPageProvider;
+  private readonly profile: AuthPageProviderProfile;
   private readonly providerLabel: string;
   private readonly redirectStorageKey: string;
   private popupPromise: Promise<AuthTokenResponse> | null = null;
 
-  constructor(config: GoogleAuthFlowConfig) {
+  constructor(config: AuthPageFlowConfig) {
     this.appId = config.appId;
     this.apiUrl = stripTrailingSlashes(config.apiUrl);
     this.configuredAuthPageUrl = config.authPageUrl;
     this.client = config.client;
     this.provider = config.provider ?? 'google';
-    this.providerLabel = PROVIDER_LABELS[this.provider];
+    this.profile = PROVIDERS[this.provider];
+    this.providerLabel = this.profile.label;
     this.redirectStorageKey = `mitra_${this.provider}_redirect_${config.appId}`;
   }
 
-  signIn(options: GoogleSignInOptions = {}): Promise<AuthTokenResponse> {
+  signIn(options: AuthPageSignInOptions = {}): Promise<AuthTokenResponse> {
     const browserWindow = this.requireBrowser();
 
     if (options.mode === 'redirect') {
@@ -96,6 +136,19 @@ export class GoogleAuthFlow {
     return this.popupPromise;
   }
 
+  /**
+   * Finishes a redirect this provider started, or returns `null` when the URL
+   * carries no result or carries one that belongs to another provider's flow.
+   *
+   * The state generated at the start of every flow is prefixed with the provider
+   * name, and the auth page echoes it verbatim, so a fragment identifies its own
+   * flow. An application that offers several methods can call every completion
+   * at startup, in any order, even while other methods have requests pending.
+   *
+   * A fragment of this flow is always consumed, including when it cannot be
+   * completed, so a failure is reported once instead of on every reload. A
+   * fragment of another flow is left exactly as it was found.
+   */
   async completeRedirect(): Promise<AuthTokenResponse | null> {
     const browserWindow = this.requireBrowser();
     const params = new URLSearchParams(browserWindow.location.hash.replace(/^#/, ''));
@@ -106,18 +159,41 @@ export class GoogleAuthFlow {
     if (code === null && state === null && error === null) return null;
 
     const context = this.readRedirectContext(browserWindow);
-    if (!state?.trim()) {
-      throw new Error(`${this.providerLabel} sign-in redirect is missing state.`);
+    // One fragment belongs to one flow, and the state says which one. A fragment
+    // from another method is left untouched for its owner rather than reported as
+    // forged, so every completion can run at startup whatever is pending.
+    const hasState = state !== null && state.trim() !== '';
+    if (hasState && !this.ownsState(state)) return null;
+    if (!hasState && !context) return null;
+
+    if (!hasState) {
+      throw this.discardOwnRedirect(
+        browserWindow,
+        `${this.providerLabel} sign-in redirect is missing state.`
+      );
+    }
+    if (context && this.hasExpired(context)) {
+      this.clearRedirectContext(browserWindow);
+      throw this.discardOwnRedirect(
+        browserWindow,
+        `${this.providerLabel} sign-in request expired before it was completed.`
+      );
     }
     if (context?.state !== state) {
-      throw new Error(`Invalid ${this.providerLabel} sign-in state (possible CSRF).`);
+      throw this.discardOwnRedirect(
+        browserWindow,
+        `Invalid ${this.providerLabel} sign-in state (possible CSRF).`
+      );
     }
 
     const expectedRedirectUri = this.getRedirectUri(
       resolveAuthPageUrl(this.apiUrl, this.configuredAuthPageUrl, browserWindow)
     );
     if (context.redirectUri !== expectedRedirectUri) {
-      throw new Error(`${this.providerLabel} sign-in redirect context is invalid.`);
+      throw this.discardOwnRedirect(
+        browserWindow,
+        `${this.providerLabel} sign-in redirect context is invalid.`
+      );
     }
 
     this.cleanRedirectFragment(browserWindow);
@@ -140,8 +216,17 @@ export class GoogleAuthFlow {
       this.configuredAuthPageUrl,
       browserWindow
     );
+    // A popup started here can still be finished in the tab the link opens, which
+    // has no memory of this one, so the request is written down before it opens.
+    // Best effort: without storage the popup itself still works, only that other
+    // tab loses the way to finish the flow.
+    const completedInAnotherTab = this.profile.pendingRequestTtlMs !== undefined;
+    if (completedInAnotherTab) {
+      this.writeRedirectContext(browserWindow, this.newRedirectContext(state, authPageUrl));
+    }
     const popup = this.openPopup(browserWindow, this.buildStartUrl(browserWindow, authPageUrl, state));
     const result = await this.waitForPopupResult(browserWindow, popup, authPageUrl.origin, state);
+    if (completedInAnotherTab) this.clearRedirectContext(browserWindow);
 
     if (result.code) return this.exchangeCode(result.code, this.getRedirectUri(authPageUrl));
 
@@ -155,12 +240,12 @@ export class GoogleAuthFlow {
       this.configuredAuthPageUrl,
       browserWindow
     );
-    const context: RedirectContext = {
-      state,
-      redirectUri: this.getRedirectUri(authPageUrl),
-    };
 
-    this.persistRedirectContext(browserWindow, context);
+    if (!this.writeRedirectContext(browserWindow, this.newRedirectContext(state, authPageUrl))) {
+      throw new Error(
+        `${this.providerLabel} sign-in redirect requires ${this.profile.redirectStorage}.`
+      );
+    }
     const startUrl = this.buildStartUrl(browserWindow, authPageUrl, state);
     browserWindow.location.assign(startUrl.toString());
 
@@ -171,10 +256,10 @@ export class GoogleAuthFlow {
     code: string,
     redirectUri: string
   ): Promise<AuthTokenResponse> {
-    const response = await this.client.post<unknown>(`/api/v1/auth/${this.provider}`, {
+    const response = await this.client.post<unknown>(this.profile.exchangePath, {
       appId: this.appId,
       code,
-      redirectUri,
+      ...(this.profile.sendsRedirectUri ? { redirectUri } : {}),
     });
 
     return expectAuthTokenResponse(response);
@@ -199,13 +284,45 @@ export class GoogleAuthFlow {
     return `${authPageUrl.origin}${authPageUrl.pathname}`;
   }
 
+  private newRedirectContext(state: string, authPageUrl: URL): RedirectContext {
+    return {
+      state,
+      redirectUri: this.getRedirectUri(authPageUrl),
+      createdAt: Date.now(),
+    };
+  }
+
+  /**
+   * Reports a fragment of this flow that cannot be completed, dropping it from the
+   * URL first. Nobody else claims a fragment that names this flow, so leaving it
+   * there would make the application fail again on every reload.
+   */
+  private discardOwnRedirect(browserWindow: MitraWindow, message: string): Error {
+    this.cleanRedirectFragment(browserWindow);
+    return new Error(message);
+  }
+
+  /** Whether a state echoed by the auth page was generated by this provider's flow. */
+  private ownsState(state: string): boolean {
+    return state.startsWith(`${this.provider}.`);
+  }
+
+  private hasExpired(context: RedirectContext): boolean {
+    const ttlMs = this.profile.pendingRequestTtlMs;
+    if (ttlMs === undefined) return false;
+    if (!Number.isFinite(context.createdAt)) return true;
+    return Date.now() - context.createdAt > ttlMs;
+  }
+
+  /** A one-time state that names the flow that created it, so its fragment is recognizable. */
   private generateState(): string {
     if (!globalThis.crypto?.getRandomValues) {
       throw new Error(`${this.providerLabel} sign-in requires crypto.getRandomValues.`);
     }
     const bytes = new Uint8Array(16);
     globalThis.crypto.getRandomValues(bytes);
-    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+    const random = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+    return `${this.provider}.${random}`;
   }
 
   private openPopup(browserWindow: MitraWindow, url: URL): Window {
@@ -215,7 +332,7 @@ export class GoogleAuthFlow {
     const top = Math.max(0, (browserWindow.screenY || 0) + (outerHeight - POPUP_HEIGHT) / 2);
     const popup = browserWindow.open(
       url.toString(),
-      'mitra-google-oauth',
+      `mitra-${this.provider}-auth`,
       `width=${POPUP_WIDTH},height=${POPUP_HEIGHT},left=${left},top=${top},menubar=no,toolbar=no,status=no`
     );
     if (!popup) {
@@ -264,7 +381,7 @@ export class GoogleAuthFlow {
         const code = typeof data.code === 'string' && data.code.trim() ? data.code : undefined;
         if (!code && data.token === undefined) {
           cleanup();
-          reject(new Error('Google auth page returned neither code nor token.'));
+          reject(new Error(`${this.providerLabel} auth page returned neither code nor token.`));
           return;
         }
 
@@ -283,23 +400,29 @@ export class GoogleAuthFlow {
     });
   }
 
-  private persistRedirectContext(browserWindow: MitraWindow, context: RedirectContext): void {
+  /** Writes the pending request, reporting whether storage accepted it. */
+  private writeRedirectContext(browserWindow: MitraWindow, context: RedirectContext): boolean {
     try {
-      browserWindow.sessionStorage.setItem(this.redirectStorageKey, JSON.stringify(context));
+      browserWindow[this.profile.redirectStorage].setItem(
+        this.redirectStorageKey,
+        JSON.stringify(context)
+      );
+      return true;
     } catch {
-      throw new Error(`${this.providerLabel} sign-in redirect requires sessionStorage.`);
+      return false;
     }
   }
 
   private readRedirectContext(browserWindow: MitraWindow): RedirectContext | null {
     try {
-      const raw = browserWindow.sessionStorage.getItem(this.redirectStorageKey);
+      const raw = browserWindow[this.profile.redirectStorage].getItem(this.redirectStorageKey);
       if (!raw) return null;
       const value = JSON.parse(raw) as Record<string, unknown>;
       if (typeof value.state !== 'string' || typeof value.redirectUri !== 'string') return null;
       return {
         state: value.state,
         redirectUri: value.redirectUri,
+        createdAt: typeof value.createdAt === 'number' ? value.createdAt : Number.NaN,
       };
     } catch {
       return null;
@@ -308,7 +431,7 @@ export class GoogleAuthFlow {
 
   private clearRedirectContext(browserWindow: MitraWindow): void {
     try {
-      browserWindow.sessionStorage.removeItem(this.redirectStorageKey);
+      browserWindow[this.profile.redirectStorage].removeItem(this.redirectStorageKey);
     } catch {
       // The context is already unusable when storage is unavailable.
     }

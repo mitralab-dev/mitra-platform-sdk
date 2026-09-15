@@ -156,7 +156,8 @@ export interface MitraClient {
   /**
    * Authentication module for managing user sessions.
    *
-   * Handles Google SSO, trusted preview sessions, and session lifecycle.
+   * Handles Google and Microsoft SSO, email sign-in, trusted preview sessions,
+   * and session lifecycle.
    *
    * @example
    * ```typescript
@@ -411,6 +412,8 @@ export type {
   User,
   SignInCredentials,
   SignUpData,
+  AuthPageSignInOptions,
+  EmailSignInOptions,
   GoogleSignInOptions,
   MicrosoftSignInOptions,
 } from './modules/auth';

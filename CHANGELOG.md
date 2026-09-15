@@ -2,6 +2,33 @@
 
 All notable changes to this project are documented in this file.
 
+## 1.2.0-beta.1
+
+- Add `signInWithEmail()`: the platform auth page collects the address and the one-time code, and
+  the single-use exchange code it returns is redeemed at IAM's `/auth/magic-link/exchange` for the
+  same app session Google and Microsoft SSO already produce.
+- Add `completeEmailSignInRedirect()`, which finishes both the mobile redirect and the tab opened
+  by the link in the message.
+- Keep the pending email request, the one-time state and the auth page URL and never a token, in
+  `localStorage` for 10 minutes, so the tab opened by the link in the message finishes the flow
+  through the same state check the redirect uses. Writing it is best effort for a popup and
+  required for a redirect.
+- Consume a fragment of the flow's own provider even when it cannot be completed, so a rejected or
+  expired redirect is reported once instead of on every reload. A fragment of another flow stays
+  untouched, and a pending request is still dropped only when it expires.
+- Name the flow in the one-time state (`google.<random>`, `microsoft.<random>`, `email.<random>`),
+  which the auth page echoes verbatim, so every `complete*SignInRedirect()` recognizes its own
+  fragment: a fragment from another method returns `null` untouched, whatever this browser has
+  pending, and an application that offers all three can call all three at startup in any order. A
+  fragment that names this flow without matching its pending request is rejected as forged.
+- Generalize the auth page handshake into `AuthPageFlow`, parameterized by provider, exchange
+  route, and where the pending request lives, instead of a second copy for email.
+- Upgrading mid-flow: a redirect started by an earlier version stored a state without the provider
+  name, so the completion after the upgrade returns `null` and the person signs in again. Nothing
+  is lost beyond that one attempt, and only for redirects in flight during the upgrade.
+- Give each provider its own popup window name.
+- Point the deprecated `signIn` and `signUp` failures at `signInWithEmail()`.
+
 ## 1.1.0-beta.2
 
 `1.1.0-beta.1` was published from `main` before this change landed, so it still depends on Core `0.2.0-beta.0`; use `1.1.0-beta.2`.
