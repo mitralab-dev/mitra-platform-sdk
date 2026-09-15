@@ -29,14 +29,23 @@ export interface AuthSession {
   refreshToken?: string | null;
 }
 
-/** Options for Google SSO. */
-export interface GoogleSignInOptions {
+/** Options for a sign-in that runs through the brand auth page. */
+export interface AuthPageSignInOptions {
   /** Opens a popup by default. Redirect mode navigates the current page. */
   mode?: 'popup' | 'redirect';
 }
 
+/** Options for Google SSO. */
+export type GoogleSignInOptions = AuthPageSignInOptions;
+
 /** Options for Microsoft SSO. Same handshake as Google, through the brand auth page. */
-export type MicrosoftSignInOptions = GoogleSignInOptions;
+export type MicrosoftSignInOptions = AuthPageSignInOptions;
+
+/**
+ * Options for email sign-in. Same handshake as SSO, through the brand auth page,
+ * which collects the address and the one-time code.
+ */
+export type EmailSignInOptions = AuthPageSignInOptions;
 
 /**
  * Response from authentication token endpoints.
