@@ -30,6 +30,10 @@ export const SILENCE_TIMEOUT_MS = 60_000;
  * is still booting.
  */
 export const RECONNECT_DELAYS_MS: readonly number[] = [1_000, 2_000, 4_000, 8_000, 16_000];
+type ReopenOutcome =
+  | { readonly kind: 'socket'; readonly socket: LiveSocket }
+  | { readonly kind: 'refused' }
+  | { readonly kind: 'failed'; readonly error: Error };
 /** The copilot closes the older socket with this code when the same chat is opened elsewhere. */
 const SUPERSEDED_CLOSE_CODE = 4409;
 
@@ -423,31 +427,46 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
       }));
       await sleep(delayMs, signal);
       if (signal.aborted) return null;
-      try {
-        const token = await this.requireFreshToken();
-        const channel = await this.askDirectChannel(taskId, token, signal);
-        if (signal.aborted) return null;
-        if (!channel) {
-          observer.onDisconnect(new Error(
-            `The copilot no longer offers the box channel (after: ${cause.message})`
-          ));
-          return null;
-        }
-        this.adoptBox(taskId, channel);
-        const replayFrom = this.boxCursors.get(taskId);
-        if (replayFrom === undefined) this.boxCursors.set(taskId, channel.lastSequence);
-        const socket = await this.dial(channel.wsUrl, { ...handlers, signal, replayFrom });
+      const outcome = await this.reopenOnce(taskId, signal, handlers);
+      if (signal.aborted) return null;
+      if (outcome.kind === 'socket') {
         observer.onEvent(channelEvent('channelConnected', { attempt }));
-        return socket;
-      } catch (error) {
-        if (signal.aborted) return null;
-        lastError = error instanceof Error ? error : new Error(String(error));
+        return outcome.socket;
       }
+      if (outcome.kind === 'refused') {
+        observer.onDisconnect(new Error(
+          `The copilot no longer offers the box channel (after: ${cause.message})`
+        ));
+        return null;
+      }
+      lastError = outcome.error;
     }
     observer.onDisconnect(new Error(
       `Agent box channel could not be reopened after ${RECONNECT_DELAYS_MS.length} attempts: ${lastError.message}`
     ));
     return null;
+  }
+
+  // One attempt to get the box back: a fresh token, the channel request, the dial. A failure is
+  // returned rather than thrown, so the caller decides between another attempt and giving up.
+  private async reopenOnce(
+    taskId: string,
+    signal: AbortSignal,
+    handlers: Pick<DialOptions, 'onFrame' | 'onLost'>
+  ): Promise<ReopenOutcome> {
+    try {
+      const token = await this.requireFreshToken();
+      const channel = await this.askDirectChannel(taskId, token, signal);
+      if (signal.aborted) return { kind: 'failed', error: new Error('Agent box redial aborted.') };
+      if (!channel) return { kind: 'refused' };
+      this.adoptBox(taskId, channel);
+      const replayFrom = this.boxCursors.get(taskId);
+      if (replayFrom === undefined) this.boxCursors.set(taskId, channel.lastSequence);
+      const socket = await this.dial(channel.wsUrl, { ...handlers, signal, replayFrom });
+      return { kind: 'socket', socket };
+    } catch (error) {
+      return { kind: 'failed', error: error instanceof Error ? error : new Error(String(error)) };
+    }
   }
 
   private dial(url: string, options: DialOptions): Promise<LiveSocket> {

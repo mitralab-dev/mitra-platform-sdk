@@ -371,8 +371,8 @@ describe('BrowserAgentTaskEventSource', () => {
     expect(second).not.toBe(first);
     expect(second.url).toBe(BOX_WS_URL);
     // Two channel requests, no SSE stream: the box path was asked for again, not abandoned.
-    expect(fetchMock.mock.calls.filter((c) => String(c[0]).includes('/channel')).length).toBe(2);
-    expect(fetchMock.mock.calls.filter((c) => !String(c[0]).includes('/channel')).length).toBe(0);
+    expect(fetchMock.mock.calls.filter((c) => String(c[0]).includes('/channel'))).toHaveLength(2);
+    expect(fetchMock.mock.calls.filter((c) => !String(c[0]).includes('/channel'))).toHaveLength(0);
   });
 
   it('hands a replayed textChunk to the core as the delta it stands for', async () => {
@@ -446,7 +446,7 @@ describe('BrowserAgentTaskEventSource', () => {
       const second = FakeWebSocket.instances[1];
       expect(second.url).toBe(BOX_WS_URL);
       expect(second.sent).toEqual([JSON.stringify({ type: 'replay', fromSequence: 5 })]);
-      expect(fetchMock.mock.calls.filter((c) => String(c[0]).includes('/channel')).length).toBe(2);
+      expect(fetchMock.mock.calls.filter((c) => String(c[0]).includes('/channel'))).toHaveLength(2);
       expect(channelEvents(events).at(-1)).toEqual({ type: 'channelConnected', payload: { attempt: 1 } });
 
       // Replayed and live frames of the new socket reach the same observer, same delta path.
@@ -616,76 +616,6 @@ describe('BrowserAgentTaskEventSource', () => {
       expect(FakeWebSocket.instances).toHaveLength(1);
       expect(events.onDisconnect).not.toHaveBeenCalled();
     });
-  });
-
-  it('does not count a socket the caller closed as silent', async () => {
-    vi.useFakeTimers();
-    const events = observer();
-    const source = new BrowserAgentTaskEventSource(auth(), 'https://api.mitra.io');
-    const connection = await source.open('task-1', events, undefined, 'websocket');
-
-    connection.close();
-    await vi.advanceTimersByTimeAsync(SILENCE_TIMEOUT_MS * 2);
-
-    expect(events.onDisconnect).not.toHaveBeenCalled();
-  });
-
-  it('reports an SSE stream that went silent as disconnected, and bytes keep it alive', async () => {
-    vi.useFakeTimers();
-    const events = observer();
-    let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
-    const stream = new ReadableStream<Uint8Array>({
-      start(value) { controller = value; },
-    });
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, body: stream }));
-    const source = new BrowserAgentTaskEventSource(auth(), 'https://api.mitra.io');
-    const connection = await source.open('task-1', events, undefined, 'http');
-
-    await vi.advanceTimersByTimeAsync(SILENCE_TIMEOUT_MS - 1_000);
-    expect(events.onDisconnect).not.toHaveBeenCalled();
-
-    // The copilot's SSE ping is `data: {}`: not an event, but bytes, and bytes move the window.
-    controller?.enqueue(new TextEncoder().encode('data: {}\r\n\r\n'));
-    await vi.advanceTimersByTimeAsync(SILENCE_TIMEOUT_MS - 1_000);
-    expect(events.onDisconnect).not.toHaveBeenCalled();
-    expect(events.onEvent).not.toHaveBeenCalled();
-
-    // A read nothing answers is what a half-open stream looks like: the fetch is aborted from
-    // here and the disconnect carries the reason.
-    await vi.advanceTimersByTimeAsync(1_000);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(events.onDisconnect).toHaveBeenCalledTimes(1);
-    expect(String(events.onDisconnect.mock.calls[0][0])).toContain('silent');
-    connection.close();
-  });
-
-  it('reports a WebSocket that went silent as disconnected, and a ping keeps it alive', async () => {
-    vi.useFakeTimers();
-    const events = observer();
-    const source = new BrowserAgentTaskEventSource(auth(), 'https://api.mitra.io');
-    const connection = await source.open('task-1', events, undefined, 'websocket');
-    const socket = FakeWebSocket.instances[0];
-
-    // Just under the window: a late ping, not a dead channel.
-    await vi.advanceTimersByTimeAsync(SILENCE_TIMEOUT_MS - 1_000);
-    expect(events.onDisconnect).not.toHaveBeenCalled();
-
-    // A ping is a frame like any other, and it moves the window.
-    socket.message({ type: 'ping', payload: {}, timestamp: 1 });
-    await vi.advanceTimersByTimeAsync(SILENCE_TIMEOUT_MS - 1_000);
-    expect(events.onDisconnect).not.toHaveBeenCalled();
-
-    // Two pings missed: the channel is half-open and nothing else will ever say so. The
-    // disconnect is reported once, from here, and the socket is let go.
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(events.onDisconnect).toHaveBeenCalledTimes(1);
-    expect(events.onDisconnect.mock.calls[0][0]).toBeInstanceOf(Error);
-    expect(String(events.onDisconnect.mock.calls[0][0])).toContain('silent');
-    expect(socket.close).toHaveBeenCalled();
-
-    // The close the watchdog started must not report a second disconnect.
-    connection.close();
-    expect(events.onDisconnect).toHaveBeenCalledTimes(1);
   });
 
   it('does not count a socket the caller closed as silent', async () => {
