@@ -50,7 +50,7 @@ The client derives service endpoints from `apiUrl`: `/iam`, `/data-manager`, `/f
 
 The Platform SDK owns:
 
-- browser Google SSO, logout, and session refresh
+- browser Google and Microsoft SSO, browser email sign-in, logout, and session refresh
 - trusted session adoption for the embedded app preview
 - session persistence in `localStorage`
 - auth-state listeners
@@ -76,7 +76,7 @@ unsubscribe()
 
 Authentication state is stored under `mitra_auth_{appId}`. Before each authenticated native request, the SDK checks a JWT's `exp` claim with a 30-second safety window and refreshes directly through IAM when needed. Opaque tokens, malformed JWTs, and JWTs without a numeric `exp` remain server-authoritative and proceed to the request. A `401` still triggers reactive recovery and at most one retry. If another login or bridged session replaced the token while the request was in flight, the retry uses that current token without refreshing its session. If sign-out cleared the token, the old `401` neither refreshes nor retries.
 
-The generated-application authentication flow is Google SSO. The old native `signIn` and `signUp` names fail locally with `UNSUPPORTED_AUTH_METHOD` because IAM has no email/password endpoints. Deprecated login bindings remain available only through the legacy reexports.
+A generated application signs people in with Google SSO, Microsoft SSO, or email. The old native `signIn` and `signUp` names fail locally with `UNSUPPORTED_AUTH_METHOD` because IAM has no email/password endpoints; `signInWithEmail()` is the email flow that replaced them. Deprecated login bindings remain available only through the legacy reexports.
 
 ### Signing in as a process
 
@@ -157,6 +157,63 @@ const mitra = createClient({
   authPageUrl: "https://app.example.com/sdk-auth.html",
 })
 ```
+
+### Signing in with email
+
+Email sign-in needs neither a password nor an SSO account. The same platform page opens, a popup
+by default, collects the address, sends a six-digit code, and IAM answers with a single-use
+exchange code that the SDK redeems at `/iam/api/v1/auth/magic-link/exchange`. What comes back is
+the app session SSO already returns, persisted and refreshed the same way:
+
+```typescript
+const user = await mitra.auth.signInWithEmail()
+```
+
+Redirect mode navigates the current page instead of opening a popup, and is completed during
+startup like the SSO redirect:
+
+```typescript
+await mitra.auth.signInWithEmail({ mode: "redirect" })
+```
+
+```typescript
+const emailUser = await mitra.auth.completeEmailSignInRedirect()
+```
+
+Call `completeEmailSignInRedirect()` at startup even when sign-in was started as a popup, because
+the message carries a link as well as the code, and that link opens a **new tab**. That tab never
+saw the popup, so the pending request has to outlive the tab that opened it: the one-time state
+and the resolved auth page URL are written to `localStorage` under `mitra_email_redirect_{appId}`
+for 10 minutes, then dropped as soon as the flow succeeds or that window closes. `sessionStorage`,
+which the SSO redirect uses, is scoped to a single tab and cannot answer for another one.
+
+**No token is written there.** What is persisted is only the record of a request already in
+flight, which is the smallest thing that lets the other tab finish it, and it expires on its own.
+The tab opened by the link comes back with the same one-time state the flow started with, so it
+is completed by exactly the check the redirect uses; a request older than 10 minutes is discarded
+rather than completed. Writing the request is best effort for a popup: without `localStorage` the
+popup still signs in and only the completion from the link is lost, while redirect mode, which has
+nowhere else to keep it, fails at the start.
+
+When the person finishes in the tab the link opened, the `signInWithEmail()` call still waiting in
+the original tab eventually times out. Treat that rejection as a cancelled popup: the session is
+already established wherever the application called `completeEmailSignInRedirect()`.
+
+One fragment belongs to one flow, and an application that offers more than one method can call
+every completion at startup, in any order:
+
+```typescript
+const user =
+  (await mitra.auth.completeEmailSignInRedirect()) ??
+  (await mitra.auth.completeGoogleSignInRedirect()) ??
+  (await mitra.auth.completeMicrosoftSignInRedirect())
+```
+
+The one-time state each flow generates names that flow, as in `google.<random>` or
+`email.<random>`, and the auth page echoes it verbatim, so a completion recognizes its own
+fragment. A fragment from another method returns `null` and leaves the fragment and that other
+flow's pending request untouched, whatever this browser has pending. A fragment that does name
+this flow but does not match its pending request is rejected as forged.
 
 ## Entities
 

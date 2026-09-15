@@ -80,9 +80,11 @@ describe('AuthModule', () => {
 
     await expect(auth.signIn({ email: 'user@test.com', password: 'pass' })).rejects.toMatchObject({
       code: 'UNSUPPORTED_AUTH_METHOD',
+      message: expect.stringContaining('signInWithEmail()'),
     });
     await expect(auth.signUp({ email: 'user@test.com', password: 'pass' })).rejects.toMatchObject({
       code: 'UNSUPPORTED_AUTH_METHOD',
+      message: expect.stringContaining('signInWithEmail()'),
     });
     expect(fetchMock).not.toHaveBeenCalled();
   });

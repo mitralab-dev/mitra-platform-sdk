@@ -3,7 +3,7 @@ import { createAuthModule, type AuthModule as CoreAuthModule } from '@mitralab.i
 import { coreErrors } from '../core-errors';
 import { HttpClient, MitraApiError } from '../utils/http-client';
 import { assertServerRuntime, resolveApiKeySession } from './api-key-auth';
-import { expectAuthTokenResponse, GoogleAuthFlow } from './google-auth';
+import { expectAuthTokenResponse, AuthPageFlow } from './auth-page-flow';
 import type {
   User,
   SignInCredentials,
@@ -11,6 +11,7 @@ import type {
   AuthSession,
   AuthTokenResponse,
   AuthStateChangeCallback,
+  EmailSignInOptions,
   GoogleSignInOptions,
   MicrosoftSignInOptions,
 } from './auth.types';
@@ -21,6 +22,8 @@ export type {
   SignUpData,
   AuthSession,
   AuthStateChangeCallback,
+  AuthPageSignInOptions,
+  EmailSignInOptions,
   GoogleSignInOptions,
   MicrosoftSignInOptions,
 } from './auth.types';
@@ -101,7 +104,8 @@ function isDefinitiveRefreshFailure(error: unknown): boolean {
 /**
  * Authentication module for managing user sessions.
  *
- * Handles Google SSO, trusted session adoption, sign-out, and automatic token refresh.
+ * Handles Google and Microsoft SSO, email sign-in, trusted session adoption, sign-out,
+ * and automatic token refresh.
  * Auth state is persisted to localStorage with key `mitra_auth_{appId}`
  * and restored on page reload.
  *
@@ -126,8 +130,9 @@ export class AuthModule {
   private readonly publicClient: HttpClient;
   private readonly authedClient: HttpClient;
   private readonly currentUserApi: CoreAuthModule;
-  private readonly googleAuth: GoogleAuthFlow;
-  private readonly microsoftAuth: GoogleAuthFlow;
+  private readonly googleAuth: AuthPageFlow;
+  private readonly microsoftAuth: AuthPageFlow;
+  private readonly emailAuth: AuthPageFlow;
 
   constructor(appId: string, iamBaseUrl: string, options: AuthModuleOptions = {}) {
     this.appId = appId;
@@ -148,18 +153,25 @@ export class AuthModule {
       onUnauthorized: (requestToken) => this.handleUnauthorized(requestToken),
     });
     this.currentUserApi = createAuthModule(this.authedClient, coreErrors);
-    this.googleAuth = new GoogleAuthFlow({
+    this.googleAuth = new AuthPageFlow({
       appId,
       apiUrl,
       authPageUrl: options.authPageUrl,
       client: this.publicClient,
     });
-    this.microsoftAuth = new GoogleAuthFlow({
+    this.microsoftAuth = new AuthPageFlow({
       appId,
       apiUrl,
       authPageUrl: options.authPageUrl,
       client: this.publicClient,
       provider: 'microsoft',
+    });
+    this.emailAuth = new AuthPageFlow({
+      appId,
+      apiUrl,
+      authPageUrl: options.authPageUrl,
+      client: this.publicClient,
+      provider: 'email',
     });
     this.loadFromStorage();
     const readAccessToken = () => this.#accessToken;
@@ -190,10 +202,10 @@ export class AuthModule {
     return this._currentUser !== null && this.#accessToken !== null;
   }
 
-  /** @deprecated Email/password authentication is not implemented by IAM. Use Google or Microsoft SSO. */
+  /** @deprecated Email/password authentication is not implemented by IAM. Use signInWithEmail() or SSO. */
   async signIn(_credentials: SignInCredentials): Promise<User> {
     throw new MitraApiError(
-      'Email/password authentication is not available. Use signInWithGoogle() or signInWithMicrosoft().',
+      'Email/password authentication is not available. Use signInWithEmail(), signInWithGoogle() or signInWithMicrosoft().',
       0,
       'UNSUPPORTED_AUTH_METHOD'
     );
@@ -286,8 +298,10 @@ export class AuthModule {
    *
    * The method consumes and clears the fragment and stored CSRF context, sends
    * the single-use code directly to IAM, persists both tokens, calls `auth.me()`,
-   * and notifies auth-state listeners. It returns `null` when the current URL is
-   * not a Google SSO redirect. Redirect errors must carry the same `stateMitra`
+   * and notifies auth-state listeners. It returns `null` when the current URL
+   * carries no redirect result, and also when it carries one this flow never
+   * started, so an application that offers several methods can call every
+   * completion at startup. Redirect errors must carry the same `stateMitra`
    * stored at the start of the flow before their message is exposed or consumed.
    *
    * @returns The authenticated user, or `null` when no redirect result is present.
@@ -326,10 +340,56 @@ export class AuthModule {
     return tokenResponse ? this.establishSession(tokenResponse) : null;
   }
 
-  /** @deprecated Email/password registration is not implemented by IAM. Use Google or Microsoft SSO. */
+  /**
+   * Signs in with a one-time code sent by email: the same auth-page handshake as
+   * SSO, where the platform page collects the address and the code, and IAM
+   * hands back a single-use exchange code redeemed at `/auth/magic-link/exchange`.
+   * Popup by default; redirect mode navigates away.
+   *
+   * The message also carries a link. Because that link opens a new tab, the
+   * pending request is kept in `localStorage` for 10 minutes - the one-time state
+   * and the auth page URL, never a token - so
+   * {@link completeEmailSignInRedirect} can finish the flow in that tab.
+   *
+   * @param options - Popup or redirect mode.
+   * @returns The authenticated and hydrated user in popup mode.
+   * @throws {MitraApiError} When IAM rejects the exchange code.
+   * @throws {Error} When the browser blocks or cancels the popup, the flow times
+   * out, or the response fails origin, source, state, or shape validation. A
+   * person who finishes through the link instead of the popup leaves this call
+   * to time out, which the application should treat as a cancelled popup.
+   *
+   * @example
+   * ```typescript
+   * const user = await mitra.auth.signInWithEmail();
+   * ```
+   */
+  async signInWithEmail(options: EmailSignInOptions = {}): Promise<User> {
+    return this.establishSession(await this.emailAuth.signIn(options));
+  }
+
+  /**
+   * Completes an email sign-in from `#codeMitra` and `#stateMitra`, during
+   * application startup like {@link completeGoogleSignInRedirect}.
+   *
+   * It covers both ways the flow comes back, and they are the same check: a
+   * redirect in the tab that started it, and the tab the link in the message
+   * opened. Both carry the one-time state this SDK generated, which the second
+   * tab matches against the pending request kept in `localStorage`. A request
+   * older than 10 minutes is discarded instead of completed.
+   *
+   * @returns The authenticated user, or `null` when the URL carries no result or
+   * carries one that belongs to another sign-in method's flow.
+   */
+  async completeEmailSignInRedirect(): Promise<User | null> {
+    const tokenResponse = await this.emailAuth.completeRedirect();
+    return tokenResponse ? this.establishSession(tokenResponse) : null;
+  }
+
+  /** @deprecated Email/password registration is not implemented by IAM. Use signInWithEmail() or SSO. */
   async signUp(_data: SignUpData): Promise<User> {
     throw new MitraApiError(
-      'Email/password registration is not available. Use signInWithGoogle() or signInWithMicrosoft().',
+      'Email/password registration is not available. Use signInWithEmail(), signInWithGoogle() or signInWithMicrosoft().',
       0,
       'UNSUPPORTED_AUTH_METHOD'
     );
