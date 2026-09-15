@@ -393,7 +393,7 @@ describe('Auth page flow', () => {
     expect(storage._store[`mitra_auth_${APP_ID}`]).toBeUndefined();
   });
 
-  it('rejects a redirect with a different state without consuming its context', async () => {
+  it('rejects a redirect with a different state, keeping its pending request', async () => {
     const browser = mockBrowser();
     const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
     const storageKey = `mitra_google_redirect_${APP_ID}`;
@@ -404,10 +404,10 @@ describe('Auth page flow', () => {
     await expect(auth.completeGoogleSignInRedirect()).rejects.toThrow('possible CSRF');
     expect(browser.window.sessionStorage.removeItem).not.toHaveBeenCalled();
     expect(browser.window.sessionStorage.getItem(storageKey)).not.toBeNull();
-    expect(browser.window.history.replaceState).not.toHaveBeenCalled();
+    expect(browser.window.history.replaceState).toHaveBeenCalledWith({}, '', '/orders?status=open');
   });
 
-  it('rejects a forged redirect error without a bound state or consuming context', async () => {
+  it('rejects a forged redirect error without a bound state, keeping its pending request', async () => {
     const browser = mockBrowser();
     const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
     const storageKey = `mitra_google_redirect_${APP_ID}`;
@@ -418,7 +418,7 @@ describe('Auth page flow', () => {
     await expect(auth.completeGoogleSignInRedirect()).rejects.toThrow('missing state');
     expect(browser.window.sessionStorage.removeItem).not.toHaveBeenCalled();
     expect(browser.window.sessionStorage.getItem(storageKey)).not.toBeNull();
-    expect(browser.window.history.replaceState).not.toHaveBeenCalled();
+    expect(browser.window.history.replaceState).toHaveBeenCalledWith({}, '', '/orders?status=open');
   });
 
   it('rejects a forged redirect error with a mismatched state without exposing it', async () => {
@@ -431,7 +431,7 @@ describe('Auth page flow', () => {
 
     await expect(auth.completeGoogleSignInRedirect()).rejects.toThrow('possible CSRF');
     expect(browser.window.sessionStorage.removeItem).not.toHaveBeenCalled();
-    expect(browser.window.history.replaceState).not.toHaveBeenCalled();
+    expect(browser.window.history.replaceState).toHaveBeenCalled();
   });
 
   it('exposes a redirect error only after validating and consuming its state', async () => {

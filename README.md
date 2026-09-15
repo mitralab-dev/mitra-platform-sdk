@@ -209,11 +209,17 @@ const user =
   (await mitra.auth.completeMicrosoftSignInRedirect())
 ```
 
+A chain like that propagates a rejection: an expired request or a forged fragment on the first
+completion keeps the others from running. Wrap each call in `try`/`catch` when the application
+should still try the remaining methods after one of them refuses a fragment.
+
 The one-time state each flow generates names that flow, as in `google.<random>` or
 `email.<random>`, and the auth page echoes it verbatim, so a completion recognizes its own
 fragment. A fragment from another method returns `null` and leaves the fragment and that other
 flow's pending request untouched, whatever this browser has pending. A fragment that does name
-this flow but does not match its pending request is rejected as forged.
+this flow but does not match its pending request is rejected as forged, and the fragment is
+removed from the URL on the way out, so the rejection is reported once instead of on every
+reload.
 
 ## Entities
 

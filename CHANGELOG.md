@@ -13,6 +13,9 @@ All notable changes to this project are documented in this file.
   `localStorage` for 10 minutes, so the tab opened by the link in the message finishes the flow
   through the same state check the redirect uses. Writing it is best effort for a popup and
   required for a redirect.
+- Consume a fragment of the flow's own provider even when it cannot be completed, so a rejected or
+  expired redirect is reported once instead of on every reload. A fragment of another flow stays
+  untouched, and a pending request is still dropped only when it expires.
 - Name the flow in the one-time state (`google.<random>`, `microsoft.<random>`, `email.<random>`),
   which the auth page echoes verbatim, so every `complete*SignInRedirect()` recognizes its own
   fragment: a fragment from another method returns `null` untouched, whatever this browser has
