@@ -291,6 +291,20 @@ describe('Email sign-in', () => {
     expect(browser.window.history.replaceState).toHaveBeenCalled();
   });
 
+  it('keeps the popup open for the whole life of the challenge before timing out', async () => {
+    vi.useFakeTimers();
+    const browser = mockBrowser();
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    const rejection = expect(auth.signInWithEmail()).rejects.toThrow('timed out');
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1_000);
+    expect(browser.popup.close).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1_000);
+
+    await rejection;
+    expect(browser.popup.close).toHaveBeenCalledOnce();
+  });
+
   it('keeps the request pending when the popup is cancelled, so the link can still finish it', async () => {
     vi.useFakeTimers();
     const browser = mockBrowser();
@@ -360,8 +374,8 @@ describe('Email sign-in', () => {
   it('surfaces the IAM error code when the exchange code is refused', async () => {
     const browser = mockBrowser();
     mockFetchSequence([{
-      status: 400,
-      body: { message: 'Exchange code is invalid.', error_code: 'INVALID_EXCHANGE_CODE' },
+      status: 401,
+      body: { message: 'Invalid exchange code', error_code: 'INVALID_EXCHANGE_CODE' },
     }]);
     const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
 
@@ -371,9 +385,9 @@ describe('Email sign-in', () => {
 
     await expect(signIn).rejects.toMatchObject({
       name: 'MitraApiError',
-      status: 400,
+      status: 401,
       code: 'INVALID_EXCHANGE_CODE',
-      message: 'Exchange code is invalid.',
+      message: 'Invalid exchange code',
     });
     expect(auth.accessToken).toBeNull();
   });

@@ -184,8 +184,11 @@ Call `completeEmailSignInRedirect()` at startup even when sign-in was started as
 the message carries a link as well as the code, and that link opens a **new tab**. That tab never
 saw the popup, so the pending request has to outlive the tab that opened it: the one-time state
 and the resolved auth page URL are written to `localStorage` under `mitra_email_redirect_{appId}`
-for 10 minutes, then dropped as soon as the flow succeeds or that window closes. `sessionStorage`,
-which the SSO redirect uses, is scoped to a single tab and cannot answer for another one.
+for 10 minutes, dropped when the flow completes, or discarded as stale the next time a result is read. `sessionStorage`,
+which the SSO redirect uses, is scoped to a single tab and cannot answer for another one. The link still has
+to be opened in the same browser that started the sign-in: another browser or device has no pending request,
+refuses the fragment, and the exchange code was already spent by the page. On another device, use the
+six-digit code in the popup instead.
 
 **No token is written there.** What is persisted is only the record of a request already in
 flight, which is the smallest thing that lets the other tab finish it, and it expires on its own.

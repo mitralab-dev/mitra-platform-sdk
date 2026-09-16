@@ -27,7 +27,16 @@ interface AuthPageProviderProfile {
    * pending request lives exactly as long as that tab does.
    */
   pendingRequestTtlMs?: number;
+  /**
+   * How long the popup may stay open before the sign-in is given up. The SSO
+   * consent screen is over in a minute; the email code has to be read from a
+   * mailbox first, and the challenge behind it lives for ten minutes.
+   */
+  popupTimeoutMs: number;
 }
+
+const FIVE_MINUTES_MS = 5 * 60 * 1_000;
+const TEN_MINUTES_MS = 10 * 60 * 1_000;
 
 const PROVIDERS: Record<AuthPageProvider, AuthPageProviderProfile> = {
   google: {
@@ -35,24 +44,26 @@ const PROVIDERS: Record<AuthPageProvider, AuthPageProviderProfile> = {
     exchangePath: '/api/v1/auth/google',
     sendsRedirectUri: true,
     redirectStorage: 'sessionStorage',
+    popupTimeoutMs: FIVE_MINUTES_MS,
   },
   microsoft: {
     label: 'Microsoft',
     exchangePath: '/api/v1/auth/microsoft',
     sendsRedirectUri: true,
     redirectStorage: 'sessionStorage',
+    popupTimeoutMs: FIVE_MINUTES_MS,
   },
   email: {
     label: 'Email',
     exchangePath: '/api/v1/auth/magic-link/exchange',
     sendsRedirectUri: false,
     redirectStorage: 'localStorage',
-    pendingRequestTtlMs: 10 * 60 * 1_000,
+    pendingRequestTtlMs: TEN_MINUTES_MS,
+    popupTimeoutMs: TEN_MINUTES_MS,
   },
 };
 const POPUP_WIDTH = 480;
 const POPUP_HEIGHT = 600;
-const POPUP_TIMEOUT_MS = 5 * 60 * 1_000;
 const POPUP_CLOSED_POLL_MS = 500;
 
 interface AuthPageFlowConfig {
@@ -351,7 +362,7 @@ export class AuthPageFlow {
       const timeout = globalThis.setTimeout(() => {
         cleanup();
         reject(new Error(`${this.providerLabel} sign-in timed out.`));
-      }, POPUP_TIMEOUT_MS);
+      }, this.profile.popupTimeoutMs);
       const closedPoll = globalThis.setInterval(() => {
         if (popup.closed) {
           cleanup();

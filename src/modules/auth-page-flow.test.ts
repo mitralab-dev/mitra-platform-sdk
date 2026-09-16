@@ -467,6 +467,17 @@ describe('Auth page flow', () => {
     expect(browser.window.sessionStorage.removeItem).not.toHaveBeenCalled();
   });
 
+  it('leaves a fragment whose state has no provider prefix alone (redirect started by an earlier version)', async () => {
+    const browser = mockBrowser();
+    const fetchMock = mockFetchSequence([]);
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+    browser.window.location.hash = '#codeMitra=link-code&stateMitra=9f86d081884c7d659a2feaa0c55ad015';
+
+    await expect(auth.completeGoogleSignInRedirect()).resolves.toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(browser.window.history.replaceState).not.toHaveBeenCalled();
+  });
+
   it('names the flow in the state it generates', async () => {
     const browser = mockBrowser();
     mockFetchSequence([{ body: CURRENT_USER_RESPONSE }]);
