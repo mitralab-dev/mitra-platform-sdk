@@ -37,6 +37,8 @@ export type {
   User,
   SignInCredentials,
   SignUpData,
+  AuthPageSignInOptions,
+  EmailSignInOptions,
   GoogleSignInOptions,
   MicrosoftSignInOptions,
   EntityListOptions,

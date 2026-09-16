@@ -115,7 +115,7 @@ function popupResult(state: string, result: Record<string, unknown>) {
   return { type: 'mitra-oauth-result', success: true, state, ...result };
 }
 
-describe('Google SSO', () => {
+describe('Auth page flow', () => {
   beforeEach(() => {
     mockLocalStorage();
   });
@@ -126,7 +126,6 @@ describe('Google SSO', () => {
   });
 
   it('signs in with Microsoft through the same auth page and IAM exchange', async () => {
-    mockLocalStorage();
     const browser = mockBrowser();
     const fetchMock = mockFetchSequence([
       { body: TOKEN_RESPONSE },
@@ -247,7 +246,7 @@ describe('Google SSO', () => {
     const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
 
     const signIn = auth.signInWithGoogle();
-    browser.dispatchMessage(popupResult('attacker-state', { token: TOKEN_RESPONSE }));
+    browser.dispatchMessage(popupResult('google.attacker', { token: TOKEN_RESPONSE }));
 
     await expect(signIn).rejects.toThrow('possible CSRF');
   });
@@ -394,21 +393,21 @@ describe('Google SSO', () => {
     expect(storage._store[`mitra_auth_${APP_ID}`]).toBeUndefined();
   });
 
-  it('rejects a redirect with a different state without consuming its context', async () => {
+  it('rejects a redirect with a different state, keeping its pending request', async () => {
     const browser = mockBrowser();
     const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
     const storageKey = `mitra_google_redirect_${APP_ID}`;
 
     void auth.signInWithGoogle({ mode: 'redirect' });
-    browser.window.location.hash = '#codeMitra=redirect-code&stateMitra=attacker-state';
+    browser.window.location.hash = '#codeMitra=redirect-code&stateMitra=google.attacker';
 
     await expect(auth.completeGoogleSignInRedirect()).rejects.toThrow('possible CSRF');
     expect(browser.window.sessionStorage.removeItem).not.toHaveBeenCalled();
     expect(browser.window.sessionStorage.getItem(storageKey)).not.toBeNull();
-    expect(browser.window.history.replaceState).not.toHaveBeenCalled();
+    expect(browser.window.history.replaceState).toHaveBeenCalledWith({}, '', '/orders?status=open');
   });
 
-  it('rejects a forged redirect error without a bound state or consuming context', async () => {
+  it('rejects a forged redirect error without a bound state, keeping its pending request', async () => {
     const browser = mockBrowser();
     const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
     const storageKey = `mitra_google_redirect_${APP_ID}`;
@@ -419,7 +418,7 @@ describe('Google SSO', () => {
     await expect(auth.completeGoogleSignInRedirect()).rejects.toThrow('missing state');
     expect(browser.window.sessionStorage.removeItem).not.toHaveBeenCalled();
     expect(browser.window.sessionStorage.getItem(storageKey)).not.toBeNull();
-    expect(browser.window.history.replaceState).not.toHaveBeenCalled();
+    expect(browser.window.history.replaceState).toHaveBeenCalledWith({}, '', '/orders?status=open');
   });
 
   it('rejects a forged redirect error with a mismatched state without exposing it', async () => {
@@ -428,11 +427,11 @@ describe('Google SSO', () => {
 
     void auth.signInWithGoogle({ mode: 'redirect' });
     browser.window.location.hash =
-      '#codeMitra=error&errorMitra=forged-provider-error&stateMitra=attacker-state';
+      '#codeMitra=error&errorMitra=forged-provider-error&stateMitra=google.attacker';
 
     await expect(auth.completeGoogleSignInRedirect()).rejects.toThrow('possible CSRF');
     expect(browser.window.sessionStorage.removeItem).not.toHaveBeenCalled();
-    expect(browser.window.history.replaceState).not.toHaveBeenCalled();
+    expect(browser.window.history.replaceState).toHaveBeenCalled();
   });
 
   it('exposes a redirect error only after validating and consuming its state', async () => {
@@ -449,6 +448,64 @@ describe('Google SSO', () => {
       `mitra_google_redirect_${APP_ID}`
     );
     expect(browser.window.history.replaceState).toHaveBeenCalled();
+  });
+
+  it.each([
+    ['no pending request of its own', false],
+    ['a pending request of its own', true],
+  ])('leaves a fragment from another flow alone with %s', async (_case, startsOwnFlow) => {
+    const browser = mockBrowser();
+    const fetchMock = mockFetchSequence([]);
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    if (startsOwnFlow) void auth.signInWithGoogle({ mode: 'redirect' });
+    browser.window.location.hash = '#codeMitra=link-code&stateMitra=email.0f0f0f0f';
+
+    await expect(auth.completeGoogleSignInRedirect()).resolves.toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(browser.window.history.replaceState).not.toHaveBeenCalled();
+    expect(browser.window.sessionStorage.removeItem).not.toHaveBeenCalled();
+  });
+
+  it('leaves a fragment whose state has no provider prefix alone (redirect started by an earlier version)', async () => {
+    const browser = mockBrowser();
+    const fetchMock = mockFetchSequence([]);
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+    browser.window.location.hash = '#codeMitra=link-code&stateMitra=9f86d081884c7d659a2feaa0c55ad015';
+
+    await expect(auth.completeGoogleSignInRedirect()).resolves.toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(browser.window.history.replaceState).not.toHaveBeenCalled();
+  });
+
+  it('names the flow in the state it generates', async () => {
+    const browser = mockBrowser();
+    mockFetchSequence([{ body: CURRENT_USER_RESPONSE }]);
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    const signIn = auth.signInWithGoogle();
+    const state = browser.getStartUrl().searchParams.get('state')!;
+    expect(state).toMatch(/^google\.[0-9a-f]{32}$/);
+
+    browser.dispatchMessage(popupResult(state, { token: TOKEN_RESPONSE }));
+    await signIn;
+
+    void auth.signInWithMicrosoft({ mode: 'redirect' });
+    const redirected = new URL(vi.mocked(browser.window.location.assign).mock.calls[0][0] as string);
+    expect(redirected.searchParams.get('state')).toMatch(/^microsoft\.[0-9a-f]{32}$/);
+  });
+
+  it('leaves an error fragment without state alone when no flow of its own is pending', async () => {
+    const browser = mockBrowser();
+    const fetchMock = mockFetchSequence([]);
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    browser.window.location.hash = '#codeMitra=error&errorMitra=forged-provider-error';
+
+    await expect(auth.completeGoogleSignInRedirect()).resolves.toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(browser.window.history.replaceState).not.toHaveBeenCalled();
+    expect(browser.window.sessionStorage.removeItem).not.toHaveBeenCalled();
   });
 
   it('returns null when the URL has no Google redirect result', async () => {
