@@ -1,9 +1,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { AuthModule, getAuthSessionPort } from './auth';
-import { mockFetchSequence, mockLocalStorage } from '../test-utils';
+import {
+  MOCK_API_URL as API_URL,
+  authPageResult,
+  mockBrowser,
+  mockFetchSequence,
+  mockLocalStorage,
+} from '../test-utils';
 
 const APP_ID = 'test-app';
-const IAM_URL = 'https://api.mitra.io/iam';
+const IAM_URL = `${API_URL}/iam`;
+const AUTH_PAGE_URL = `${API_URL}/sdk-auth.html`;
+const EXCHANGE_URL = `${IAM_URL}/api/v1/auth/magic-link/exchange`;
 const STORAGE_KEY = `mitra_auth_${APP_ID}`;
 
 const fakeUser = { id: 'u1', tenantId: 't1', email: 'user@test.com', name: 'Test User' };
@@ -891,5 +899,105 @@ describe('AuthModule', () => {
 
     // Should NOT have been called again after unsubscribe
     expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  describe('email sign-in', () => {
+    it('should exchange the popup code at the magic link route and hydrate the session', async () => {
+      const browser = mockBrowser();
+      const fetchMock = mockFetchSequence([
+        { body: fakeTokenResponse },
+        { body: currentUserResponse },
+      ]);
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+      const signIn = auth.signInWithEmail({ mode: 'popup' });
+      const startUrl = browser.getStartUrl();
+      const state = startUrl.searchParams.get('state')!;
+      browser.dispatchMessage(authPageResult(state, { code: 'exchange-code' }));
+
+      await expect(signIn).resolves.toEqual(apiUser);
+      expect(startUrl.origin + startUrl.pathname).toBe(AUTH_PAGE_URL);
+      expect(startUrl.searchParams.get('provider')).toBe('email');
+      expect(startUrl.searchParams.get('appId')).toBe(APP_ID);
+      expect(startUrl.searchParams.get('apiUrl')).toBe(API_URL);
+      expect(startUrl.searchParams.get('origin')).toBe('https://app.example.com');
+      expect(startUrl.searchParams.get('responseType')).toBe('code');
+      expect(fetchMock.mock.calls[0][0]).toBe(EXCHANGE_URL);
+      expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+        appId: APP_ID,
+        code: 'exchange-code',
+      });
+      expect(fetchMock.mock.calls[0][1].headers).not.toHaveProperty('Authorization');
+      expect(auth.currentUser).toEqual(apiUser);
+      expect(JSON.parse(browser.localStorage._store[STORAGE_KEY])).toEqual({
+        user: apiUser,
+        token: 'access-123',
+        refreshToken: 'refresh-456',
+      });
+    });
+
+    it('should refuse an exchanged token issued for another app before persisting or hydrating', async () => {
+      const browser = mockBrowser();
+      const fetchMock = mockFetchSequence([{
+        body: {
+          accessToken: jwt({ app_id: 'other-app' }),
+          refreshToken: jwt({ app_id: 'other-app' }),
+          tokenType: 'Bearer',
+        },
+      }]);
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+      const signIn = auth.signInWithEmail();
+      const state = browser.getStartUrl().searchParams.get('state')!;
+      browser.dispatchMessage(authPageResult(state, { code: 'exchange-code' }));
+
+      await expect(signIn).rejects.toMatchObject({ code: 'INVALID_RESPONSE' });
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(auth.accessToken).toBeNull();
+      expect(browser.localStorage._store[STORAGE_KEY]).toBeUndefined();
+    });
+
+    it('should surface the IAM error code when the exchange code is refused', async () => {
+      const browser = mockBrowser();
+      mockFetchSequence([{
+        status: 401,
+        body: { message: 'Invalid exchange code', error_code: 'INVALID_EXCHANGE_CODE' },
+      }]);
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+      const signIn = auth.signInWithEmail();
+      const state = browser.getStartUrl().searchParams.get('state')!;
+      browser.dispatchMessage(authPageResult(state, { code: 'used-code' }));
+
+      await expect(signIn).rejects.toMatchObject({
+        name: 'MitraApiError',
+        status: 401,
+        code: 'INVALID_EXCHANGE_CODE',
+        message: 'Invalid exchange code',
+      });
+      expect(auth.accessToken).toBeNull();
+    });
+
+    it('should validate the exchange response with the same contract as the SSO exchange', async () => {
+      const browser = mockBrowser();
+      mockFetchSequence([{ body: { accessToken: 'access-123', tokenType: 'Bearer' } }]);
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+      const signIn = auth.signInWithEmail();
+      const state = browser.getStartUrl().searchParams.get('state')!;
+      browser.dispatchMessage(authPageResult(state, { code: 'exchange-code' }));
+
+      await expect(signIn).rejects.toMatchObject({ code: 'INVALID_RESPONSE' });
+    });
+
+    it('should require browser APIs', async () => {
+      vi.stubGlobal('window', undefined);
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+      await expect(auth.signInWithEmail()).rejects.toThrow('only available in a browser');
+      await expect(auth.completeEmailSignInRedirect()).rejects.toThrow(
+        'only available in a browser'
+      );
+    });
   });
 });
