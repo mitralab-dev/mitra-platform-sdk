@@ -1,25 +1,9 @@
 import type { AgentTaskSessionOptions } from '@mitralab.io/sdk-core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mockFetch, mockFetchSequence } from '../test-utils';
+import { mockFetchSequence } from '../test-utils';
 import { HttpClient } from '../utils/http-client';
-import { createBrowserAgentTasksModule, type BrowserAgentTaskSessionOptions } from './agent-tasks';
+import { createBrowserAgentTasksModule } from './agent-tasks';
 import type { AuthSessionPort } from './auth';
-
-// The core session manager stays real; only what this SDK hands it is recorded.
-const sessionOptionsSeen = vi.hoisted(() => vi.fn<(options: AgentTaskSessionOptions) => void>());
-vi.mock('@mitralab.io/sdk-core', async (importOriginal) => {
-  const core = await importOriginal<typeof import('@mitralab.io/sdk-core')>();
-  const createAgentTaskSessionManager: typeof core.createAgentTaskSessionManager = (options) => {
-    const manager = core.createAgentTaskSessionManager(options);
-    return {
-      session: (sessionOptions) => {
-        sessionOptionsSeen(sessionOptions);
-        return manager.session(sessionOptions);
-      },
-    };
-  };
-  return { ...core, createAgentTaskSessionManager };
-});
 
 const task = {
   id: 'task-1',
@@ -82,20 +66,32 @@ describe('createBrowserAgentTasksModule', () => {
     expect(fetchMock).toHaveBeenCalledTimes(7);
   });
 
-  it.each<[string, BrowserAgentTaskSessionOptions, string | undefined]>([
+  /** Answers the create with the task and refuses everything else: only the create body matters. */
+  async function createBody(options: AgentTaskSessionOptions): Promise<Record<string, unknown>> {
+    const fetchMock = vi.fn((input: unknown, _init?: { body?: string }) => Promise.resolve(
+      String(input).endsWith('/copilot/api/v1/tasks')
+        ? { ok: true, status: 200, json: async () => task }
+        : { ok: false, status: 404, json: async () => ({}) }
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+    const http = new HttpClient({ baseUrl: 'https://api.mitra.io/copilot' });
+    const session = createBrowserAgentTasksModule(http, auth, 'https://api.mitra.io').session(options);
+    const created = new Promise<void>((resolve) => session.on('taskCreated', () => resolve()));
+    session.send('hello');
+    await created;
+    session.close();
+    const create = fetchMock.mock.calls.find(([input]) => String(input).endsWith('/copilot/api/v1/tasks'));
+    return JSON.parse(create?.[1]?.body ?? '{}') as Record<string, unknown>;
+  }
+
+  it.each<[string, AgentTaskSessionOptions, string | undefined]>([
     ['auto is born on the box', { create: true, agentType: 'CLAUDE' }, 'T3'],
     ['websocket is born on the box', { create: true, agentType: 'CLAUDE', transport: 'websocket' }, 'T3'],
     ['http stays on the runner', { create: true, agentType: 'CLAUDE', transport: 'http' }, undefined],
     ['an explicit runtime wins', { create: true, agentType: 'CLAUDE', runtime: 'RUNNER' }, 'RUNNER'],
-    ['an existing chat is opened as it is', { taskId: 'task-1' }, undefined],
-  ])('a session created with %s', (_name, options, runtime) => {
-    sessionOptionsSeen.mockClear();
-    mockFetch(task);
-    const http = new HttpClient({ baseUrl: 'https://api.mitra.io/copilot' });
-    const tasks = createBrowserAgentTasksModule(http, auth, 'https://api.mitra.io');
+  ])('a chat created with %s', async (_name, options, runtime) => {
+    const body = await createBody(options);
 
-    tasks.session(options).close();
-
-    expect(sessionOptionsSeen).toHaveBeenCalledExactlyOnceWith({ ...options, ...(runtime ? { runtime } : {}) });
+    expect(body).toEqual({ agentType: 'CLAUDE', ...(runtime ? { runtime } : {}) });
   });
 });

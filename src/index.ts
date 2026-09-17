@@ -64,8 +64,6 @@ export type {
   AgentTaskSessionEventMap,
   AgentTaskSessionOptions,
   AgentTaskSessionStatus,
-  BrowserAgentTaskSessionOptions,
-  BrowserAgentTasksModule,
   NativeAgentTaskSession,
   NativeAgentTimelineItem,
   NativeAgentToolEvent,

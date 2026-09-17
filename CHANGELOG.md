@@ -10,8 +10,8 @@ All notable changes to this project are documented in this file.
 - The box channel is asked for once. The Copilot now holds the channel request while the box
   boots, so the 2 s polling on a 202 answer is gone; a 202 from an older Copilot means the chat
   follows the Copilot socket.
-- The `runtime` session option reaches the create request through Core 0.2.3; the pin moves to
-  it once that Core is published.
+- Depend on `@mitralab.io/sdk-core@0.2.3`, which carries the `runtime` session option into the
+  create request and exports `AgentTaskRuntime`.
 
 ## 1.2.0-beta.1
 
