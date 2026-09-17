@@ -1,3 +1,4 @@
+import type { AgentTaskSessionOptions } from '@mitralab.io/sdk-core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mockFetchSequence } from '../test-utils';
 import { HttpClient } from '../utils/http-client';
@@ -63,5 +64,34 @@ describe('createBrowserAgentTasksModule', () => {
     await expect(tasks.listMessages('task-1')).resolves.toMatchObject({ content: [] });
     expect(typeof tasks.session).toBe('function');
     expect(fetchMock).toHaveBeenCalledTimes(7);
+  });
+
+  /** Answers the create with the task and refuses everything else: only the create body matters. */
+  async function createBody(options: AgentTaskSessionOptions): Promise<Record<string, unknown>> {
+    const fetchMock = vi.fn((input: unknown, _init?: { body?: string }) => Promise.resolve(
+      String(input).endsWith('/copilot/api/v1/tasks')
+        ? { ok: true, status: 200, json: async () => task }
+        : { ok: false, status: 404, json: async () => ({}) }
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+    const http = new HttpClient({ baseUrl: 'https://api.mitra.io/copilot' });
+    const session = createBrowserAgentTasksModule(http, auth, 'https://api.mitra.io').session(options);
+    const created = new Promise<void>((resolve) => session.on('taskCreated', () => resolve()));
+    session.send('hello');
+    await created;
+    session.close();
+    const create = fetchMock.mock.calls.find(([input]) => String(input).endsWith('/copilot/api/v1/tasks'));
+    return JSON.parse(create?.[1]?.body ?? '{}') as Record<string, unknown>;
+  }
+
+  it.each<[string, AgentTaskSessionOptions, string | undefined]>([
+    ['auto is born on the box', { create: true, agentType: 'CLAUDE' }, 'T3'],
+    ['websocket is born on the box', { create: true, agentType: 'CLAUDE', transport: 'websocket' }, 'T3'],
+    ['http stays on the runner', { create: true, agentType: 'CLAUDE', transport: 'http' }, undefined],
+    ['an explicit runtime wins', { create: true, agentType: 'CLAUDE', runtime: 'RUNNER' }, 'RUNNER'],
+  ])('a chat created with %s', async (_name, options, runtime) => {
+    const body = await createBody(options);
+
+    expect(body).toEqual({ agentType: 'CLAUDE', ...(runtime ? { runtime } : {}) });
   });
 });

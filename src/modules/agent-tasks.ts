@@ -5,6 +5,7 @@ import {
   type AgentTaskEventConnection,
   type AgentTaskEventObserver,
   type AgentTaskEventSource,
+  type AgentTaskSessionOptions,
   type AgentTasksWithSessions,
 } from '@mitralab.io/sdk-core';
 import { coreErrors } from '../core-errors';
@@ -12,6 +13,16 @@ import type { HttpClient } from '../utils/http-client';
 import type { AuthSessionPort } from './auth';
 import { AgentInputOutbox, holdSendsWhileOffline } from './agent-outbox';
 import { BrowserAgentTaskEventSource } from './agent-session';
+
+/**
+ * A chat opened over the direct channel is served by the box, so it is born there instead of
+ * being adopted on the first channel request, which is what made the first open wait for a
+ * boot. An SSE chat never reaches the box and stays on the runner. An explicit `runtime` wins.
+ */
+function bornOnBox(options: AgentTaskSessionOptions): AgentTaskSessionOptions {
+  if (!('create' in options) || options.runtime || options.transport === 'http') return options;
+  return { ...options, runtime: 'T3' };
+}
 
 /**
  * Composes Core's Agent lifecycle with the browser streaming boundary. The session's own
@@ -55,7 +66,7 @@ export function createBrowserAgentTasksModule(
     eventSource,
   });
   return withAgentTaskSessions(tasks, {
-    session: (options) => holdSendsWhileOffline(manager.session(options), outbox),
+    session: (options) => holdSendsWhileOffline(manager.session(bornOnBox(options)), outbox),
   });
 }
 
@@ -69,6 +80,7 @@ export type {
   AgentTaskCreateInput,
   AgentTaskInput,
   AgentTaskListOptions,
+  AgentTaskRuntime,
   AgentTaskSession as NativeAgentTaskSession,
   AgentTaskSessionEventMap,
   AgentTaskSessionOptions,

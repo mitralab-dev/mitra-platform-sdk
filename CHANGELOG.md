@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented in this file.
 
+## 1.1.3
+
+- A chat created through `session({ create: true })` over the `auto` or `websocket` transport is
+  born on the T3 box: the create request carries `runtime: "T3"`. A chat created with
+  `transport: "http"` stays on the runner, and an explicit `runtime` is forwarded as given.
+- The box channel is asked for once. The Copilot now holds the channel request while the box
+  boots, so the 2 s polling on a 202 answer is gone; a 202 from an older Copilot means the chat
+  follows the Copilot socket.
+- Depend on `@mitralab.io/sdk-core@0.2.4`, which carries the `runtime` session option into the
+  create request, exports `AgentTaskRuntime`, and sends a prompt whose task already exists even
+  when the session was closed inside its `taskCreated` handler.
+
 ## 1.2.0-beta.1
 
 - Add `signInWithEmail()`: the platform auth page collects the address and the one-time code, and

@@ -156,31 +156,21 @@ describe('BrowserAgentTaskEventSource', () => {
     connection.close();
   });
 
-  it('waits for a box that is still booting instead of opening the old path', async () => {
-    vi.useFakeTimers();
-    let asks = 0;
-    vi.stubGlobal('fetch', vi.fn((input: unknown) => {
-      if (!String(input).includes('/channel')) {
-        return Promise.resolve({ ok: true, status: 200, body: openStream() });
-      }
-      asks += 1;
-      if (asks === 1) return Promise.resolve({ ok: true, status: 202 });
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        json: async () => ({ wsUrl: BOX_WS_URL, lastSequence: 0 }),
-      });
-    }));
+  it('asks for the channel once, and a 202 from an older copilot means the copilot socket', async () => {
+    // The copilot now waits for the box itself; a 202 is the old "still booting, ask again",
+    // and asking again would put the wait back on the client.
+    const fetchMock = channelRefused();
+    fetchMock.mockResolvedValueOnce({ ok: true, status: 202 });
+    vi.stubGlobal('fetch', fetchMock);
     const source = new BrowserAgentTaskEventSource(auth(), 'https://api.mitra.io');
 
-    const opening = source.open('task-1', observer(), undefined, 'websocket');
-    await vi.advanceTimersByTimeAsync(2_100);
-    const connection = await opening;
+    const connection = await source.open('task-1', observer(), undefined, 'websocket');
 
-    expect(asks).toBe(2);
-    expect(FakeWebSocket.instances[0].url).toBe(BOX_WS_URL);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(FakeWebSocket.instances[0].url).toBe(
+      'wss://api.mitra.io/copilot/ws/tasks/task-1?token=app-access'
+    );
     connection.close();
-    vi.useRealTimers();
   });
 
   it('a session opened again after an idle close does not ask the box to replay', async () => {

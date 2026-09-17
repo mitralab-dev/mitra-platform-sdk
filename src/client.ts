@@ -436,6 +436,7 @@ export type {
   AgentTaskCreateInput,
   AgentTaskInput,
   AgentTaskListOptions,
+  AgentTaskRuntime,
   AgentTaskSessionEventMap,
   AgentTaskSessionOptions,
   AgentTaskSessionStatus,
