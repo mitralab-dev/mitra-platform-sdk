@@ -1,23 +1,44 @@
 import { vi } from 'vitest';
 
-export function mockFetch(response: unknown, status = 200) {
-  const fn = vi.fn().mockResolvedValue({
+export interface MockedResponse {
+  body: unknown;
+  status?: number;
+  headers?: Record<string, string>;
+}
+
+/**
+ * Response headers a mocked response answers, case-insensitively like the real
+ * ones. Responses declared without headers keep answering without a `headers`
+ * property at all, which is what a consumer reading one has to survive.
+ */
+function mockHeaders(headers: Record<string, string>) {
+  const entries = Object.entries(headers).map(([name, value]) => [name.toLowerCase(), value]);
+  return {
+    get: vi.fn(
+      (name: string) => entries.find(([key]) => key === name.toLowerCase())?.[1] ?? null
+    ),
+  };
+}
+
+function mockResponse({ body, status = 200, headers }: MockedResponse) {
+  return {
     ok: status >= 200 && status < 300,
     status,
-    json: vi.fn().mockResolvedValue(response),
-  });
+    json: vi.fn().mockResolvedValue(body),
+    ...(headers ? { headers: mockHeaders(headers) } : {}),
+  };
+}
+
+export function mockFetch(response: unknown, status = 200, headers?: Record<string, string>) {
+  const fn = vi.fn().mockResolvedValue(mockResponse({ body: response, status, headers }));
   vi.stubGlobal('fetch', fn);
   return fn;
 }
 
-export function mockFetchSequence(responses: Array<{ body: unknown; status?: number }>) {
+export function mockFetchSequence(responses: Array<MockedResponse>) {
   const fn = vi.fn();
-  responses.forEach(({ body, status = 200 }) => {
-    fn.mockResolvedValueOnce({
-      ok: status >= 200 && status < 300,
-      status,
-      json: vi.fn().mockResolvedValue(body),
-    });
+  responses.forEach((response) => {
+    fn.mockResolvedValueOnce(mockResponse(response));
   });
   vi.stubGlobal('fetch', fn);
   return fn;

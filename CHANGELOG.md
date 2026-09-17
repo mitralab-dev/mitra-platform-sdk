@@ -2,6 +2,33 @@
 
 All notable changes to this project are documented in this file.
 
+## 1.2.0-beta.2
+
+- Add `requestEmailCode({ email, language? })` and `verifyEmailCode({ receipt, code })`: sign-in by
+  email with no platform screen at all. The application renders its own address and code fields,
+  IAM sends a message branded as the app, and the verification returns the single-use exchange
+  code the SDK redeems for the same app session SSO produces.
+- Land the link that message carries on the application's own origin, as `#emailToken=<token>`,
+  completed by the same `completeEmailSignInRedirect()` at startup. The link is inspected before it
+  is consumed and spent only when IAM reports the origin the page is on and the one-time state of
+  the request pending in this browser, so another browser, another device, or a scanner opening
+  links on the way to a mailbox consumes nothing and leaves the link valid for whoever asked.
+- Keep the pending headless request under the same `mitra_email_redirect_{appId}` key the auth page
+  flow uses, with the same 10 minutes and the same contents: the one-time state and the app origin,
+  never a token. It is written once IAM accepts the request, so a resend IAM refuses, a rate limit
+  being the everyday case, leaves the message already in the mailbox completable by its link.
+- Take only `emailToken` out of the URL when the link lands, leaving the rest of the fragment
+  exactly as it was found, so an application that routes on it keeps its route.
+- Send `brand` and `language` with the request: the brand comes from the app info `init()` reads,
+  and asking before `init()` fails with `INVALID_CONFIGURATION` instead of branding a message at
+  random. The language is the caller's, then the browser's, then `pt-BR`.
+- Add `MitraApiError.retryAfterSeconds`, read from `Retry-After`, so a `429` says how long to wait
+  instead of leaving the application to guess. It is `null` when the response carries no delay,
+  including when CORS keeps the header from reaching the browser. The field is the last constructor
+  parameter and optional, so existing construction is unchanged.
+- Keep `signInWithEmail()`, the platform page popup and redirect, working exactly as before, along
+  with the `#codeMitra` completion and the Google and Microsoft flows.
+
 ## 1.1.3
 
 - A chat created through `session({ create: true })` over the `auto` or `websocket` transport is

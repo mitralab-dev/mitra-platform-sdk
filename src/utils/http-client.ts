@@ -49,6 +49,22 @@ function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
 
+/**
+ * How long the server asked the caller to wait, in seconds.
+ *
+ * Only the delay form is read. The HTTP date form is left as `null` instead of
+ * being turned into a delay here, because a clock this SDK does not control
+ * would decide how long the application waits. The header also has to be
+ * exposed by CORS to reach a browser, so an absent value is normal and never
+ * an error on its own.
+ */
+function readRetryAfterSeconds(response: Response): number | null {
+  const header = response.headers?.get('Retry-After');
+  if (!header) return null;
+  const seconds = Number(header.trim());
+  return Number.isInteger(seconds) && seconds >= 0 ? seconds : null;
+}
+
 function buildRequestUrl(
   baseUrl: string,
   path: string,
@@ -226,7 +242,8 @@ export class HttpClient implements Transport {
       redactText(rawMessage || `Request failed with status ${response.status}`, token),
       response.status,
       rawCode === undefined ? undefined : redactText(rawCode, token),
-      redactDetails(errorBody, token)
+      redactDetails(errorBody, token),
+      readRetryAfterSeconds(response)
     );
   }
 
@@ -349,7 +366,13 @@ export class MitraApiError extends Error {
     /** Application-specific error code (e.g., 'ENTITY_NOT_FOUND', 'VALIDATION_ERROR') */
     public readonly code?: string,
     /** Additional error details from the server response */
-    public readonly details?: unknown
+    public readonly details?: unknown,
+    /**
+     * Seconds the server asked the caller to wait before trying again, read
+     * from `Retry-After`. `null` when the response carries no such delay,
+     * including when CORS keeps the header from reaching the browser.
+     */
+    public readonly retryAfterSeconds: number | null = null
   ) {
     super(message);
     this.name = 'MitraApiError';
