@@ -3,7 +3,6 @@ import {
   createPublicFunctionsModule,
   encodePathSegment,
   expectObject,
-  type AgentTasksWithSessions,
   type PublicFunctionsModule,
 } from '@mitralab.io/sdk-core';
 import { coreErrors } from './core-errors';
@@ -14,7 +13,7 @@ import { EntitiesModule, EntitiesProxy } from './modules/entities';
 import { FunctionsModule } from './modules/functions';
 import { IntegrationModule } from './modules/integration';
 import { QueriesModule } from './modules/queries';
-import { createBrowserAgentTasksModule } from './modules/agent-tasks';
+import { createBrowserAgentTasksModule, type BrowserAgentTasksModule } from './modules/agent-tasks';
 import {
   createBrowserAgentCredentialsModule,
   type AgentCredentialsModule,
@@ -195,7 +194,7 @@ export interface MitraClient {
   publicFunctions: PublicFunctionsModule;
 
   /** Browser-safe Agent task REST API and native live sessions. */
-  agentTasks: AgentTasksWithSessions;
+  agentTasks: BrowserAgentTasksModule;
 
   /** Browser-safe credential status, model discovery, and provider auth flows. */
   agentCredentials: AgentCredentialsModule;
@@ -436,9 +435,12 @@ export type {
   AgentTaskCreateInput,
   AgentTaskInput,
   AgentTaskListOptions,
+  AgentTaskRuntime,
   AgentTaskSessionEventMap,
   AgentTaskSessionOptions,
   AgentTaskSessionStatus,
+  BrowserAgentTaskSessionOptions,
+  BrowserAgentTasksModule,
   NativeAgentTaskSession,
   NativeAgentTimelineItem,
   NativeAgentToolEvent,

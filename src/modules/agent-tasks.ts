@@ -5,13 +5,39 @@ import {
   type AgentTaskEventConnection,
   type AgentTaskEventObserver,
   type AgentTaskEventSource,
-  type AgentTasksWithSessions,
+  type AgentTaskSession,
+  type AgentTaskSessionOptions,
+  type AgentTasksModule,
 } from '@mitralab.io/sdk-core';
 import { coreErrors } from '../core-errors';
 import type { HttpClient } from '../utils/http-client';
 import type { AuthSessionPort } from './auth';
 import { AgentInputOutbox, holdSendsWhileOffline } from './agent-outbox';
 import { BrowserAgentTaskEventSource } from './agent-session';
+
+/** Where a chat is born: the T3 box that serves the direct channel, or the copilot's runner. */
+export type AgentTaskRuntime = 'T3' | 'RUNNER';
+
+/**
+ * Core 0.2.3 carries `runtime` from the session options into `POST /api/v1/tasks`. The field is
+ * added here by intersection so this SDK compiles against core 0.2.2; the intersection goes when
+ * the pin moves.
+ */
+export type BrowserAgentTaskSessionOptions = AgentTaskSessionOptions & { runtime?: AgentTaskRuntime };
+
+export interface BrowserAgentTasksModule extends AgentTasksModule {
+  session(options: BrowserAgentTaskSessionOptions): AgentTaskSession;
+}
+
+/**
+ * A chat opened over the direct channel is served by the box, so it is born there instead of
+ * being adopted on the first channel request, which is what made the first open wait for a
+ * boot. An SSE chat never reaches the box and stays on the runner. An explicit `runtime` wins.
+ */
+function bornOnBox(options: BrowserAgentTaskSessionOptions): BrowserAgentTaskSessionOptions {
+  if (!('create' in options) || options.runtime || options.transport === 'http') return options;
+  return { ...options, runtime: 'T3' };
+}
 
 /**
  * Composes Core's Agent lifecycle with the browser streaming boundary. The session's own
@@ -23,7 +49,7 @@ export function createBrowserAgentTasksModule(
   httpClient: HttpClient,
   auth: AuthSessionPort,
   apiUrl: string
-): AgentTasksWithSessions {
+): BrowserAgentTasksModule {
   const tasks = createAgentTasksModule(httpClient, coreErrors);
   const source = new BrowserAgentTaskEventSource(auth, apiUrl);
   // The outbox speaks to the app through the session's own stream, so it needs the observer
@@ -55,7 +81,7 @@ export function createBrowserAgentTasksModule(
     eventSource,
   });
   return withAgentTaskSessions(tasks, {
-    session: (options) => holdSendsWhileOffline(manager.session(options), outbox),
+    session: (options) => holdSendsWhileOffline(manager.session(bornOnBox(options)), outbox),
   });
 }
 

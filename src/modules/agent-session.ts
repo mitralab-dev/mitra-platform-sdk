@@ -10,13 +10,6 @@ import type { AuthSessionPort } from './auth';
 
 const CONNECT_TIMEOUT_MS = 15_000;
 /**
- * A caixa que serve o chat pode estar subindo quando o canal e pedido. O copilot responde 202
- * enquanto ela nao esta pronta, e este e o orcamento total da espera antes de desistir dela e
- * seguir pelo socket do copilot, que atende a mesma conversa.
- */
-const CHANNEL_BOOT_TIMEOUT_MS = 90_000;
-const CHANNEL_BOOT_RETRY_MS = 2_000;
-/**
  * Silence that counts as a dead channel. The copilot pings every 25 s on both transports, so
  * two missed pings is a network, proxy or suspended tab that killed the channel without closing
  * it. Without this a half-open channel never produces `onclose` nor ends the SSE read, so
@@ -26,8 +19,8 @@ export const SILENCE_TIMEOUT_MS = 60_000;
 /**
  * Waits between attempts to dial the box again after it dropped mid-turn. Bounded: a box that
  * cannot be reached by the end of the list is reported to the core as disconnected, and only
- * then. Each attempt also carries the channel request, which waits on its own for a box that
- * is still booting.
+ * then. Each attempt also carries the channel request, on which the copilot itself waits for a
+ * box that is still booting.
  */
 export const RECONNECT_DELAYS_MS: readonly number[] = [1_000, 2_000, 4_000, 8_000, 16_000];
 type ReopenOutcome =
@@ -285,34 +278,32 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
     return this.askDirectChannel(taskId, token, signal).catch(() => null);
   }
 
-  /** Like `requestDirectChannel`, but a request the network lost is thrown, not a refusal. */
+  /**
+   * Like `requestDirectChannel`, but a request the network lost is thrown, not a refusal.
+   *
+   * One request. The copilot holds it while the box boots and answers 200 with the channel, or
+   * an error status once the box cannot be had. A 202 comes only from a copilot older than that
+   * contract, which used to mean "still booting, ask again": there is no channel to open, and
+   * the conversation follows the copilot socket. Polling here again would put the wait back on
+   * the client that the server now owns.
+   */
   private async askDirectChannel(
     taskId: string,
     token: string,
     signal?: AbortSignal
   ): Promise<DirectChannel | null> {
+    if (signal?.aborted) return null;
     const url = `${this.apiUrl}/copilot/api/v1/tasks/${encodeURIComponent(taskId)}/channel`;
-    const deadline = Date.now() + CHANNEL_BOOT_TIMEOUT_MS;
-    for (;;) {
-      if (signal?.aborted) return null;
-      const response = await globalThis.fetch(url, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${stripBearer(token)}` },
-        ...(signal ? { signal } : {}),
-      });
-      // 202: a caixa esta subindo. Esperar por ela e melhor do que abrir a conversa no caminho
-      // antigo, que e o que o usuario veria como duas conversas com comportamentos diferentes.
-      if (response.status === 202) {
-        if (Date.now() >= deadline) return null;
-        await sleep(CHANNEL_BOOT_RETRY_MS, signal);
-        continue;
-      }
-      if (!response.ok) return null;
-      try {
-        return toDirectChannel(await response.json(), this.apiUrl);
-      } catch {
-        return null;
-      }
+    const response = await globalThis.fetch(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${stripBearer(token)}` },
+      ...(signal ? { signal } : {}),
+    });
+    if (response.status === 202 || !response.ok) return null;
+    try {
+      return toDirectChannel(await response.json(), this.apiUrl);
+    } catch {
+      return null;
     }
   }
 
