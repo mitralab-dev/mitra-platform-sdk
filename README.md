@@ -30,7 +30,9 @@ await mitra.init()
 ```
 
 `init()` resolves the application's public Code Studio configuration, including nullable
-`dataSourceId`, `allowSignup`, and `emailLoginEnabled`. The Data Source value remains part of the
+`dataSourceId`, `allowSignup`, and `emailLoginEnabled`. It also reads the application's brand, which
+does not become a public property: it is what `requestEmailCode()` sends so IAM writes the
+message as the application. The Data Source value remains part of the
 Platform 1.x compatibility flow; native Entities and Custom Queries resolve the current app through
 the authenticated request. Call `init()` during application startup before the compatibility
 sign-up method needs `allowSignup` or the login screen needs `emailLoginEnabled`.
@@ -160,67 +162,146 @@ const mitra = createClient({
 
 ### Signing in with email
 
-Email sign-in needs neither a password nor an SSO account. The same platform page opens, a popup
-by default, collects the address, sends a six-digit code, and IAM answers with a single-use
-exchange code that the SDK redeems at `/iam/api/v1/auth/magic-link/exchange`. What comes back is
-the app session SSO already returns, persisted and refreshed the same way:
+Email sign-in needs neither a password nor an SSO account, and the application
+never has to send anyone to a platform screen. It renders its own address and
+code fields, IAM sends a message branded as the app, and the link in that
+message comes back to the application's own origin:
 
 ```typescript
-const user = await mitra.auth.signInWithEmail()
+const { receipt, resendAfterSeconds } = await mitra.auth.requestEmailCode({
+  email: "person@example.com",
+})
+
+const user = await mitra.auth.verifyEmailCode({ receipt, code: "123456" })
 ```
 
-Not every app is in the rollout. `mitra.emailLoginEnabled` is this app's own verdict, read from
-`/info` during `init()`, and it is what a login screen should offer the option on:
+`requestEmailCode()` answers the same way whatever the address is, so nothing in
+it says whether that person already exists. The `receipt` names the request when
+the code comes back; it is not a credential and authorizes nothing on its own.
+Resending is calling `requestEmailCode()` again, which replaces the request in
+flight; `resendAfterSeconds` is how long to wait before offering that.
+
+The message is written in `pt-BR` or `en`. Pass `language` to choose; without it
+the SDK reads the browser's language and falls back to `pt-BR`.
+
+`requestEmailCode()` needs `init()` to have run, because the message is branded
+with the app's own brand, read from `/info`. Calling it before that fails with
+`INVALID_CONFIGURATION` rather than sending a message branded at random.
+`mitra.emailLoginEnabled`, read from the same `/info`, is this app's own verdict
+about the rollout, and it is what a login screen should offer the option on:
 
 ```typescript
 await mitra.init()
 
 if (mitra.emailLoginEnabled) {
-  // render "sign in with email"
+  // render the email field
 }
 ```
 
-It is `false` before `init()` runs, `false` when the server answers without the field or with
-something that is not a boolean, and `false` is the safe answer: the app is outside the rollout,
-IAM answers a request neutrally without sending anything, and the person would wait for a message
-that never arrives. Calling `signInWithEmail()` anyway is not blocked by the SDK; the verdict is
-there so the application does not offer a door that does not open.
+It is `false` before `init()` runs, `false` when the server answers without the
+field or with something that is not a boolean, and `false` is the safe answer:
+the app is outside the rollout, IAM answers a request neutrally without sending
+anything, and the person would wait for a message that never arrives. Calling
+the email methods anyway is not blocked by the SDK; the verdict is there so the
+application does not offer a door that does not open.
 
-Redirect mode navigates the current page instead of opening a popup, and is completed during
-startup like the SSO redirect:
+#### The link in the message
 
-```typescript
-await mitra.auth.signInWithEmail({ mode: "redirect" })
-```
+The same message carries a link back to this application's own origin, as
+`#emailToken=<token>`. Complete it during application startup, before rendering
+authenticated routes:
 
 ```typescript
 const emailUser = await mitra.auth.completeEmailSignInRedirect()
 ```
 
-Call `completeEmailSignInRedirect()` at startup even when sign-in was started as a popup, because
-the message carries a link as well as the code, and that link opens a **new tab**. That tab never
-saw the popup, so the pending request has to outlive the tab that opened it: the one-time state
-and the resolved auth page URL are written to `localStorage` under `mitra_email_redirect_{appId}`
-for 10 minutes, dropped when the flow completes, or discarded as stale the next time a result is read. `sessionStorage`,
-which the SSO redirect uses, is scoped to a single tab and cannot answer for another one. The link still has
-to be opened in the same browser that started the sign-in: another browser or device has no pending request,
-refuses the fragment, and the exchange code was already spent by the page. On another device, use the
-six-digit code in the popup instead.
+The token travels in the fragment, so it never reaches a server other than the
+one this SDK sends it to. The SDK inspects the link first, without consuming it,
+and spends it only when IAM reports the origin the page is on and the one-time
+state of the request pending in this browser. That pending request is written by
+`requestEmailCode()` to `localStorage` under `mitra_email_redirect_{appId}`, for
+10 minutes:
 
-**No token is written there.** What is persisted is only the record of a request already in
-flight, which is the smallest thing that lets the other tab finish it, and it expires on its own.
-The tab opened by the link comes back with the same one-time state the flow started with, so it
-is completed by exactly the check the redirect uses; a request older than 10 minutes is discarded
-rather than completed. Writing the request is best effort for a popup: without `localStorage` the
-popup still signs in and only the completion from the link is lost, while redirect mode, which has
-nowhere else to keep it, fails at the start.
+```json
+{ "state": "email.<random>", "redirectUri": "https://app.example.com", "createdAt": 0 }
+```
 
-When the person finishes in the tab the link opened, the `signInWithEmail()` call still waiting in
-the original tab eventually times out. Treat that rejection as a cancelled popup: the session is
-already established wherever the application called `completeEmailSignInRedirect()`.
+**No token is written there.** What is persisted is only the record of a request
+already in flight, which is the smallest thing that lets the tab the link opens
+finish it, and it expires on its own. Writing it is best effort: without
+`localStorage` the code typed into the application still signs in and only the
+completion from the link is lost.
 
-One fragment belongs to one flow, and an application that offers more than one method can call
-every completion at startup, in any order:
+**The link has to be opened in the same browser that asked for the message.**
+Another browser or device has no pending request, so the SDK consumes nothing,
+returns `null`, and the link stays valid for the person who asked. The same
+answer protects against a scanner that opens links on their way to a mailbox. On
+another device, type the six-digit code instead.
+
+Only `emailToken` is taken out of the URL. The rest of the fragment is left
+exactly as it was found, so an application that routes on it keeps its route.
+
+`completeEmailSignInRedirect()` returns `null` when the URL carries no sign-in
+result, when it carries one belonging to another method's flow, and when it
+carries a link this browser cannot claim. A link that does belong here but
+cannot be used is reported as a `MitraApiError`:
+
+| Code | Status | What happened |
+|---|---|---|
+| `MAGIC_LINK_EXPIRED` | 409 | The request behind the link is over. Ask for a new message. |
+| `MAGIC_LINK_USED` | 409 | The link was already spent, here or elsewhere. |
+| `MAGIC_LINK_INVALID` | 401 | IAM does not recognize the token in the link. |
+
+`verifyEmailCode()` reports `INVALID_CODE` (401) for a code that does not match,
+and the same `MAGIC_LINK_EXPIRED` and `MAGIC_LINK_USED` when the request is
+over. Both methods report `RATE_LIMITED` (429) when IAM asks the person to slow
+down, and `SIGNUP_NOT_ALLOWED`, `APP_ACCESS_REQUIRED`, `APP_ACCESS_REVOKED`
+(403) or `APP_ACCESS_LIMIT_REACHED` (409) when this app does not admit that
+address. A `429` carries `error.retryAfterSeconds` when the gateway exposes
+`Retry-After`, and `null` when it does not.
+
+`requestEmailCode()` also reports `INVALID_ORIGIN` (400) when the page asking
+for the message is not on one of the origins published for this application, and
+both methods report `VALIDATION_FAILED` (400) for a field IAM refuses to read,
+such as a malformed address or a code that is not six digits.
+
+#### Through the platform page
+
+`signInWithEmail()` is the older flow and still works: the same platform page
+SSO opens collects the address and the code, and the single-use exchange code it
+returns is redeemed at `/iam/api/v1/auth/magic-link/exchange` for the same app
+session:
+
+```typescript
+const user = await mitra.auth.signInWithEmail()
+```
+
+It opens a popup by default, and redirect mode navigates the current page
+instead:
+
+```typescript
+await mitra.auth.signInWithEmail({ mode: "redirect" })
+```
+
+Both come back as `#codeMitra` and `#stateMitra`, and are completed by the same
+`completeEmailSignInRedirect()` at startup. The message that page sends carries a
+link too, which opens a **new tab** that never saw the popup, so the pending
+request is written before the popup opens, for the same 10 minutes and under the
+same key. `sessionStorage`, which the SSO redirect uses, is scoped to a single
+tab and cannot answer for another one. Writing the request is best effort for a
+popup: without `localStorage` the popup still signs in and only the completion
+from the link is lost, while redirect mode, which has nowhere else to keep it,
+fails at the start.
+
+When the person finishes in the tab the link opened, the `signInWithEmail()`
+call still waiting in the original tab eventually times out. Treat that
+rejection as a cancelled popup: the session is already established wherever the
+application called `completeEmailSignInRedirect()`.
+
+#### One fragment, one flow
+
+An application that offers more than one method can call every completion at
+startup, in any order:
 
 ```typescript
 const user =
@@ -229,16 +310,18 @@ const user =
   (await mitra.auth.completeMicrosoftSignInRedirect())
 ```
 
-A chain like that propagates a rejection: an expired request or a forged fragment on the first
-completion keeps the others from running. Wrap each call in `try`/`catch` when the application
-should still try the remaining methods after one of them refuses a fragment.
+A chain like that propagates a rejection: an expired request or a forged
+fragment on the first completion keeps the others from running. Wrap each call
+in `try`/`catch` when the application should still try the remaining methods
+after one of them refuses a fragment.
 
-The one-time state each flow generates names that flow, as in `google.<random>` or
-`email.<random>`, and the auth page echoes it verbatim, so a completion recognizes its own
-fragment. A fragment from another method returns `null` and leaves the fragment and that other
-flow's pending request untouched, whatever this browser has pending. A fragment that does name
-this flow but does not match its pending request is rejected as forged, and the fragment is
-removed from the URL on the way out, so the rejection is reported once instead of on every
+The one-time state each flow generates names that flow, as in `google.<random>`
+or `email.<random>`, and the auth page echoes it verbatim, so a completion
+recognizes its own fragment. A fragment from another method returns `null` and
+leaves the fragment and that other flow's pending request untouched, whatever
+this browser has pending. A fragment that does name this flow but does not match
+its pending request is rejected as forged, and the fragment is removed from the
+URL on the way out, so the rejection is reported once instead of on every
 reload.
 
 ## Entities
@@ -440,6 +523,12 @@ try {
   }
 }
 ```
+
+A `429` also carries `error.retryAfterSeconds`, read from the `Retry-After`
+header, so the application can tell the person how long to wait instead of
+guessing. It is `null` when the response carries no such delay, which includes
+the case where the gateway does not expose the header to this origin and the one
+where the server answers with an HTTP date rather than a number of seconds.
 
 The transport refuses HTTP redirects. Statuses `307` and `308`, opaque redirects, and responses already marked as redirected fail without replay. The only automatic replay is the single request attempted after reactive `401` recovery with either a refreshed token or a session that changed while the original request was in flight.
 

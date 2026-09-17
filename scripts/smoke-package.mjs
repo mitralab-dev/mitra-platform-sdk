@@ -115,6 +115,9 @@ import {
   MitraApiError,
   executeServerFunctionMitra,
   loginWithGoogleMitra,
+  type EmailCodeRequest,
+  type EmailCodeRequestResult,
+  type EmailCodeVerification,
   type EntityTable,
   type FunctionExecution,
   type GoogleSignInOptions,
@@ -137,6 +140,14 @@ const googleOptions: GoogleSignInOptions = { mode: "popup" }
 // @ts-expect-error Google account creation is not a browser SDK option.
 const unsupportedGoogleCreate: GoogleSignInOptions = { create: false }
 const error = new MitraApiError("message", 400, "CODE", {})
+const rateLimited = new MitraApiError("message", 429, "RATE_LIMITED", {}, 30)
+const retryAfterSeconds: number | null = rateLimited.retryAfterSeconds
+const emailCodeRequest: EmailCodeRequest = { email: user.email, language: "pt-BR" }
+const emailCodeVerification: EmailCodeVerification = { receipt: "receipt", code: "123456" }
+// @ts-expect-error The platform writes the message in Portuguese or English only.
+const unsupportedEmailLanguage: EmailCodeRequest = { email: user.email, language: "es" }
+const emailCodeRequested: Promise<EmailCodeRequestResult> =
+  client.auth.requestEmailCode(emailCodeRequest)
 
 void client.auth.currentUser
 void client.auth.isAuthenticated
@@ -148,6 +159,9 @@ void client.auth.signIn({ email: user.email, password: "password" })
 void client.auth.signUp({ email: user.email, password: "password" })
 void client.auth.signInWithGoogle(googleOptions)
 void client.auth.completeGoogleSignInRedirect()
+void client.auth.signInWithEmail({ mode: "popup" })
+void client.auth.verifyEmailCode(emailCodeVerification)
+void client.auth.completeEmailSignInRedirect()
 client.auth.signOut()
 client.auth.redirectToLogin()
 void client.init()
@@ -183,6 +197,9 @@ void proxy
 void execution
 void unsupportedGoogleCreate
 void error
+void retryAfterSeconds
+void unsupportedEmailLanguage
+void emailCodeRequested
 void legacyConfig
 void interactionsConfig
 void structurallyIdenticalConfig
@@ -198,12 +215,14 @@ const user: sdk.User = { id: "user", tenantId: "tenant", email: "user@example.co
 const query: sdk.QueryResult = { rows: [], affectedRows: null, durationMs: 0 }
 const proxy: sdk.ProxyInput = { method: "GET", endpoint: "/", queryParams: { limit: "10" } }
 const error = new sdk.MitraApiError("message", 400, "CODE", {})
+const emailCodeRequest: sdk.EmailCodeRequest = { email: user.email }
 const googleOptions: sdk.GoogleSignInOptions = { mode: "redirect" }
 // @ts-expect-error Google language is not a browser SDK option.
 const unsupportedGoogleLanguage: sdk.GoogleSignInOptions = { language: "pt-BR" }
 const legacyConfig: sdk.MitraConfig = { baseURL: "https://api.example.com", projectId: "app" }
 void client.auth.signInWithGoogle(googleOptions)
 void client.auth.completeGoogleSignInRedirect()
+void client.auth.requestEmailCode(emailCodeRequest)
 void client.auth.ensureFreshSession()
 void client.publicFunctions.execute("public-function-id")
 void client.integration.list()
@@ -214,6 +233,7 @@ void user
 void query
 void proxy
 void error
+void emailCodeRequest
 void unsupportedGoogleLanguage
 void legacyConfig
 void sdk.executeServerFunctionMitra

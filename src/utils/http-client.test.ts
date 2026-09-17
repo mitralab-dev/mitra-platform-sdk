@@ -487,6 +487,32 @@ describe('HttpClient', () => {
     }
   });
 
+  it.each([
+    ['should read the delay the server asked for', { 'Retry-After': '42' }, 42],
+    ['should accept the header under any casing', { 'retry-after': '0' }, 0],
+    ['should ignore an HTTP date, which would need a clock this SDK does not own', {
+      'Retry-After': 'Wed, 21 Oct 2026 07:28:00 GMT',
+    }, null],
+    ['should ignore a negative delay', { 'Retry-After': '-1' }, null],
+    ['should ignore a response without the header, which CORS may be withholding', undefined, null],
+  ])('%s', async (_case, headers, expected) => {
+    mockFetch({ message: 'Too many requests', error_code: 'RATE_LIMITED' }, 429, headers);
+    const client = new HttpClient({ baseUrl: 'https://api.mitra.io' });
+
+    await expect(client.post('/users')).rejects.toMatchObject({
+      status: 429,
+      code: 'RATE_LIMITED',
+      retryAfterSeconds: expected,
+    });
+  });
+
+  it('should leave retryAfterSeconds null on an error that carries no delay', async () => {
+    mockFetch({ message: 'Not found', error_code: 'ENTITY_NOT_FOUND' }, 404, { 'X-Request-Id': '1' });
+    const client = new HttpClient({ baseUrl: 'https://api.mitra.io' });
+
+    await expect(client.get('/users/999')).rejects.toMatchObject({ retryAfterSeconds: null });
+  });
+
   it('should recursively redact the current token and bearer credentials from errors', async () => {
     const currentToken = 'current-secret-token';
     const credentials = {

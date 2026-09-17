@@ -85,6 +85,8 @@ interface AppInfoResponse {
   dataSourceId: string | null;
   allowSignup: boolean;
   emailLoginEnabled: boolean;
+  /** Which platform brand answers for this app, `null` when the server omits it. */
+  brand: string | null;
 }
 
 function expectAppInfoResponse(value: unknown): AppInfoResponse {
@@ -114,6 +116,9 @@ function expectAppInfoResponse(value: unknown): AppInfoResponse {
     // answers without this field, and an app that cannot prove it is enabled
     // should stop offering the option, not stop starting.
     emailLoginEnabled: response.emailLoginEnabled === true,
+    // Same reasoning, and the brand is never guessed: without it the headless
+    // email methods refuse instead of asking IAM to brand a message at random.
+    brand: typeof response.brand === 'string' && response.brand.trim() ? response.brand : null,
   };
 }
 
@@ -144,8 +149,8 @@ export interface MitraClient {
   /**
    * Initializes the client by resolving app config from the server.
    *
-   * Fetches the compatibility dataSourceId, allowSignup, and emailLoginEnabled
-   * from the public app info endpoint.
+   * Fetches the compatibility dataSourceId, allowSignup, emailLoginEnabled, and
+   * the brand `requestEmailCode()` sends with, from the public app info endpoint.
    *
    * Safe to call multiple times. Subsequent calls are no-ops.
    *
@@ -401,6 +406,9 @@ export function createClient(config: MitraClientConfig): MitraClient {
     if (appInfo.dataSourceId) {
       entitiesModule.setDataSourceId(appInfo.dataSourceId);
     }
+    if (appInfo.brand) {
+      authModule.setBrand(appInfo.brand);
+    }
     allowSignup = appInfo.allowSignup;
     emailLoginEnabled = appInfo.emailLoginEnabled;
 
@@ -433,6 +441,10 @@ export type {
   SignInCredentials,
   SignUpData,
   AuthPageSignInOptions,
+  EmailCodeLanguage,
+  EmailCodeRequest,
+  EmailCodeRequestResult,
+  EmailCodeVerification,
   EmailSignInOptions,
   GoogleSignInOptions,
   MicrosoftSignInOptions,
