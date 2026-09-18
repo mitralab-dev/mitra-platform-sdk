@@ -30,10 +30,10 @@ await mitra.init()
 ```
 
 `init()` resolves the application's public Code Studio configuration, including nullable
-`dataSourceId` and `allowSignup`. The Data Source value remains part of the Platform 1.x
-compatibility flow; native Entities and Custom Queries resolve the current app through the
-authenticated request. Call `init()` during application startup before the compatibility sign-up
-method needs `allowSignup`.
+`dataSourceId`, `allowSignup`, and `emailLoginEnabled`. The Data Source value remains part of the
+Platform 1.x compatibility flow; native Entities and Custom Queries resolve the current app through
+the authenticated request. Call `init()` during application startup before the compatibility
+sign-up method needs `allowSignup` or the login screen needs `emailLoginEnabled`.
 
 ## Configuration
 
@@ -168,6 +168,23 @@ the app session SSO already returns, persisted and refreshed the same way:
 ```typescript
 const user = await mitra.auth.signInWithEmail()
 ```
+
+Not every app is in the rollout. `mitra.emailLoginEnabled` is this app's own verdict, read from
+`/info` during `init()`, and it is what a login screen should offer the option on:
+
+```typescript
+await mitra.init()
+
+if (mitra.emailLoginEnabled) {
+  // render "sign in with email"
+}
+```
+
+It is `false` before `init()` runs, `false` when the server answers without the field or with
+something that is not a boolean, and `false` is the safe answer: the app is outside the rollout,
+IAM answers a request neutrally without sending anything, and the person would wait for a message
+that never arrives. Calling `signInWithEmail()` anyway is not blocked by the SDK; the verdict is
+there so the application does not offer a door that does not open.
 
 Redirect mode navigates the current page instead of opening a popup, and is completed during
 startup like the SSO redirect:
@@ -392,7 +409,7 @@ await loginWithGoogleMitra()
 console.log(mitra.auth.accessToken)
 ```
 
-Google SSO is available through `mitra.auth.signInWithGoogle` and `mitra.auth.completeGoogleSignInRedirect`. Agent tasks, Agent credentials, public Functions, entities, custom queries, Function execution, and integrations now have native replacements. Microsoft SSO remains available only through the complete deprecated re-export surface.
+Google, Microsoft and e-mail sign-in have native replacements: `mitra.auth.signInWithGoogle`, `mitra.auth.signInWithMicrosoft` and `mitra.auth.signInWithEmail`, each with its `complete...SignInRedirect` counterpart. Agent tasks, Agent credentials, public Functions, entities, custom queries, Function execution, and integrations also have native replacements. Only `loginMitra('mitra')` still has no native equivalent and remains available through the deprecated re-export surface.
 
 `createClient` configures the legacy SDK with both `baseURL` and `authUrl` set to `${apiUrl}/legacy`, after removing trailing slashes, plus `projectId: appId`. This keeps deprecated calls and legacy login routed through the BFF while the new modules call their native APIs directly. Its `authPageUrl` uses the same precedence as native Google SSO: explicit client config, `window.__mitraEnv.authPageUrl`, then `/sdk-auth.html` on the `apiUrl` origin. Existing query parameters are preserved.
 

@@ -84,6 +84,7 @@ export interface MitraClientConfig {
 interface AppInfoResponse {
   dataSourceId: string | null;
   allowSignup: boolean;
+  emailLoginEnabled: boolean;
 }
 
 function expectAppInfoResponse(value: unknown): AppInfoResponse {
@@ -108,6 +109,11 @@ function expectAppInfoResponse(value: unknown): AppInfoResponse {
   return {
     dataSourceId: response.dataSourceId,
     allowSignup: response.allowSignup,
+    // Unlike the fields above, a missing or non-boolean value is read as `false`
+    // instead of failing `init()`: a Code Studio older than the email login gate
+    // answers without this field, and an app that cannot prove it is enabled
+    // should stop offering the option, not stop starting.
+    emailLoginEnabled: response.emailLoginEnabled === true,
   };
 }
 
@@ -138,7 +144,8 @@ export interface MitraClient {
   /**
    * Initializes the client by resolving app config from the server.
    *
-   * Fetches the compatibility dataSourceId and allowSignup from the public app info endpoint.
+   * Fetches the compatibility dataSourceId, allowSignup, and emailLoginEnabled
+   * from the public app info endpoint.
    *
    * Safe to call multiple times. Subsequent calls are no-ops.
    *
@@ -235,6 +242,14 @@ export interface MitraClient {
   readonly allowSignup: boolean;
 
   /**
+   * Whether this app offers sign-in by email, so the application can hide the
+   * option instead of sending people to a request IAM would answer neutrally.
+   * Defaults to `false` before `init()` is called, and stays `false` when the
+   * server does not answer the field.
+   */
+  readonly emailLoginEnabled: boolean;
+
+  /**
    * The configuration used to create this client.
    */
   config: MitraClientConfig;
@@ -250,8 +265,8 @@ export interface MitraClient {
  * - **integration**: Proxy HTTP requests to external APIs
  * - **queries**: Custom query management and execution
  *
- * After creating the client, call `init()` to resolve the app's compatibility config
- * (dataSourceId, allowSignup) automatically from the server.
+ * After creating the client, call `init()` to resolve the app's public config
+ * (dataSourceId, allowSignup, emailLoginEnabled) automatically from the server.
  *
  * @param config - Configuration options for the client.
  * @returns A configured MitraClient instance.
@@ -367,6 +382,7 @@ export function createClient(config: MitraClientConfig): MitraClient {
 
   let initialized = false;
   let allowSignup = true;
+  let emailLoginEnabled = false;
 
   async function init(): Promise<void> {
     if (initialized) return;
@@ -386,6 +402,7 @@ export function createClient(config: MitraClientConfig): MitraClient {
       entitiesModule.setDataSourceId(appInfo.dataSourceId);
     }
     allowSignup = appInfo.allowSignup;
+    emailLoginEnabled = appInfo.emailLoginEnabled;
 
     initialized = true;
   }
@@ -402,6 +419,9 @@ export function createClient(config: MitraClientConfig): MitraClient {
     queries: queriesModule,
     get allowSignup() {
       return allowSignup;
+    },
+    get emailLoginEnabled() {
+      return emailLoginEnabled;
     },
     config,
   };

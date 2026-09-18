@@ -1,11 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mockFetchSequence, mockLocalStorage, mockSessionStorage } from '../test-utils';
+import {
+  MOCK_API_URL as API_URL,
+  authPageResult,
+  mockBrowser,
+  mockFetchSequence,
+  mockLocalStorage,
+  type BrowserHarness,
+} from '../test-utils';
 import { AuthModule } from './auth';
 
 const APP_ID = '11111111-1111-1111-1111-111111111111';
-const API_URL = 'https://api.mitra.io';
 const IAM_URL = `${API_URL}/iam`;
 const AUTH_PAGE_URL = `${API_URL}/sdk-auth.html`;
+const EXCHANGE_URL = `${IAM_URL}/api/v1/auth/magic-link/exchange`;
+const PENDING_KEY = `mitra_email_redirect_${APP_ID}`;
+const SESSION_KEY = `mitra_auth_${APP_ID}`;
+const TEN_MINUTES_MS = 10 * 60 * 1_000;
+const OTHER_TAB_STATE = 'email.0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a';
 const TOKEN_RESPONSE = {
   accessToken: 'access-123',
   refreshToken: 'refresh-456',
@@ -40,79 +51,21 @@ function jwt(payload: Record<string, unknown>): string {
   return `${encode({ alg: 'none', typ: 'JWT' })}.${encode(payload)}.signature`;
 }
 
-interface BrowserHarness {
-  popup: Window;
-  window: Window & { __mitraEnv?: { authPageUrl?: unknown } };
-  dispatchMessage(data: unknown, options?: { origin?: string; source?: MessageEventSource | null }): void;
-  getStartUrl(): URL;
-}
-
-function mockBrowser(injectedAuthPageUrl?: unknown): BrowserHarness {
-  const listeners = new Set<(event: MessageEvent<unknown>) => void>();
-  const popup = {
-    closed: false,
-    close: vi.fn(function close(this: { closed: boolean }) {
-      this.closed = true;
-    }),
-  } as unknown as Window;
-  const location = {
-    origin: 'https://app.example.com',
-    href: 'https://app.example.com/orders?status=open',
-    pathname: '/orders',
-    search: '?status=open',
-    hash: '',
-    assign: vi.fn(),
-  };
-  const sessionStorage = mockSessionStorage();
-  const browserWindow = {
-    location,
-    sessionStorage,
-    history: { replaceState: vi.fn() },
-    outerWidth: 1280,
-    outerHeight: 720,
-    screenX: 0,
-    screenY: 0,
-    screen: { width: 1280, height: 720 },
-    open: vi.fn(() => popup),
-    addEventListener: vi.fn((type: string, listener: (event: MessageEvent<unknown>) => void) => {
-      if (type === 'message') listeners.add(listener);
-    }),
-    removeEventListener: vi.fn((type: string, listener: (event: MessageEvent<unknown>) => void) => {
-      if (type === 'message') listeners.delete(listener);
-    }),
-    ...(injectedAuthPageUrl !== undefined
-      ? { __mitraEnv: { authPageUrl: injectedAuthPageUrl } }
-      : {}),
-  } as unknown as BrowserHarness['window'];
-
-  vi.stubGlobal('window', browserWindow);
-  vi.stubGlobal('crypto', {
-    getRandomValues: (bytes: Uint8Array) => {
-      bytes.fill(7);
-      return bytes;
-    },
+function pendingRequest(browser: BrowserHarness, state: string, createdAt: number): void {
+  browser.localStorage._store[PENDING_KEY] = JSON.stringify({
+    state,
+    redirectUri: AUTH_PAGE_URL,
+    createdAt,
   });
-
-  return {
-    popup,
-    window: browserWindow,
-    dispatchMessage(data, options = {}) {
-      const event = {
-        data,
-        origin: options.origin ?? API_URL,
-        source: options.source === undefined ? popup : options.source,
-      } as MessageEvent<unknown>;
-      listeners.forEach((listener) => listener(event));
-    },
-    getStartUrl() {
-      const [url] = vi.mocked(browserWindow.open).mock.calls[0];
-      return new URL(url as string);
-    },
-  };
 }
 
-function popupResult(state: string, result: Record<string, unknown>) {
-  return { type: 'mitra-oauth-result', success: true, state, ...result };
+function readPendingRequest(browser: BrowserHarness): Record<string, unknown> {
+  return JSON.parse(
+    vi.mocked(browser.localStorage.setItem).mock.calls
+      .filter(([key]) => key === PENDING_KEY)
+      .map(([, value]) => value)
+      .at(-1)!
+  );
 }
 
 describe('Auth page flow', () => {
@@ -136,7 +89,7 @@ describe('Auth page flow', () => {
     const signIn = auth.signInWithMicrosoft({ mode: 'popup' });
     const startUrl = browser.getStartUrl();
     const state = startUrl.searchParams.get('state')!;
-    browser.dispatchMessage(popupResult(state, { code: 'microsoft-code' }));
+    browser.dispatchMessage(authPageResult(state, { code: 'microsoft-code' }));
 
     await expect(signIn).resolves.toEqual(USER);
     expect(startUrl.origin + startUrl.pathname).toBe(AUTH_PAGE_URL);
@@ -151,7 +104,6 @@ describe('Auth page flow', () => {
   });
 
   it('exchanges the popup code directly with IAM and hydrates the session', async () => {
-    const storage = mockLocalStorage();
     const browser = mockBrowser();
     const fetchMock = mockFetchSequence([
       { body: TOKEN_RESPONSE },
@@ -164,7 +116,7 @@ describe('Auth page flow', () => {
     const signIn = auth.signInWithGoogle({ mode: 'popup' });
     const startUrl = browser.getStartUrl();
     const state = startUrl.searchParams.get('state')!;
-    browser.dispatchMessage(popupResult(state, { code: 'google-code' }));
+    browser.dispatchMessage(authPageResult(state, { code: 'google-code' }));
 
     await expect(signIn).resolves.toEqual(USER);
     expect(startUrl.origin + startUrl.pathname).toBe(AUTH_PAGE_URL);
@@ -181,7 +133,7 @@ describe('Auth page flow', () => {
     expect(auth.accessToken).toBe('access-123');
     expect(auth.currentUser).toEqual(USER);
     expect(listener).toHaveBeenLastCalledWith(USER);
-    expect(JSON.parse(storage._store[`mitra_auth_${APP_ID}`])).toEqual({
+    expect(JSON.parse(browser.localStorage._store[SESSION_KEY])).toEqual({
       user: USER,
       token: 'access-123',
       refreshToken: 'refresh-456',
@@ -196,7 +148,7 @@ describe('Auth page flow', () => {
 
     const signIn = auth.signInWithGoogle();
     const state = browser.getStartUrl().searchParams.get('state')!;
-    browser.dispatchMessage(popupResult(state, { token: TOKEN_RESPONSE }));
+    browser.dispatchMessage(authPageResult(state, { token: TOKEN_RESPONSE }));
 
     await expect(signIn).resolves.toEqual(USER);
     expect(fetchMock).toHaveBeenCalledOnce();
@@ -204,7 +156,6 @@ describe('Auth page flow', () => {
   });
 
   it('rejects popup JWTs issued for another app before persisting or hydrating', async () => {
-    const storage = mockLocalStorage();
     const browser = mockBrowser();
     const fetchMock = mockFetchSequence([{
       body: {
@@ -217,12 +168,12 @@ describe('Auth page flow', () => {
 
     const signIn = auth.signInWithGoogle({ mode: 'popup' });
     const state = browser.getStartUrl().searchParams.get('state')!;
-    browser.dispatchMessage(popupResult(state, { code: 'google-code' }));
+    browser.dispatchMessage(authPageResult(state, { code: 'google-code' }));
 
     await expect(signIn).rejects.toMatchObject({ code: 'INVALID_RESPONSE' });
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(auth.accessToken).toBeNull();
-    expect(storage._store[`mitra_auth_${APP_ID}`]).toBeUndefined();
+    expect(browser.localStorage._store[SESSION_KEY]).toBeUndefined();
   });
 
   it.each([
@@ -235,8 +186,8 @@ describe('Auth page flow', () => {
 
     const signIn = auth.signInWithGoogle();
     const state = browser.getStartUrl().searchParams.get('state')!;
-    browser.dispatchMessage(popupResult(state, { token: TOKEN_RESPONSE }), invalidEvent);
-    browser.dispatchMessage(popupResult(state, { token: TOKEN_RESPONSE }));
+    browser.dispatchMessage(authPageResult(state, { token: TOKEN_RESPONSE }), invalidEvent);
+    browser.dispatchMessage(authPageResult(state, { token: TOKEN_RESPONSE }));
 
     await expect(signIn).resolves.toEqual(USER);
   });
@@ -246,7 +197,7 @@ describe('Auth page flow', () => {
     const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
 
     const signIn = auth.signInWithGoogle();
-    browser.dispatchMessage(popupResult('google.attacker', { token: TOKEN_RESPONSE }));
+    browser.dispatchMessage(authPageResult('google.attacker', { token: TOKEN_RESPONSE }));
 
     await expect(signIn).rejects.toThrow('possible CSRF');
   });
@@ -273,7 +224,7 @@ describe('Auth page flow', () => {
 
     const signIn = auth.signInWithGoogle();
     const state = browser.getStartUrl().searchParams.get('state')!;
-    browser.dispatchMessage(popupResult(state, { token: { accessToken: 'only-one-field' } }));
+    browser.dispatchMessage(authPageResult(state, { token: { accessToken: 'only-one-field' } }));
 
     await expect(signIn).rejects.toMatchObject({ code: 'INVALID_RESPONSE' });
   });
@@ -324,7 +275,7 @@ describe('Auth page flow', () => {
 
     const signIn = auth.signInWithGoogle();
     const startUrl = browser.getStartUrl();
-    browser.dispatchMessage(popupResult(startUrl.searchParams.get('state')!, { token: TOKEN_RESPONSE }), {
+    browser.dispatchMessage(authPageResult(startUrl.searchParams.get('state')!, { token: TOKEN_RESPONSE }), {
       origin: startUrl.origin,
     });
     await signIn;
@@ -352,7 +303,7 @@ describe('Auth page flow', () => {
     const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
 
     void auth.signInWithGoogle({ mode: 'redirect' });
-    const assignedUrl = new URL(vi.mocked(browser.window.location.assign).mock.calls[0][0] as string);
+    const assignedUrl = browser.getRedirectUrl();
     const state = assignedUrl.searchParams.get('state')!;
     expect(assignedUrl.searchParams.get('responseType')).toBe('code');
 
@@ -369,7 +320,6 @@ describe('Auth page flow', () => {
   });
 
   it('rejects redirect JWTs issued for another app before persisting or hydrating', async () => {
-    const storage = mockLocalStorage();
     const browser = mockBrowser();
     const fetchMock = mockFetchSequence([{
       body: {
@@ -381,7 +331,7 @@ describe('Auth page flow', () => {
     const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
 
     void auth.signInWithGoogle({ mode: 'redirect' });
-    const assignedUrl = new URL(vi.mocked(browser.window.location.assign).mock.calls[0][0] as string);
+    const assignedUrl = browser.getRedirectUrl();
     browser.window.location.hash =
       `#codeMitra=redirect-code&stateMitra=${assignedUrl.searchParams.get('state')}`;
 
@@ -390,7 +340,7 @@ describe('Auth page flow', () => {
     });
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(auth.accessToken).toBeNull();
-    expect(storage._store[`mitra_auth_${APP_ID}`]).toBeUndefined();
+    expect(browser.localStorage._store[SESSION_KEY]).toBeUndefined();
   });
 
   it('rejects a redirect with a different state, keeping its pending request', async () => {
@@ -439,7 +389,7 @@ describe('Auth page flow', () => {
     const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
 
     void auth.signInWithGoogle({ mode: 'redirect' });
-    const assignedUrl = new URL(vi.mocked(browser.window.location.assign).mock.calls[0][0] as string);
+    const assignedUrl = browser.getRedirectUrl();
     browser.window.location.hash =
       `#codeMitra=error&errorMitra=provider-denied&stateMitra=${assignedUrl.searchParams.get('state')}`;
 
@@ -487,11 +437,11 @@ describe('Auth page flow', () => {
     const state = browser.getStartUrl().searchParams.get('state')!;
     expect(state).toMatch(/^google\.[0-9a-f]{32}$/);
 
-    browser.dispatchMessage(popupResult(state, { token: TOKEN_RESPONSE }));
+    browser.dispatchMessage(authPageResult(state, { token: TOKEN_RESPONSE }));
     await signIn;
 
     void auth.signInWithMicrosoft({ mode: 'redirect' });
-    const redirected = new URL(vi.mocked(browser.window.location.assign).mock.calls[0][0] as string);
+    const redirected = browser.getRedirectUrl();
     expect(redirected.searchParams.get('state')).toMatch(/^microsoft\.[0-9a-f]{32}$/);
   });
 
@@ -522,5 +472,271 @@ describe('Auth page flow', () => {
 
     await expect(auth.signInWithGoogle()).rejects.toThrow('only available in a browser');
     await expect(auth.completeGoogleSignInRedirect()).rejects.toThrow('only available in a browser');
+  });
+});
+
+describe('Email auth page flow', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('keeps the popup request pending for the link and drops it once the popup wins', async () => {
+    const browser = mockBrowser();
+    mockFetchSequence([{ body: TOKEN_RESPONSE }, { body: CURRENT_USER_RESPONSE }]);
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    const signIn = auth.signInWithEmail();
+    const state = browser.getStartUrl().searchParams.get('state')!;
+    expect(readPendingRequest(browser)).toEqual({
+      state,
+      redirectUri: AUTH_PAGE_URL,
+      createdAt: expect.any(Number),
+    });
+
+    browser.dispatchMessage(authPageResult(state, { code: 'exchange-code' }));
+    await signIn;
+
+    expect(browser.localStorage.removeItem).toHaveBeenCalledWith(PENDING_KEY);
+    expect(browser.localStorage._store[PENDING_KEY]).toBeUndefined();
+    expect(browser.window.sessionStorage.setItem).not.toHaveBeenCalled();
+  });
+
+  it('persists the redirect request in localStorage and completes it from the fragment', async () => {
+    const browser = mockBrowser();
+    const fetchMock = mockFetchSequence([
+      { body: TOKEN_RESPONSE },
+      { body: CURRENT_USER_RESPONSE },
+    ]);
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    void auth.signInWithEmail({ mode: 'redirect' });
+    const redirectUrl = browser.getRedirectUrl();
+    expect(redirectUrl.searchParams.get('provider')).toBe('email');
+    expect(browser.window.sessionStorage.setItem).not.toHaveBeenCalled();
+
+    browser.window.location.hash =
+      `#codeMitra=redirect-code&stateMitra=${redirectUrl.searchParams.get('state')}`;
+    await expect(auth.completeEmailSignInRedirect()).resolves.toEqual(USER);
+
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      appId: APP_ID,
+      code: 'redirect-code',
+    });
+    expect(browser.window.history.replaceState).toHaveBeenCalledWith({}, '', '/orders?status=open');
+    expect(browser.localStorage.removeItem).toHaveBeenCalledWith(PENDING_KEY);
+  });
+
+  it('rejects a redirect with a different state without consuming the pending request', async () => {
+    const browser = mockBrowser();
+    const fetchMock = mockFetchSequence([]);
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    void auth.signInWithEmail({ mode: 'redirect' });
+    browser.window.location.hash = '#codeMitra=redirect-code&stateMitra=email.attacker';
+
+    await expect(auth.completeEmailSignInRedirect()).rejects.toThrow('possible CSRF');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(browser.localStorage.removeItem).not.toHaveBeenCalled();
+    expect(browser.localStorage._store[PENDING_KEY]).toBeDefined();
+    expect(browser.window.history.replaceState).toHaveBeenCalledWith({}, '', '/orders?status=open');
+  });
+
+  it('drops its own fragment from the URL when it cannot be completed', async () => {
+    const browser = mockBrowser();
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    void auth.signInWithEmail({ mode: 'redirect' });
+    browser.window.location.hash = '#codeMitra=redirect-code&stateMitra=email.attacker';
+
+    await expect(auth.completeEmailSignInRedirect()).rejects.toThrow('possible CSRF');
+    expect(browser.window.history.replaceState).toHaveBeenCalledWith({}, '', '/orders?status=open');
+  });
+
+  it('completes the tab opened by the link from the request another tab left pending', async () => {
+    const browser = mockBrowser();
+    const fetchMock = mockFetchSequence([
+      { body: TOKEN_RESPONSE },
+      { body: CURRENT_USER_RESPONSE },
+    ]);
+    pendingRequest(browser, OTHER_TAB_STATE, Date.now());
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    browser.window.location.hash = `#codeMitra=link-code&stateMitra=${OTHER_TAB_STATE}`;
+    await expect(auth.completeEmailSignInRedirect()).resolves.toEqual(USER);
+
+    expect(fetchMock.mock.calls[0][0]).toBe(EXCHANGE_URL);
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      appId: APP_ID,
+      code: 'link-code',
+    });
+    expect(browser.localStorage._store[PENDING_KEY]).toBeUndefined();
+    expect(browser.window.history.replaceState).toHaveBeenCalled();
+  });
+
+  it('refuses an email fragment when no request is pending in this browser', async () => {
+    const browser = mockBrowser();
+    const fetchMock = mockFetchSequence([]);
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    browser.window.location.hash = `#codeMitra=link-code&stateMitra=${OTHER_TAB_STATE}`;
+
+    await expect(auth.completeEmailSignInRedirect()).rejects.toThrow('possible CSRF');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(browser.window.history.replaceState).toHaveBeenCalled();
+  });
+
+  it('refuses an email fragment whose state is not the pending one', async () => {
+    const browser = mockBrowser();
+    const fetchMock = mockFetchSequence([]);
+    pendingRequest(browser, OTHER_TAB_STATE, Date.now());
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    browser.window.location.hash = '#codeMitra=attacker-code&stateMitra=email.deadbeef';
+
+    await expect(auth.completeEmailSignInRedirect()).rejects.toThrow('possible CSRF');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(browser.localStorage._store[PENDING_KEY]).toBeDefined();
+    expect(browser.window.history.replaceState).toHaveBeenCalled();
+  });
+
+  it('keeps the popup open for the whole life of the challenge before timing out', async () => {
+    vi.useFakeTimers();
+    const browser = mockBrowser();
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    const rejection = expect(auth.signInWithEmail()).rejects.toThrow('timed out');
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1_000);
+    expect(browser.popup.close).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1_000);
+
+    await rejection;
+    expect(browser.popup.close).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the request pending when the popup is cancelled, so the link can still finish it', async () => {
+    vi.useFakeTimers();
+    const browser = mockBrowser();
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    const rejection = expect(auth.signInWithEmail()).rejects.toThrow('was cancelled');
+    Object.defineProperty(browser.popup, 'closed', { value: true, writable: true });
+    await vi.advanceTimersByTimeAsync(500);
+
+    await rejection;
+    expect(browser.localStorage._store[PENDING_KEY]).toBeDefined();
+    expect(browser.localStorage.removeItem).not.toHaveBeenCalledWith(PENDING_KEY);
+  });
+
+  it('refuses and discards a pending request that carries no creation time', async () => {
+    const browser = mockBrowser();
+    const fetchMock = mockFetchSequence([]);
+    browser.localStorage._store[PENDING_KEY] = JSON.stringify({
+      state: OTHER_TAB_STATE,
+      redirectUri: AUTH_PAGE_URL,
+    });
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    browser.window.location.hash = `#codeMitra=link-code&stateMitra=${OTHER_TAB_STATE}`;
+
+    await expect(auth.completeEmailSignInRedirect()).rejects.toThrow('expired');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(browser.localStorage._store[PENDING_KEY]).toBeUndefined();
+    expect(browser.window.history.replaceState).toHaveBeenCalled();
+  });
+
+  it('refuses and discards a pending request older than ten minutes', async () => {
+    const browser = mockBrowser();
+    const fetchMock = mockFetchSequence([]);
+    pendingRequest(browser, OTHER_TAB_STATE, Date.now() - TEN_MINUTES_MS - 1);
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    browser.window.location.hash = `#codeMitra=link-code&stateMitra=${OTHER_TAB_STATE}`;
+
+    await expect(auth.completeEmailSignInRedirect()).rejects.toThrow('expired');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(browser.localStorage._store[PENDING_KEY]).toBeUndefined();
+    expect(browser.window.history.replaceState).toHaveBeenCalled();
+  });
+
+  it('finishes the email fragment at a startup that chains every completion', async () => {
+    const browser = mockBrowser();
+    const fetchMock = mockFetchSequence([
+      { body: TOKEN_RESPONSE },
+      { body: CURRENT_USER_RESPONSE },
+    ]);
+    pendingRequest(browser, OTHER_TAB_STATE, Date.now());
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    browser.window.location.hash = `#codeMitra=link-code&stateMitra=${OTHER_TAB_STATE}`;
+    const user =
+      (await auth.completeGoogleSignInRedirect())
+      ?? (await auth.completeMicrosoftSignInRedirect())
+      ?? (await auth.completeEmailSignInRedirect());
+
+    expect(user).toEqual(USER);
+    expect(fetchMock.mock.calls[0][0]).toBe(EXCHANGE_URL);
+    expect(browser.window.history.replaceState).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['a recent email request pending', 0],
+    ['an expired email request pending', TEN_MINUTES_MS + 1],
+    ['no email request pending', null],
+  ])('finishes the Google fragment at a startup with %s', async (_case, pendingAge) => {
+    const browser = mockBrowser();
+    const fetchMock = mockFetchSequence([
+      { body: TOKEN_RESPONSE },
+      { body: CURRENT_USER_RESPONSE },
+    ]);
+    if (pendingAge !== null) pendingRequest(browser, OTHER_TAB_STATE, Date.now() - pendingAge);
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    void auth.signInWithGoogle({ mode: 'redirect' });
+    const googleState = browser.getRedirectUrl().searchParams.get('state')!;
+    browser.window.location.hash = `#codeMitra=google-code&stateMitra=${googleState}`;
+    const user =
+      (await auth.completeEmailSignInRedirect())
+      ?? (await auth.completeMicrosoftSignInRedirect())
+      ?? (await auth.completeGoogleSignInRedirect());
+
+    expect(user).toEqual(USER);
+    expect(fetchMock.mock.calls[0][0]).toBe(`${IAM_URL}/api/v1/auth/google`);
+    expect(browser.localStorage.removeItem).not.toHaveBeenCalledWith(PENDING_KEY);
+    if (pendingAge !== null) expect(browser.localStorage._store[PENDING_KEY]).toBeDefined();
+    expect(browser.window.history.replaceState).toHaveBeenCalledOnce();
+  });
+
+  it('fails the redirect when localStorage refuses the pending request', async () => {
+    const browser = mockBrowser();
+    browser.localStorage.setItem.mockImplementation(() => {
+      throw new Error('storage is disabled');
+    });
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    await expect(auth.signInWithEmail({ mode: 'redirect' })).rejects.toThrow(
+      'requires localStorage'
+    );
+    expect(browser.window.location.assign).not.toHaveBeenCalled();
+  });
+
+  it('signs in through the popup even when localStorage refuses the pending request', async () => {
+    const browser = mockBrowser();
+    const fetchMock = mockFetchSequence([
+      { body: TOKEN_RESPONSE },
+      { body: CURRENT_USER_RESPONSE },
+    ]);
+    browser.localStorage.setItem.mockImplementation(() => {
+      throw new Error('storage is disabled');
+    });
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    const signIn = auth.signInWithEmail();
+    const state = browser.getStartUrl().searchParams.get('state')!;
+    browser.dispatchMessage(authPageResult(state, { code: 'exchange-code' }));
+
+    await expect(signIn).resolves.toEqual(USER);
+    expect(fetchMock.mock.calls[0][0]).toBe(EXCHANGE_URL);
+    expect(browser.localStorage._store[PENDING_KEY]).toBeUndefined();
   });
 });

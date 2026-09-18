@@ -48,11 +48,16 @@ describe('createClient', () => {
     expect(mitra.config.appId).toBe('app-1');
     expect(mitra.config).toBe(config);
     expect(mitra.allowSignup).toBe(true);
+    expect(mitra.emailLoginEnabled).toBe(false);
   });
 
   it('should fetch app info and update public app config on init', async () => {
     mockLocalStorage();
-    const fetchMock = mockFetch({ dataSourceId: 'ds-resolved', allowSignup: false });
+    const fetchMock = mockFetch({
+      dataSourceId: 'ds-resolved',
+      allowSignup: false,
+      emailLoginEnabled: true,
+    });
 
     const mitra = createClient({
       appId: 'app-1',
@@ -65,6 +70,7 @@ describe('createClient', () => {
     const calledUrl = fetchMock.mock.calls[0][0] as string;
     expect(calledUrl).toBe('https://api.mitra.io/code-studio/api/v1/apps/app-1/info');
     expect(mitra.allowSignup).toBe(false);
+    expect(mitra.emailLoginEnabled).toBe(true);
   });
 
   it('should not execute init twice', async () => {
@@ -135,6 +141,23 @@ describe('createClient', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(mitra.allowSignup).toBe(false);
+  });
+
+  it.each([
+    ['reads email login as enabled', { emailLoginEnabled: true }, true],
+    ['reads email login as disabled', { emailLoginEnabled: false }, false],
+    ['denies email login when the server omits the field', {}, false],
+    ['denies email login when the field is not a boolean', { emailLoginEnabled: 'true' }, false],
+  ])('%s', async (_case, emailLogin, expected) => {
+    mockLocalStorage();
+    mockFetch({ dataSourceId: 'ds-1', allowSignup: true, ...emailLogin });
+    const mitra = createClient({
+      appId: 'app-1',
+      apiUrl: 'https://api.mitra.io',
+    });
+
+    await expect(mitra.init()).resolves.toBeUndefined();
+    expect(mitra.emailLoginEnabled).toBe(expected);
   });
 
   it('should not serialize persisted access or refresh tokens', () => {

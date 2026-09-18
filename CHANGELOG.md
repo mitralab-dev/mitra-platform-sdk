@@ -40,6 +40,23 @@ All notable changes to this project are documented in this file.
   is lost beyond that one attempt, and only for redirects in flight during the upgrade.
 - Give each provider its own popup window name.
 - Point the deprecated `signIn` and `signUp` failures at `signInWithEmail()`.
+- Add `mitra.emailLoginEnabled`, read from `/info` during `init()` next to `allowSignup`, so an
+  application only offers "sign in with email" when this app is inside the platform's rollout.
+  A Code Studio older than the field answers without it, and any value that is not a boolean is
+  read as `false`, so `init()` keeps working and an app that cannot prove it is enabled stops
+  offering the option.
+
+## 1.1.2
+
+- Move the `@mitralab.io/sdk-core` pin from `0.2.1` to `0.2.2`: same surface, published with the
+  contract corpus that consumers pin, so every SDK released that day sits on the same core.
+
+## 1.1.1
+
+- Depend on `@mitralab.io/sdk-core@0.2.1`, which replays `textChunk` and late deltas after an
+  interrupted turn.
+- Serve the Agent chat from the T3 box over the direct channel when the Copilot offers it.
+- Treat a half-open Agent session channel as a disconnect instead of a live one.
 
 ## 1.1.0-beta.2
 

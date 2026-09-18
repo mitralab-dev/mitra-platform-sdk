@@ -46,8 +46,10 @@ export { getConfig } from 'mitra-interactions-sdk';
 export { resolveProjectId } from 'mitra-interactions-sdk';
 
 /**
- * @deprecated Use `mitra.auth.signInWithGoogle()` when `method` is Google.
- * Other legacy login methods remain supported until an equivalent exists.
+ * @deprecated Use `mitra.auth.signInWithGoogle()` when `method` is `google`,
+ * `mitra.auth.signInWithMicrosoft()` when it is `microsoft`, and
+ * `mitra.auth.signInWithEmail()` when it is `email`. Only `mitra` has no native
+ * equivalent yet and remains supported through this surface.
  */
 export const loginMitra: typeof legacyLoginMitra = async (method, options) => {
   const session = await legacyLoginMitra(method, options);
