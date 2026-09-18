@@ -25,10 +25,11 @@ function bornOnBox(options: AgentTaskSessionOptions): AgentTaskSessionOptions {
 }
 
 /**
- * Composes Core's Agent lifecycle with the browser streaming boundary. The session's own
- * sends pass through the outbox, which holds a prompt while the browser is offline or when its
- * request got no response, until the browser is back; the public REST primitive stays plain,
- * so a direct `sendInput` fails as it always did.
+ * Composes Core's Agent lifecycle with the browser streaming boundary. On the direct channel
+ * the session's message and interrupt are written on the box socket itself. Everything the
+ * socket cannot carry right now goes through the outbox, which holds a prompt while the browser
+ * is offline or when its request got no response, until the browser is back; the public REST
+ * primitive stays plain, so a direct `sendInput` fails as it always did.
  */
 export function createBrowserAgentTasksModule(
   httpClient: HttpClient,
@@ -62,7 +63,12 @@ export function createBrowserAgentTasksModule(
     },
   };
   const manager = createAgentTaskSessionManager({
-    tasks: { ...tasks, sendInput: (taskId, input) => outbox.sendInput(taskId, input) },
+    tasks: {
+      ...tasks,
+      sendInput: (taskId, input) => (source.sendOnChannel(taskId, input)
+        ? Promise.resolve()
+        : outbox.sendInput(taskId, input)),
+    },
     eventSource,
   });
   return withAgentTaskSessions(tasks, {

@@ -32,14 +32,35 @@ class FakeWebSocket {
   onerror: (() => void) | null = null;
   onmessage: ((event: MessageEvent) => void) | null = null;
   onclose: ((event: CloseEvent) => void) | null = null;
-  close = vi.fn((code = 1000) => this.onclose?.({ code } as CloseEvent));
+  readyState = 0;
+  close = vi.fn((code = 1000) => {
+    this.readyState = 3;
+    this.onclose?.({ code } as CloseEvent);
+  });
   send = vi.fn();
 
   constructor(readonly url: string) {
     FakeWebSocket.instances.push(this);
-    queueMicrotask(() => (browser.offline ? this.onerror?.() : this.onopen?.()));
+    queueMicrotask(() => {
+      if (browser.offline) {
+        this.onerror?.();
+        return;
+      }
+      this.readyState = 1;
+      this.onopen?.();
+    });
+  }
+
+  message(value: unknown): void {
+    this.onmessage?.({ data: JSON.stringify(value) } as MessageEvent);
+  }
+
+  frames(): unknown[] {
+    return this.send.mock.calls.map(([frame]) => JSON.parse(String(frame)) as unknown);
   }
 }
+
+const BOX_WS_URL = 'wss://api.mitra.io/__ide/3773-box.e2b.app/api/mitra/chat/ws?grant=g&ticket=t';
 
 const auth: AuthSessionPort = {
   accessToken: 'access',
@@ -61,20 +82,25 @@ const rejected: InputAnswer = () => Promise.resolve({
 });
 
 /**
- * The copilot as the session sees it: the task, an empty history, no box channel, and
- * `/inputs` answering in the order the test scripted, the last answer repeating.
+ * The copilot as the session sees it: the task, an empty history, the box channel only when
+ * the test offers one, and `/inputs` answering in the order the test scripted, the last answer
+ * repeating. `inputs` is called with the request body, so a test can read what went by REST.
  */
-function copilot(inputAnswers: InputAnswer[]) {
+function copilot(inputAnswers: InputAnswer[], boxWsUrl?: string) {
   const inputs = vi.fn();
-  vi.stubGlobal('fetch', vi.fn((input: unknown) => {
+  vi.stubGlobal('fetch', vi.fn((input: unknown, init?: { body?: string }) => {
     const url = String(input);
     if (browser.offline) return Promise.reject(new TypeError('Failed to fetch'));
     if (url.includes('/inputs')) {
-      inputs(url);
+      inputs(JSON.parse(init?.body ?? '{}'));
       const answer = inputAnswers[Math.min(inputs.mock.calls.length, inputAnswers.length) - 1];
       return answer();
     }
-    if (url.includes('/channel')) return Promise.resolve({ ok: false, status: 404 });
+    if (url.includes('/channel')) {
+      return Promise.resolve(boxWsUrl
+        ? { ok: true, status: 200, json: async () => ({ wsUrl: boxWsUrl, lastSequence: 0 }) }
+        : { ok: false, status: 404 });
+    }
     if (url.includes('/events')) {
       return Promise.resolve({ ok: true, status: 200, body: new ReadableStream<Uint8Array>({ start() {} }) });
     }
@@ -257,6 +283,83 @@ describe('agent input outbox', () => {
       await expect(waitingFailure).resolves.toContain('never sent');
       expect(onlineListeners).toHaveLength(0);
     });
+  });
+
+  describe('on the direct channel', () => {
+    // Issue #116: every send went to `/inputs` and the copilot opened a host socket to the box
+    // just to hand it over, which put the copilot's socket buffer between the person and the
+    // box. The box reads the client frame itself and asks the copilot only for admission.
+    const box = () => FakeWebSocket.instances[0];
+
+    it('writes the message on the box socket instead of calling the copilot REST', async () => {
+      const inputs = copilot([accepted], BOX_WS_URL);
+      const { session, errors } = await openSession();
+
+      session.send('hello', { agentType: 'CLAUDE' });
+      await vi.waitFor(() => expect(box().frames()).toEqual([
+        { type: 'message', content: 'hello', agentType: 'CLAUDE' },
+      ]));
+
+      expect(box().url).toBe(BOX_WS_URL);
+      expect(inputs).not.toHaveBeenCalled();
+      expect(errors).toEqual([]);
+      expect(session.status).toBe('streaming');
+      session.close();
+    });
+
+    it('writes the interrupt on the box socket', async () => {
+      const inputs = copilot([accepted], BOX_WS_URL);
+      const { session, errors } = await openSession();
+      session.send('hello');
+      await vi.waitFor(() => expect(box().frames()).toHaveLength(1));
+
+      await session.cancel();
+
+      expect(box().frames().at(-1)).toEqual({ type: 'interrupt' });
+      expect(inputs).not.toHaveBeenCalled();
+      expect(errors).toEqual([]);
+      session.close();
+    });
+
+    it('falls back to REST while the box socket is being redialed', async () => {
+      const inputs = copilot([accepted], BOX_WS_URL);
+      const { session, errors } = await openSession();
+      session.send('hello');
+      await vi.waitFor(() => expect(box().frames()).toHaveLength(1));
+      box().message({ type: 'textDelta', payload: { text: 'a' }, timestamp: 1, sequence: 1 });
+      box().onclose?.({ code: 1006 } as CloseEvent);
+
+      await session.cancel();
+
+      expect(inputs).toHaveBeenCalledExactlyOnceWith({ type: 'interrupt' });
+      expect(box().frames()).toHaveLength(1);
+      expect(errors).toEqual([]);
+      session.close();
+    });
+
+    it('answers an approval by REST', async () => {
+      const inputs = copilot([accepted], BOX_WS_URL);
+      const { session, errors } = await openSession();
+
+      session.respondApproval(true);
+
+      await vi.waitFor(() => expect(inputs).toHaveBeenCalledExactlyOnceWith({ type: 'approval_response', approved: true }));
+      expect(box().frames()).toEqual([]);
+      expect(errors).toEqual([]);
+      session.close();
+    });
+  });
+
+  it('sends by REST for a chat served by the copilot socket', async () => {
+    const inputs = copilot([accepted]);
+    const { session, errors } = await openSession();
+
+    session.send('hello');
+
+    await vi.waitFor(() => expect(inputs).toHaveBeenCalledExactlyOnceWith({ type: 'message', content: 'hello' }));
+    expect(FakeWebSocket.instances[0].frames()).toEqual([]);
+    expect(errors).toEqual([]);
+    session.close();
   });
 
   it('retries on a bounded backoff when the browser does not say it is offline, then gives up', async () => {
