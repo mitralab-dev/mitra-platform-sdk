@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## 1.1.4
+## 1.2.0-beta.2
 
 - On the direct channel the message and the interrupt are written on the box socket, as the
   client frames the box already reads, instead of `POST /copilot/api/v1/tasks/{id}/inputs`. The
