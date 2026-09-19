@@ -481,7 +481,9 @@ export type {
   PublicFunctionsModule,
 } from '@mitralab.io/sdk-core';
 export type {
+  AgentCredentialOptions,
   AgentCredentialProvider,
+  AgentCredentialScope,
   AgentCredentialsModule,
   AgentDeviceProvider,
   AgentOAuthProvider,

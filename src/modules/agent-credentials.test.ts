@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mockFetch } from '../test-utils';
 import { HttpClient } from '../utils/http-client';
-import { createBrowserAgentCredentialsModule } from './agent-credentials';
+import { createBrowserAgentCredentialsModule, type AgentCredentialOptions } from './agent-credentials';
 
 describe('createBrowserAgentCredentialsModule', () => {
   afterEach(() => vi.unstubAllGlobals());
@@ -16,6 +16,25 @@ describe('createBrowserAgentCredentialsModule', () => {
     expect(fetchMock.mock.calls[0][0]).toBe(
       'https://api.mitra.io/copilot/api/v1/credentials/ANTHROPIC/api-key'
     );
+  });
+
+  it.each<[string, unknown, number, (options?: AgentCredentialOptions) => Promise<unknown>]>([
+    ['list', [], 200, (options) => credentials().list(options)],
+    ['listModels', [], 200, (options) => credentials().listModels(undefined, options)],
+    ['saveApiKey', undefined, 204, (options) => credentials().saveApiKey('ANTHROPIC', 'secret', options)],
+    ['remove', undefined, 204, (options) => credentials().remove('OPENAI', options)],
+    ['startOAuth', { authUrl: 'https://auth', state: 's' }, 200, (options) => credentials().startOAuth('ANTHROPIC', options)],
+    ['exchangeOAuth', { connected: true, email: null }, 200, (options) => credentials().exchangeOAuth('ANTHROPIC', { code: 'c', state: 's' }, options)],
+    ['startDeviceAuthorization', { deviceAuthId: 'd', userCode: 'u', verificationUri: 'https://v', intervalSeconds: 5 }, 200, (options) => credentials().startDeviceAuthorization('OPENAI', options)],
+    ['pollDeviceAuthorization', { connected: false, email: null }, 200, (options) => credentials().pollDeviceAuthorization('OPENAI', 'd', options)],
+  ])('%s carries the scope as a query parameter only when it is given', async (_name, response, status, call) => {
+    const fetchMock = mockFetch(response, status);
+
+    await call({ scope: 'ACCOUNT' });
+    await call();
+
+    expect(fetchMock.mock.calls[0][0]).toMatch(/\?scope=ACCOUNT$/);
+    expect(fetchMock.mock.calls[1][0]).not.toContain('scope');
   });
 
   it.each([
