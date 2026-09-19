@@ -5,6 +5,7 @@ import type {
   AgentTaskEventConnection,
   AgentTaskEventObserver,
   AgentTaskEventSource,
+  AgentTaskInput,
 } from '@mitralab.io/sdk-core';
 import type { AuthSessionPort } from './auth';
 
@@ -29,6 +30,8 @@ type ReopenOutcome =
   | { readonly kind: 'failed'; readonly error: Error };
 /** The copilot closes the older socket with this code when the same chat is opened elsewhere. */
 const SUPERSEDED_CLOSE_CODE = 4409;
+/** `WebSocket.OPEN`, read as a literal so a socket without the static still answers. */
+const SOCKET_OPEN = 1;
 
 /** Rearmed by every frame, ping included. Firing means the channel is gone, not idle. */
 class SilenceWatchdog {
@@ -179,6 +182,8 @@ function channelEvent(type: 'channelReconnecting' | 'channelConnected', payload:
 
 interface LiveSocket {
   close(): void;
+  /** Writes one frame. False when the socket is not open right now; nothing is queued. */
+  send(frame: string): boolean;
 }
 
 interface DialOptions {
@@ -205,6 +210,8 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
    */
   private readonly boxCursors = new Map<string, number>();
   private readonly boxAddresses = new Map<string, string>();
+  /** The box socket a task is talking on right now; absent while it is lost or being redialed. */
+  private readonly directSockets = new Map<string, LiveSocket>();
 
   constructor(
     private readonly auth: AuthSessionPort,
@@ -254,6 +261,24 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
         connection.close();
       },
     };
+  }
+
+  /**
+   * Writes a message or an interrupt on the box socket when the task is on the direct channel
+   * and that socket is open right now. The box accepts the core's input as its own inbound
+   * frame, asks the copilot for admission itself and answers on this same socket with the
+   * frames the observer already reads, so the copilot's host socket is off the message path.
+   * False sends the caller to REST: no direct channel, a socket lost or mid-redial, or an
+   * approval, which stays on REST as it is.
+   *
+   * A frame written on a socket that closes before the box acknowledges it is not sent again
+   * over REST: the box may have admitted the turn already, and a second copy would start it
+   * twice. The redial replays the box log, which is the same recovery a REST 202 gets when its
+   * turn is lost.
+   */
+  sendOnChannel(taskId: string, input: AgentTaskInput): boolean {
+    if (input.type === 'approval_response') return false;
+    return this.directSockets.get(taskId)?.send(JSON.stringify(input)) ?? false;
   }
 
   private async requireFreshToken(): Promise<string> {
@@ -370,6 +395,13 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
     signal?.addEventListener('abort', onAbort, { once: true });
     let inTurn = false;
     let current: LiveSocket | null = null;
+    // Only this connection's own socket is forgotten: a newer open of the same task may
+    // already be on the map when an older close runs.
+    const track = (socket: LiveSocket | null) => {
+      if (socket) this.directSockets.set(taskId, socket);
+      else if (current && this.directSockets.get(taskId) === current) this.directSockets.delete(taskId);
+      current = socket;
+    };
 
     const onFrame = (event: AgentTaskEvent) => {
       if (typeof event.sequence === 'number') {
@@ -380,23 +412,22 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
       observer.onEvent(event);
     };
     const onLost = (error: Error, code?: number) => {
-      current = null;
+      track(null);
       if (link.signal.aborted) return;
       if (!inTurn || code === SUPERSEDED_CLOSE_CODE) {
         observer.onDisconnect(error);
         return;
       }
-      void this.redial(taskId, error, link.signal, observer, { onFrame, onLost }).then((socket) => {
-        current = socket;
-      });
+      void this.redial(taskId, error, link.signal, observer, { onFrame, onLost }).then(track);
     };
 
-    current = await this.dial(channel.wsUrl, { signal: link.signal, onFrame, onLost });
+    track(await this.dial(channel.wsUrl, { signal: link.signal, onFrame, onLost }));
     return {
       close: () => {
         signal?.removeEventListener('abort', onAbort);
         link.abort();
         current?.close();
+        track(null);
       },
     };
   }
@@ -497,6 +528,15 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
         removeAbortListener();
         socket.close(1000, 'Client closed');
       };
+      const send = (frame: string) => {
+        if (intentionalClose || socket.readyState !== SOCKET_OPEN) return false;
+        try {
+          socket.send(frame);
+          return true;
+        } catch {
+          return false;
+        }
+      };
       const onAbort = () => {
         if (!opened) {
           rejectHandshake(signal?.reason instanceof Error
@@ -527,7 +567,7 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
             // Um socket que ja nasceu morto cai no onclose; a repeticao segue na proxima volta.
           }
         }
-        resolve({ close });
+        resolve({ close, send });
       };
       socket.onerror = () => {
         if (!opened) rejectHandshake(new Error('Failed to connect to the Agent WebSocket.'));

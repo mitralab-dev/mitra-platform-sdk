@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented in this file.
 
+## 1.1.4-beta.0
+
+- On the direct channel the message and the interrupt are written on the box socket, as the
+  client frames the box already reads, instead of `POST /copilot/api/v1/tasks/{id}/inputs`. The
+  box asks the Copilot for admission itself and answers on the same socket, so the Copilot's host
+  socket buffer no longer bounds the message: the only limit is the box channel's own. REST stays
+  for a chat with no box socket, for a socket not open at the moment of the send, a redial in
+  progress included, and for every approval answer. A frame written on a socket that closes
+  before the box acknowledges it is not resent over REST, since the box may have admitted the
+  turn already; the redial's replay recovers it.
+
 ## 1.1.3
 
 - A chat created through `session({ create: true })` over the `auto` or `websocket` transport is

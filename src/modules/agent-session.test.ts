@@ -12,7 +12,11 @@ class FakeWebSocket {
   onmessage: ((event: MessageEvent) => void) | null = null;
   onclose: ((event: CloseEvent) => void) | null = null;
   readonly sent: string[] = [];
-  close = vi.fn((code = 1000) => this.onclose?.({ code } as CloseEvent));
+  readyState = 0;
+  close = vi.fn((code = 1000) => {
+    this.readyState = 3;
+    this.onclose?.({ code } as CloseEvent);
+  });
   send = vi.fn((data: string) => {
     this.sent.push(data);
   });
@@ -20,7 +24,12 @@ class FakeWebSocket {
   constructor(url: string) {
     this.url = url;
     FakeWebSocket.instances.push(this);
-    if (FakeWebSocket.autoOpen) queueMicrotask(() => this.onopen?.());
+    if (FakeWebSocket.autoOpen) queueMicrotask(() => this.open());
+  }
+
+  open(): void {
+    this.readyState = 1;
+    this.onopen?.();
   }
 
   message(value: unknown): void {
@@ -605,6 +614,48 @@ describe('BrowserAgentTaskEventSource', () => {
 
       expect(FakeWebSocket.instances).toHaveLength(1);
       expect(events.onDisconnect).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('input on the box socket', () => {
+    const message = { type: 'message', content: 'hello', agentType: 'CLAUDE' } as const;
+
+    it('writes the input as the frame the box reads, and not while the socket is gone', async () => {
+      vi.useFakeTimers();
+      vi.stubGlobal('fetch', channelOffered(BOX_WS_URL, 0));
+      const source = new BrowserAgentTaskEventSource(auth(), 'https://api.mitra.io');
+      const connection = await source.open('task-1', observer(), undefined, 'auto');
+      const first = FakeWebSocket.instances[0];
+
+      expect(source.sendOnChannel('task-1', message)).toBe(true);
+      expect(source.sendOnChannel('task-1', { type: 'interrupt' })).toBe(true);
+      expect(first.sent).toEqual([JSON.stringify(message), JSON.stringify({ type: 'interrupt' })]);
+      // An approval and another task are not this socket's to carry.
+      expect(source.sendOnChannel('task-1', { type: 'approval_response', approved: true })).toBe(false);
+      expect(source.sendOnChannel('task-2', message)).toBe(false);
+
+      // Dropped mid-turn: the redial is on its way and there is no socket to write on.
+      first.message({ type: 'textDelta', payload: { text: 'a' }, timestamp: 1 });
+      first.onclose?.({ code: 1006 } as CloseEvent);
+      expect(source.sendOnChannel('task-1', { type: 'interrupt' })).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(RECONNECT_DELAYS_MS[0]);
+      const second = FakeWebSocket.instances[1];
+      expect(source.sendOnChannel('task-1', { type: 'interrupt' })).toBe(true);
+      expect(second.sent.at(-1)).toBe(JSON.stringify({ type: 'interrupt' }));
+
+      connection.close();
+      expect(source.sendOnChannel('task-1', message)).toBe(false);
+      expect(second.sent).toHaveLength(2);
+    });
+
+    it('has nothing to write on for a chat served by the copilot socket', async () => {
+      const source = new BrowserAgentTaskEventSource(auth(), 'https://api.mitra.io');
+      const connection = await source.open('task-1', observer(), undefined, 'auto');
+
+      expect(source.sendOnChannel('task-1', message)).toBe(false);
+      expect(FakeWebSocket.instances[0].sent).toEqual([]);
+      connection.close();
     });
   });
 
