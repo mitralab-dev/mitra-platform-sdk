@@ -12,10 +12,12 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
+      # main carries the next line; a release/<major>.<minor>.x branch carries patches of a
+      # published line while main has already moved on (1.1.4 from release/1.1.x with main at 1.2).
       - name: Validate branch
-        if: github.ref_name != 'main'
+        if: github.ref_name != 'main' && !startsWith(github.ref_name, 'release/')
         run: |
-          echo "::error::Releases are only allowed from the main branch."
+          echo "::error::Releases are only allowed from main or a release/* branch."
           exit 1
       - name: Validate version
         env:
