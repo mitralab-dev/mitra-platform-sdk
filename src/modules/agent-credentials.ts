@@ -1,5 +1,6 @@
 import {
   createAgentCredentialsModule,
+  type AgentCredentialOptions,
   type AgentCredentialsModule as CoreAgentCredentialsModule,
   type AgentModel,
   type AuthenticationResult,
@@ -16,19 +17,31 @@ export type AgentOAuthProvider = 'ANTHROPIC';
 export type AgentDeviceProvider = 'OPENAI';
 
 export interface AgentCredentialsModule {
-  list(): Promise<CredentialStatus[]>;
-  listModels(agentId?: string): Promise<AgentModel[]>;
-  saveApiKey(provider: AgentCredentialProvider, apiKey: string): Promise<void>;
-  remove(provider: AgentCredentialProvider): Promise<void>;
-  startOAuth(provider: AgentOAuthProvider): Promise<OAuthStartResult>;
+  list(options?: AgentCredentialOptions): Promise<CredentialStatus[]>;
+  listModels(agentId?: string, options?: AgentCredentialOptions): Promise<AgentModel[]>;
+  saveApiKey(
+    provider: AgentCredentialProvider,
+    apiKey: string,
+    options?: AgentCredentialOptions
+  ): Promise<void>;
+  remove(provider: AgentCredentialProvider, options?: AgentCredentialOptions): Promise<void>;
+  startOAuth(
+    provider: AgentOAuthProvider,
+    options?: AgentCredentialOptions
+  ): Promise<OAuthStartResult>;
   exchangeOAuth(
     provider: AgentOAuthProvider,
-    input: OAuthExchangeInput
+    input: OAuthExchangeInput,
+    options?: AgentCredentialOptions
   ): Promise<AuthenticationResult>;
-  startDeviceAuthorization(provider: AgentDeviceProvider): Promise<DeviceAuthorization>;
+  startDeviceAuthorization(
+    provider: AgentDeviceProvider,
+    options?: AgentCredentialOptions
+  ): Promise<DeviceAuthorization>;
   pollDeviceAuthorization(
     provider: AgentDeviceProvider,
-    deviceAuthId: string
+    deviceAuthId: string,
+    options?: AgentCredentialOptions
   ): Promise<AuthenticationResult>;
 }
 
@@ -48,31 +61,33 @@ export function createBrowserAgentCredentialsModule(
 ): AgentCredentialsModule {
   const core: CoreAgentCredentialsModule = createAgentCredentialsModule(httpClient, coreErrors);
   return {
-    list: () => core.list(),
-    listModels: (agentId) => core.listModels(agentId),
-    saveApiKey: (provider, apiKey) => {
+    list: (options) => core.list(options),
+    listModels: (agentId, options) => core.listModels(agentId, options),
+    saveApiKey: (provider, apiKey, options) => {
       requireProvider(provider, ['ANTHROPIC', 'OPENAI'] as const, 'API key authentication');
-      return core.saveApiKey(provider, apiKey);
+      return core.saveApiKey(provider, apiKey, options);
     },
-    remove: (provider) => {
+    remove: (provider, options) => {
       requireProvider(provider, ['ANTHROPIC', 'OPENAI'] as const, 'Credential removal');
-      return core.remove(provider);
+      return core.remove(provider, options);
     },
-    startOAuth: (provider) => {
+    startOAuth: (provider, options) => {
       requireProvider(provider, ['ANTHROPIC'] as const, 'OAuth');
-      return core.startOAuth(provider);
+      return core.startOAuth(provider, options);
     },
-    exchangeOAuth: (provider, input) => {
+    exchangeOAuth: (provider, input, options) => {
       requireProvider(provider, ['ANTHROPIC'] as const, 'OAuth');
-      return core.exchangeOAuth(provider, input);
+      return core.exchangeOAuth(provider, input, options);
     },
-    startDeviceAuthorization: (provider) => {
+    startDeviceAuthorization: (provider, options) => {
       requireProvider(provider, ['OPENAI'] as const, 'Device authorization');
-      return core.startDeviceAuthorization(provider);
+      return core.startDeviceAuthorization(provider, options);
     },
-    pollDeviceAuthorization: (provider, deviceAuthId) => {
+    pollDeviceAuthorization: (provider, deviceAuthId, options) => {
       requireProvider(provider, ['OPENAI'] as const, 'Device authorization');
-      return core.pollDeviceAuthorization(provider, deviceAuthId);
+      return core.pollDeviceAuthorization(provider, deviceAuthId, options);
     },
   };
 }
+
+export type { AgentCredentialOptions, AgentCredentialScope } from '@mitralab.io/sdk-core';

@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented in this file.
 
+## 1.1.5-beta.0
+
+- The eight `agentCredentials` methods take a trailing `{ scope: "ACCOUNT" }`, sent as the
+  `scope=ACCOUNT` query parameter, and `session({ create: true })` and `agentTasks.create()`
+  accept `scope: "ACCOUNT"` in the create body, so the credential and the chat resolve against
+  the person's own account instead of the app. Without `scope` nothing changes on the wire. The
+  Copilot honors `ACCOUNT` only for apps listed by flag and answers
+  `ACCOUNT_CREDENTIAL_NOT_ALLOWED` otherwise.
+- Depend on `@mitralab.io/sdk-core@0.2.5-beta.0`, which carries the `scope` option through the
+  credential calls and into the create request and exports `AgentCredentialScope` and
+  `AgentCredentialOptions`.
+
 ## 1.1.4-beta.0
 
 - On the direct channel the message and the interrupt are written on the box socket, as the
