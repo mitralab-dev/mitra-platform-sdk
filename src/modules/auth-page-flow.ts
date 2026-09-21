@@ -233,7 +233,10 @@ export class AuthPageFlow {
     // tab loses the way to finish the flow.
     const completedInAnotherTab = this.profile.pendingRequestTtlMs !== undefined;
     if (completedInAnotherTab) {
-      this.writeRedirectContext(browserWindow, this.newRedirectContext(state, authPageUrl));
+      this.writeRedirectContext(
+        browserWindow,
+        this.newRedirectContext(state, this.getRedirectUri(authPageUrl))
+      );
     }
     const popup = this.openPopup(browserWindow, this.buildStartUrl(browserWindow, authPageUrl, state));
     const result = await this.waitForPopupResult(browserWindow, popup, authPageUrl.origin, state);
@@ -252,7 +255,8 @@ export class AuthPageFlow {
       browserWindow
     );
 
-    if (!this.writeRedirectContext(browserWindow, this.newRedirectContext(state, authPageUrl))) {
+    const context = this.newRedirectContext(state, this.getRedirectUri(authPageUrl));
+    if (!this.writeRedirectContext(browserWindow, context)) {
       throw new Error(
         `${this.providerLabel} sign-in redirect requires ${this.profile.redirectStorage}.`
       );
@@ -263,14 +267,70 @@ export class AuthPageFlow {
     return new Promise<never>(() => undefined);
   }
 
+  /**
+   * A one-time state for a request that is finished somewhere other than here:
+   * the tab a link in a message opens, or a code typed into the application
+   * itself. Generating it changes nothing, so a request that is never accepted
+   * leaves the one pending here alone.
+   *
+   * @internal
+   */
+  newRequestState(): string {
+    this.requireBrowser();
+    return this.generateState();
+  }
+
+  /**
+   * Writes down a request whoever finishes it will need, replacing the one
+   * pending here.
+   *
+   * Writing it is best effort. Without storage only the completion from the link
+   * is lost, and the code typed into the application still finishes the sign-in.
+   *
+   * @internal
+   */
+  rememberPendingRequest(state: string, redirectUri: string): void {
+    const browserWindow = this.requireBrowser();
+    this.writeRedirectContext(browserWindow, this.newRedirectContext(state, redirectUri));
+  }
+
+  /**
+   * The one-time state of the request pending in this browser, or `null` when
+   * there is none or it is too old to be finished.
+   *
+   * @internal
+   */
+  pendingRequestState(): string | null {
+    const context = this.readRedirectContext(this.requireBrowser());
+    if (!context || this.hasExpired(context)) return null;
+    return context.state;
+  }
+
+  /** @internal */
+  discardPendingRequest(): void {
+    this.clearRedirectContext(this.requireBrowser());
+  }
+
+  /**
+   * Redeems a single-use exchange code for an app session, through the same IAM
+   * route this provider's auth page handshake uses. For a provider that binds
+   * the code to the page that received it, use that handshake instead: this one
+   * has no page to name.
+   *
+   * @internal
+   */
+  redeemExchangeCode(code: string): Promise<AuthTokenResponse> {
+    return this.exchangeCode(code, null);
+  }
+
   private async exchangeCode(
     code: string,
-    redirectUri: string
+    redirectUri: string | null
   ): Promise<AuthTokenResponse> {
     const response = await this.client.post<unknown>(this.profile.exchangePath, {
       appId: this.appId,
       code,
-      ...(this.profile.sendsRedirectUri ? { redirectUri } : {}),
+      ...(this.profile.sendsRedirectUri && redirectUri !== null ? { redirectUri } : {}),
     });
 
     return expectAuthTokenResponse(response);
@@ -295,10 +355,10 @@ export class AuthPageFlow {
     return `${authPageUrl.origin}${authPageUrl.pathname}`;
   }
 
-  private newRedirectContext(state: string, authPageUrl: URL): RedirectContext {
+  private newRedirectContext(state: string, redirectUri: string): RedirectContext {
     return {
       state,
-      redirectUri: this.getRedirectUri(authPageUrl),
+      redirectUri,
       createdAt: Date.now(),
     };
   }

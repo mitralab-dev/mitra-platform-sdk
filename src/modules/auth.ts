@@ -4,6 +4,7 @@ import { coreErrors } from '../core-errors';
 import { HttpClient, MitraApiError } from '../utils/http-client';
 import { assertServerRuntime, resolveApiKeySession } from './api-key-auth';
 import { expectAuthTokenResponse, AuthPageFlow } from './auth-page-flow';
+import { EmailCodeFlow } from './email-code-flow';
 import type {
   User,
   SignInCredentials,
@@ -11,6 +12,9 @@ import type {
   AuthSession,
   AuthTokenResponse,
   AuthStateChangeCallback,
+  EmailCodeRequest,
+  EmailCodeRequestResult,
+  EmailCodeVerification,
   EmailSignInOptions,
   GoogleSignInOptions,
   MicrosoftSignInOptions,
@@ -23,6 +27,10 @@ export type {
   AuthSession,
   AuthStateChangeCallback,
   AuthPageSignInOptions,
+  EmailCodeLanguage,
+  EmailCodeRequest,
+  EmailCodeRequestResult,
+  EmailCodeVerification,
   EmailSignInOptions,
   GoogleSignInOptions,
   MicrosoftSignInOptions,
@@ -133,6 +141,8 @@ export class AuthModule {
   private readonly googleAuth: AuthPageFlow;
   private readonly microsoftAuth: AuthPageFlow;
   private readonly emailAuth: AuthPageFlow;
+  private readonly emailCode: EmailCodeFlow;
+  private brand: string | null = null;
 
   constructor(appId: string, iamBaseUrl: string, options: AuthModuleOptions = {}) {
     this.appId = appId;
@@ -172,6 +182,11 @@ export class AuthModule {
       authPageUrl: options.authPageUrl,
       client: this.publicClient,
       provider: 'email',
+    });
+    this.emailCode = new EmailCodeFlow({
+      appId,
+      client: this.publicClient,
+      pendingRequest: this.emailAuth,
     });
     this.loadFromStorage();
     const readAccessToken = () => this.#accessToken;
@@ -369,19 +384,96 @@ export class AuthModule {
   }
 
   /**
-   * Completes an email sign-in from `#codeMitra` and `#stateMitra`, during
-   * application startup like {@link completeGoogleSignInRedirect}.
+   * Publishes the brand `init()` read from the app info, which IAM needs to
+   * choose the message it sends for {@link requestEmailCode}.
    *
-   * It covers both ways the flow comes back, and they are the same check: a
-   * redirect in the tab that started it, and the tab the link in the message
-   * opened. Both carry the one-time state this SDK generated, which the second
-   * tab matches against the pending request kept in `localStorage`. A request
-   * older than 10 minutes is discarded instead of completed.
+   * @internal
+   */
+  setBrand(brand: string): void {
+    this.brand = brand;
+  }
+
+  /**
+   * Asks IAM to email a six-digit code, without any platform screen: the
+   * application renders its own address and code fields, and the message is
+   * branded as the app. Answer it with {@link verifyEmailCode}.
    *
-   * @returns The authenticated user, or `null` when the URL carries no result or
-   * carries one that belongs to another sign-in method's flow.
+   * The same message also carries a link back to this application's own origin.
+   * Sign-in continues there through {@link completeEmailSignInRedirect}, so the
+   * request is written to `localStorage` under `mitra_email_redirect_{appId}` -
+   * the one-time state and this origin, never a token - for 10 minutes. Only the
+   * browser that asked can finish through the link.
+   *
+   * Resending is calling this again: the new request replaces the pending one,
+   * and `resendAfterSeconds` says how long the application should wait before
+   * offering that.
+   *
+   * @param request - Address to send to, and the language to write in.
+   * @returns The receipt that names this request, and the resend delay.
+   * @throws {MitraApiError} `INVALID_CONFIGURATION` before `init()` resolved the
+   * app info, `RATE_LIMITED` (with `retryAfterSeconds`) when IAM asks the person
+   * to wait, and the app access codes when this app refuses the address.
+   *
+   * @example
+   * ```typescript
+   * const { receipt, resendAfterSeconds } = await mitra.auth.requestEmailCode({
+   *   email: 'person@example.com',
+   * });
+   * ```
+   */
+  async requestEmailCode(request: EmailCodeRequest): Promise<EmailCodeRequestResult> {
+    return this.emailCode.requestCode(request, this.requireBrand());
+  }
+
+  /**
+   * Turns the code from the message into a session, hydrating and persisting it
+   * exactly like SSO does.
+   *
+   * @param verification - The receipt from {@link requestEmailCode} and the code
+   * the person typed.
+   * @returns The authenticated and hydrated user.
+   * @throws {MitraApiError} `INVALID_CODE` when the code does not match,
+   * `MAGIC_LINK_EXPIRED` or `MAGIC_LINK_USED` when the request is over.
+   *
+   * @example
+   * ```typescript
+   * const user = await mitra.auth.verifyEmailCode({ receipt, code: '123456' });
+   * ```
+   */
+  async verifyEmailCode(verification: EmailCodeVerification): Promise<User> {
+    return this.establishSession(await this.emailCode.verifyCode(verification));
+  }
+
+  /**
+   * Completes an email sign-in during application startup, like
+   * {@link completeGoogleSignInRedirect}.
+   *
+   * It covers every way the flow comes back. The link in the message lands on
+   * this application's own origin as `#emailToken=`, and that is the headless
+   * flow: the link is inspected before it is spent, and it is only spent when
+   * IAM reports the same origin the page is on and the one-time state of the
+   * request pending in this browser. A browser without that request - another
+   * device, or a scanner opening links on the way to a mailbox - consumes
+   * nothing and leaves the link valid for the person who asked for it.
+   *
+   * The platform auth page instead comes back as `#codeMitra` and `#stateMitra`,
+   * from the redirect in the tab that started it or from the tab the older link
+   * opened, and is completed by the same state check.
+   *
+   * From the link, only `emailToken` leaves the URL, so a fragment the
+   * application routes on is left as it was. Coming back from the platform auth
+   * page, the fragment is removed whole.
+   *
+   * @returns The authenticated user, or `null` when the URL carries no result,
+   * carries one that belongs to another sign-in method's flow, or carries a link
+   * this browser cannot claim.
+   * @throws {MitraApiError} `MAGIC_LINK_EXPIRED`, `MAGIC_LINK_USED`, or
+   * `MAGIC_LINK_INVALID` when the link belongs here but cannot be used.
    */
   async completeEmailSignInRedirect(): Promise<User | null> {
+    const linkResponse = await this.emailCode.completeLink();
+    if (linkResponse) return this.establishSession(linkResponse);
+
     const tokenResponse = await this.emailAuth.completeRedirect();
     return tokenResponse ? this.establishSession(tokenResponse) : null;
   }
@@ -814,6 +906,20 @@ export class AuthModule {
 
   private belongsToConfiguredApp(token: string): boolean {
     return belongsToApp(token, this.appId);
+  }
+
+  /**
+   * The brand IAM needs to brand the message. It arrives with the app info, so
+   * asking before `init()` is a configuration mistake rather than something to
+   * guess a default for: the wrong brand sends the wrong message.
+   */
+  private requireBrand(): string {
+    if (!this.brand) {
+      throw coreErrors.configuration(
+        'Email sign-in needs the app info resolved by init(). Call init() before requestEmailCode().'
+      );
+    }
+    return this.brand;
   }
 
   private notifySessionListeners(): void {

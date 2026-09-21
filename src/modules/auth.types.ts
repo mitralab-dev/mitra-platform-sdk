@@ -47,6 +47,33 @@ export type MicrosoftSignInOptions = AuthPageSignInOptions;
  */
 export type EmailSignInOptions = AuthPageSignInOptions;
 
+/** Language of the message IAM sends. The platform writes it in these two. */
+export type EmailCodeLanguage = 'pt-BR' | 'en';
+
+/** The address to send a one-time code to, and the language to write it in. */
+export interface EmailCodeRequest {
+  email: string;
+  /** Defaults to the browser language, and to `pt-BR` when that is neither. */
+  language?: EmailCodeLanguage;
+}
+
+/**
+ * What IAM accepted. The answer is deliberately neutral about whether the
+ * address exists, so it carries no verdict about the person.
+ */
+export interface EmailCodeRequestResult {
+  /** Names this request when the code is verified. Not a credential. */
+  receipt: string;
+  /** How long to wait before offering to send another message. */
+  resendAfterSeconds: number;
+}
+
+/** The code the person read in the message, against the request that sent it. */
+export interface EmailCodeVerification {
+  receipt: string;
+  code: string;
+}
+
 /**
  * Response from authentication token endpoints.
  * @internal
