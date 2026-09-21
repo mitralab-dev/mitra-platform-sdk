@@ -303,11 +303,11 @@ export class EmailCodeFlow {
       .split('&')
       .filter((part) => part !== LINK_TOKEN_KEY && !part.startsWith(`${LINK_TOKEN_KEY}=`))
       .join('&');
-    const fragment = remaining ? `#${remaining}` : '';
+    const hash = remaining ? `#${remaining}` : '';
     browserWindow.history.replaceState(
       {},
       '',
-      `${browserWindow.location.pathname}${browserWindow.location.search}${fragment}`
+      `${browserWindow.location.pathname}${browserWindow.location.search}${hash}`
     );
   }
 
