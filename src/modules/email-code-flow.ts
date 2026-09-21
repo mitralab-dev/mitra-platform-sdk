@@ -128,7 +128,7 @@ function expectMagicLinkInspection(value: unknown): MagicLinkInspection {
   );
 
   const state = optionalString(response.state);
-  if (state === undefined || !state.trim()) {
+  if (!state?.trim()) {
     throw coreErrors.invalidResponse(
       'Email sign-in link inspection response has an invalid state field'
     );
@@ -303,10 +303,11 @@ export class EmailCodeFlow {
       .split('&')
       .filter((part) => part !== LINK_TOKEN_KEY && !part.startsWith(`${LINK_TOKEN_KEY}=`))
       .join('&');
+    const fragment = remaining ? `#${remaining}` : '';
     browserWindow.history.replaceState(
       {},
       '',
-      `${browserWindow.location.pathname}${browserWindow.location.search}${remaining ? `#${remaining}` : ''}`
+      `${browserWindow.location.pathname}${browserWindow.location.search}${fragment}`
     );
   }
 
