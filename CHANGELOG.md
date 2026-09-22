@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented in this file.
 
+## 1.2.0-beta.3
+
+- `session({ create: true })`, `agentTasks.create()` and `session.send()` (with `sendAndWait()`
+  and the queued sends) accept `model`, the catalog model id `listModels()` returns,
+  `custom/<providerId>/<model>` for a provider the person added by API. It is passed through
+  unchanged: in the create body, in the message frame on the box socket and in the `POST /inputs`
+  body. The Copilot requires it when `agentType` is `CUSTOM_AI`. Without `model` nothing changes
+  on the wire.
+- `NativeAgentModel` carries `providerName`, the name the person chose for a custom provider,
+  null on built-in models, and `AgentTask` carries the `model` the chat was created with.
+- Depend on `@mitralab.io/sdk-core@0.2.6-beta.0`, which carries `model` through the create
+  request and the message and adds custom providers to the connection module this package does
+  not expose.
+
 ## 1.2.0-beta.2
 
 - Add `requestEmailCode({ email, language? })` and `verifyEmailCode({ receipt, code })`: sign-in by
