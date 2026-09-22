@@ -73,6 +73,8 @@ export type {
   NativeAgentToolEvent,
   AgentTurnResult,
   AuthenticationResult,
+  AgentConnectionCustomProvider,
+  AgentConnectionCustomProviderInput,
   AgentCredentialOptions,
   AgentCredentialProvider,
   AgentCredentialScope,

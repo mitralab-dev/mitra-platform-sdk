@@ -1,5 +1,7 @@
 import {
   createAgentCredentialsModule,
+  type AgentConnectionCustomProvider,
+  type AgentConnectionCustomProviderInput,
   type AgentCredentialOptions,
   type AgentCredentialsModule as CoreAgentCredentialsModule,
   type AgentModel,
@@ -43,6 +45,12 @@ export interface AgentCredentialsModule {
     deviceAuthId: string,
     options?: AgentCredentialOptions
   ): Promise<AuthenticationResult>;
+  listCustomProviders(options?: AgentCredentialOptions): Promise<AgentConnectionCustomProvider[]>;
+  createCustomProvider(
+    input: AgentConnectionCustomProviderInput,
+    options?: AgentCredentialOptions
+  ): Promise<AgentConnectionCustomProvider[]>;
+  deleteCustomProvider(id: string, options?: AgentCredentialOptions): Promise<void>;
 }
 
 function requireProvider<T extends string>(
@@ -87,7 +95,15 @@ export function createBrowserAgentCredentialsModule(
       requireProvider(provider, ['OPENAI'] as const, 'Device authorization');
       return core.pollDeviceAuthorization(provider, deviceAuthId, options);
     },
+    listCustomProviders: (options) => core.listCustomProviders(options),
+    createCustomProvider: (input, options) => core.createCustomProvider(input, options),
+    deleteCustomProvider: (id, options) => core.deleteCustomProvider(id, options),
   };
 }
 
-export type { AgentCredentialOptions, AgentCredentialScope } from '@mitralab.io/sdk-core';
+export type {
+  AgentConnectionCustomProvider,
+  AgentConnectionCustomProviderInput,
+  AgentCredentialOptions,
+  AgentCredentialScope,
+} from '@mitralab.io/sdk-core';

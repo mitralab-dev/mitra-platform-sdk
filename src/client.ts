@@ -493,6 +493,8 @@ export type {
   PublicFunctionsModule,
 } from '@mitralab.io/sdk-core';
 export type {
+  AgentConnectionCustomProvider,
+  AgentConnectionCustomProviderInput,
   AgentCredentialOptions,
   AgentCredentialProvider,
   AgentCredentialScope,

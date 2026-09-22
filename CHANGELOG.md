@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented in this file.
 
+## 1.2.0-beta.4
+
+- `agentCredentials` exposes the person's custom providers: `listCustomProviders(options?)`,
+  `createCustomProvider(input, options?)` and `deleteCustomProvider(id, options?)`, plain
+  passthroughs to `/api/v1/credentials/custom-providers` with the same trailing `{ scope: "ACCOUNT" }`
+  the other credential calls take. The Copilot requires `scope: "ACCOUNT"` on an app token. No
+  provider guard applies and the provider unions are unchanged. `AgentConnectionCustomProvider`
+  and `AgentConnectionCustomProviderInput` are re-exported from the package index.
+- Depend on `@mitralab.io/sdk-core@0.2.7-beta.0`, which adds the three methods to the credential
+  module.
+
 ## 1.2.0-beta.3
 
 - `session({ create: true })`, `agentTasks.create()` and `session.send()` (with `sendAndWait()`

@@ -428,6 +428,8 @@ API keys and removal accept `ANTHROPIC` or `OPENAI`. OAuth accepts only `ANTHROP
 
 Every `agentCredentials` method takes a trailing `options` with `scope: "ACCOUNT"`, sent as the `scope` query parameter, so the credential is read from or written to the person's own account instead of the app: `startOAuth("ANTHROPIC", { scope: "ACCOUNT" })`, `exchangeOAuth("ANTHROPIC", input, { scope: "ACCOUNT" })`, `list({ scope: "ACCOUNT" })`. The Copilot honors `ACCOUNT` only for apps listed by flag and answers `ACCOUNT_CREDENTIAL_NOT_ALLOWED` otherwise. No platform session is involved: the app token is used as always. Without `options` the request is the same as before.
 
+A custom provider the person adds by API is a credential like the others, managed on `/api/v1/credentials/custom-providers` with the same trailing `options`: `listCustomProviders({ scope: "ACCOUNT" })` returns the person's OpenAI-compatible providers with the API key masked, `createCustomProvider({ name, baseUrl, apiKey, models }, { scope: "ACCOUNT" })` adds one under a name the person chooses and returns the list after creation, and `deleteCustomProvider(id, { scope: "ACCOUNT" })` removes it for good. The API key is write-only and `models` takes 1 to 32 model ids; each joins the catalog `listModels()` returns as `custom/<providerId>/<model>`, the `model` a chat is created with. The Copilot requires `scope: "ACCOUNT"` on an app token. The three methods take no provider argument and no provider guard applies.
+
 The browser token roles expose Agent tasks, credential status, and model discovery. Administrative business-Agent CRUD is intentionally not exposed by this adapter because the `USE` app role does not carry `AGENT_*` authority.
 
 ## Custom queries
