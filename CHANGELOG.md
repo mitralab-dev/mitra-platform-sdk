@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented in this file.
 
+## 1.2.0-beta.6
+
+- Follow the box channel the Copilot offers when its `wss:` address is on a fleet box host
+  (`<port>-<box>.e2b.app` or `<port>-<box>.e2b-<fleet>.mitralab.ai`, the allowlist the gateway
+  trusts on `/__ide`), and not only when it is on the API host. The same-host rule assumed the
+  proxy mode; alpha runs the sandbox in direct mode, so every chat there was silently falling back
+  to the Copilot socket and none reached the T3 box.
+- Say when an offer is refused: a 200 whose channel the SDK will not follow, because of its host
+  or an unreadable body, emits a `raw` event of type `channelDeclined` (payload
+  `reason: "host" | "body"`, `host`) before the chat follows the Copilot socket. A refusal by
+  status and a request the network lost stay silent, as before.
+
 ## 1.2.0-beta.5
 
 - Drop the `model` field 1.2.0-beta.3 accepted on `session({ create: true })`, `agentTasks.create()`

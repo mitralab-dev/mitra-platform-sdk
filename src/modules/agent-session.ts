@@ -89,18 +89,35 @@ interface DirectChannel {
   readonly lastSequence: number;
 }
 
+/** Why the copilot's offer was not followed. Surfaced to the app as a `channelDeclined` event. */
+interface ChannelDeclined {
+  readonly declined: { readonly reason: 'host' | 'body'; readonly host?: string };
+}
+
+// Fleet box hosts: the same allowlist the gateway trusts on its /__ide proxy.
+const FLEET_BOX_HOST = /^[0-9a-z][0-9a-z-]*\.(?:e2b\.app|e2b-[0-9a-z-]+\.mitralab\.ai)$/;
+
 /**
- * O endereco tem de ser o mesmo gateway que esta SDK ja usa. A resposta do canal e confiavel,
- * mas ela carrega uma credencial na query: seguir um host arbitrario entregaria essa credencial
- * a quem devolvesse o corpo.
+ * O endereco tem de ser o gateway que esta SDK ja usa (modo proxy) ou uma caixa da frota (modo
+ * direto). A resposta do canal e confiavel, mas ela carrega uma credencial na query: seguir um
+ * host arbitrario entregaria essa credencial a quem devolvesse o corpo.
  */
 function isSameGateway(candidate: string, apiUrl: string): boolean {
   try {
     const target = new URL(candidate);
     if (target.protocol !== 'ws:' && target.protocol !== 'wss:') return false;
-    return target.host === new URL(apiUrl).host;
+    if (target.host === new URL(apiUrl).host) return true;
+    return target.protocol === 'wss:' && FLEET_BOX_HOST.test(target.host);
   } catch {
     return false;
+  }
+}
+
+function hostOf(url: string): string | undefined {
+  try {
+    return new URL(url).host;
+  } catch {
+    return undefined;
   }
 }
 
@@ -113,10 +130,14 @@ function boxAddress(wsUrl: string): string {
   return `${url.origin}${url.pathname}`;
 }
 
-function toDirectChannel(body: unknown, apiUrl: string): DirectChannel | null {
-  if (typeof body !== 'object' || body === null) return null;
+function toDirectChannel(body: unknown, apiUrl: string): DirectChannel | ChannelDeclined {
+  if (typeof body !== 'object' || body === null) return { declined: { reason: 'body' } };
   const channel = body as { wsUrl?: unknown; lastSequence?: unknown };
-  if (typeof channel.wsUrl !== 'string' || !isSameGateway(channel.wsUrl, apiUrl)) return null;
+  if (typeof channel.wsUrl !== 'string') return { declined: { reason: 'body' } };
+  if (!isSameGateway(channel.wsUrl, apiUrl)) {
+    const host = hostOf(channel.wsUrl);
+    return { declined: { reason: 'host', ...(host === undefined ? {} : { host }) } };
+  }
   return {
     wsUrl: channel.wsUrl,
     lastSequence: typeof channel.lastSequence === 'number' && channel.lastSequence > 0
@@ -176,7 +197,10 @@ function turnAfter(event: AgentTaskEvent, inTurn: boolean): boolean {
  * Frames this layer adds to the stream so the app can show the channel's state. The core has
  * no session status for a channel being redialed; it forwards these through `raw` untouched.
  */
-function channelEvent(type: 'channelReconnecting' | 'channelConnected', payload: object): AgentTaskEvent {
+function channelEvent(
+  type: 'channelReconnecting' | 'channelConnected' | 'channelDeclined',
+  payload: object
+): AgentTaskEvent {
   return { type, payload, timestamp: Date.now() };
 }
 
@@ -299,7 +323,7 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
     taskId: string,
     token: string,
     signal?: AbortSignal
-  ): Promise<DirectChannel | null> {
+  ): Promise<DirectChannel | ChannelDeclined | null> {
     return this.askDirectChannel(taskId, token, signal).catch(() => null);
   }
 
@@ -316,7 +340,7 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
     taskId: string,
     token: string,
     signal?: AbortSignal
-  ): Promise<DirectChannel | null> {
+  ): Promise<DirectChannel | ChannelDeclined | null> {
     if (signal?.aborted) return null;
     const url = `${this.apiUrl}/copilot/api/v1/tasks/${encodeURIComponent(taskId)}/channel`;
     const response = await globalThis.fetch(url, {
@@ -328,7 +352,7 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
     try {
       return toDirectChannel(await response.json(), this.apiUrl);
     } catch {
-      return null;
+      return { declined: { reason: 'body' } };
     }
   }
 
@@ -346,7 +370,11 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
     // O caminho da conversa e escolhido pelo servidor, nao por configuracao do app: quando o
     // copilot oferece a caixa, e com ela que se fala, e o socket do copilot fica como a queda
     // automatica que mantem funcionando quem ainda nao pode ser atendido pela caixa.
-    const direct = await this.requestDirectChannel(taskId, token, signal);
+    const answer = await this.requestDirectChannel(taskId, token, signal);
+    // A 200 the SDK will not follow is said out loud: silent, it looks like the copilot never
+    // offered the box, and every chat lands on the copilot socket with nothing to explain why.
+    if (answer && 'declined' in answer) observer.onEvent(channelEvent('channelDeclined', answer.declined));
+    const direct = answer && !('declined' in answer) ? answer : null;
     if (direct) this.directTasks.add(taskId);
     else this.directTasks.delete(taskId);
     if (direct) return this.openDirect(taskId, direct, observer, signal);
@@ -480,7 +508,7 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
       const token = await this.requireFreshToken();
       const channel = await this.askDirectChannel(taskId, token, signal);
       if (signal.aborted) return { kind: 'failed', error: new Error('Agent box redial aborted.') };
-      if (!channel) return { kind: 'refused' };
+      if (!channel || 'declined' in channel) return { kind: 'refused' };
       this.adoptBox(taskId, channel);
       const replayFrom = this.boxCursors.get(taskId);
       if (replayFrom === undefined) this.boxCursors.set(taskId, channel.lastSequence);
