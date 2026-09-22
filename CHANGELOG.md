@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented in this file.
 
+## 1.2.0-beta.5
+
+- Drop the `model` field 1.2.0-beta.3 accepted on `session({ create: true })`, `agentTasks.create()`
+  and `session.send()` (with `sendAndWait()` and the queued sends). A chat is created and a message
+  is sent with `agentType` and `reasoningEffort` only, as before 1.2.0-beta.3: nothing else is
+  documented or tested in the create body, in the message frame on the box socket or in the
+  `POST /inputs` body. A custom provider is chosen by sending the `agentType` that the
+  `agentCredentials.listModels()` row returns. The optional `model` also leaves the option types
+  this package re-exports from Core: the pin moves to `@mitralab.io/sdk-core@0.2.8-beta.0`, which
+  drops it from task creation and the message send; the person's custom providers from
+  1.2.0-beta.4 (`listCustomProviders`, `createCustomProvider`, `deleteCustomProvider`) are
+  unchanged.
+
 ## 1.2.0-beta.4
 
 - `agentCredentials` exposes the person's custom providers: `listCustomProviders(options?)`,

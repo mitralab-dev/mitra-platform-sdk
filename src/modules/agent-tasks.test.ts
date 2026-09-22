@@ -90,7 +90,6 @@ describe('createBrowserAgentTasksModule', () => {
     ['http stays on the runner', { create: true, agentType: 'CLAUDE', transport: 'http' }, {}],
     ['an explicit runtime wins', { create: true, agentType: 'CLAUDE', runtime: 'RUNNER' }, { runtime: 'RUNNER' }],
     ['scope ACCOUNT sends it in the body', { create: true, agentType: 'CLAUDE', agentId: 'agent-1', scope: 'ACCOUNT' }, { agentId: 'agent-1', runtime: 'T3', scope: 'ACCOUNT' }],
-    ['a model sends it in the body', { create: true, agentType: 'CUSTOM_AI', model: 'custom/provider-1/gpt-4o' }, { agentType: 'CUSTOM_AI', runtime: 'T3', model: 'custom/provider-1/gpt-4o' }],
   ])('a chat created with %s', async (_name, options, expected) => {
     const body = await createBody(options);
 
