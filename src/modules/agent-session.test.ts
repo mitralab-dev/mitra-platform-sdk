@@ -155,13 +155,62 @@ describe('BrowserAgentTaskEventSource', () => {
     connection.close();
   });
 
-  it('refuses a channel that points somewhere else, which would leak the credential', async () => {
-    vi.stubGlobal('fetch', channelOffered('wss://attacker.example/api/mitra/chat/ws?grant=g'));
+  // Alpha runs the sandbox in direct mode: the copilot names the fleet box itself, not the
+  // gateway proxy, and the box is trusted by the same allowlist the gateway applies on /__ide.
+  it.each([
+    'wss://3773-abc123.e2b-infusion.mitralab.ai/api/mitra/chat/ws?grant=g&ticket=t',
+    'wss://3773-abc123.e2b-dev.mitralab.ai/api/mitra/chat/ws?grant=g&ticket=t',
+    'wss://3773-abc123.e2b.app/api/mitra/chat/ws?grant=g&ticket=t',
+  ])('serves the chat from a fleet box offered in direct mode: %s', async (wsUrl) => {
+    vi.stubGlobal('fetch', channelOffered(wsUrl));
     const source = new BrowserAgentTaskEventSource(auth(), 'https://api.mitra.io');
+    const events = observer();
 
-    const connection = await source.open('task-1', observer(), undefined, 'websocket');
+    const connection = await source.open('task-1', events, undefined, 'websocket');
+
+    expect(FakeWebSocket.instances[0].url).toBe(wsUrl);
+    expect(events.onEvent).not.toHaveBeenCalled();
+    connection.close();
+  });
+
+  it.each([
+    ['an unknown host', 'wss://evil.example.com/api/mitra/chat/ws?grant=g'],
+    ['a fleet name as a subdomain of someone else', 'wss://3773-abc123.e2b-infusion.mitralab.ai.evil.com/api/mitra/chat/ws?grant=g'],
+    ['a fleet box without TLS', 'ws://3773-abc123.e2b-infusion.mitralab.ai/api/mitra/chat/ws?grant=g'],
+  ])('refuses a channel that points to %s, which would leak the credential', async (_case, wsUrl) => {
+    vi.stubGlobal('fetch', channelOffered(wsUrl));
+    const source = new BrowserAgentTaskEventSource(auth(), 'https://api.mitra.io');
+    const events = observer();
+
+    const connection = await source.open('task-1', events, undefined, 'websocket');
 
     expect(FakeWebSocket.instances[0].url).toContain('api.mitra.io/copilot/ws/tasks/task-1');
+    // The refusal is said out loud: silent, it looks like the copilot never offered the box.
+    expect(events.onEvent).toHaveBeenCalledOnce();
+    expect(events.onEvent).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'channelDeclined',
+      payload: { reason: 'host', host: new URL(wsUrl).host },
+    }));
+    connection.close();
+  });
+
+  it('says that a 200 whose body is not a channel was declined', async () => {
+    vi.stubGlobal('fetch', vi.fn((input: unknown) => {
+      if (String(input).includes('/channel')) {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ hello: 'box' }) });
+      }
+      return Promise.resolve({ ok: true, status: 200, body: openStream() });
+    }));
+    const source = new BrowserAgentTaskEventSource(auth(), 'https://api.mitra.io');
+    const events = observer();
+
+    const connection = await source.open('task-1', events, undefined, 'websocket');
+
+    expect(FakeWebSocket.instances[0].url).toContain('api.mitra.io/copilot/ws/tasks/task-1');
+    expect(events.onEvent).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'channelDeclined',
+      payload: { reason: 'body' },
+    }));
     connection.close();
   });
 
