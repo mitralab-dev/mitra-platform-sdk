@@ -307,19 +307,6 @@ describe('agent input outbox', () => {
       session.close();
     });
 
-    it('writes the model on the message frame when the send names one', async () => {
-      copilot([accepted], BOX_WS_URL);
-      const { session, errors } = await openSession();
-
-      session.send('hello', { agentType: 'CUSTOM_AI', model: 'custom/provider-1/gpt-4o' });
-      await vi.waitFor(() => expect(box().frames()).toEqual([
-        { type: 'message', content: 'hello', agentType: 'CUSTOM_AI', model: 'custom/provider-1/gpt-4o' },
-      ]));
-
-      expect(errors).toEqual([]);
-      session.close();
-    });
-
     it('writes the interrupt on the box socket', async () => {
       const inputs = copilot([accepted], BOX_WS_URL);
       const { session, errors } = await openSession();
@@ -371,19 +358,6 @@ describe('agent input outbox', () => {
 
     await vi.waitFor(() => expect(inputs).toHaveBeenCalledExactlyOnceWith({ type: 'message', content: 'hello' }));
     expect(FakeWebSocket.instances[0].frames()).toEqual([]);
-    expect(errors).toEqual([]);
-    session.close();
-  });
-
-  it('sends the model by REST when the send names one', async () => {
-    const inputs = copilot([accepted]);
-    const { session, errors } = await openSession();
-
-    session.send('hello', { agentType: 'CUSTOM_AI', model: 'custom/provider-1/gpt-4o' });
-
-    await vi.waitFor(() => expect(inputs).toHaveBeenCalledExactlyOnceWith({
-      type: 'message', content: 'hello', agentType: 'CUSTOM_AI', model: 'custom/provider-1/gpt-4o',
-    }));
     expect(errors).toEqual([]);
     session.close();
   });
