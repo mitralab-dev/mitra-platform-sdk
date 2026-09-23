@@ -2,6 +2,38 @@
 
 All notable changes to this project are documented in this file.
 
+## 1.2.0
+
+Stable release of the 1.1.4-beta.0 to 1.2.0-beta.6 line. Everything below is already on the
+`beta` tag; this entry consolidates it for the person moving from 1.1.3.
+
+- On the direct channel the message and the interrupt go over the box socket, as the client
+  frames the box already reads, instead of `POST /copilot/api/v1/tasks/{id}/inputs`. REST stays
+  for a chat with no box socket, for a socket not open at the moment of the send, and for every
+  approval answer. The channel the Copilot offers is followed when its `wss:` address is on the
+  API host or on a fleet box host (`<port>-<box>.e2b.app` or
+  `<port>-<box>.e2b-<fleet>.mitralab.ai`), and a refused offer emits a `raw` event of type
+  `channelDeclined` before the chat follows the Copilot socket.
+- The eight `agentCredentials` methods take a trailing `{ scope: "ACCOUNT" }`, and
+  `session({ create: true })` and `agentTasks.create()` accept `scope: "ACCOUNT"` in the create
+  body, so the credential and the chat resolve against the person's own account instead of the
+  app. Without `scope` nothing changes on the wire.
+- `agentCredentials` exposes the person's custom providers: `listCustomProviders(options?)`,
+  `createCustomProvider(input, options?)` and `deleteCustomProvider(id, options?)`, passthroughs
+  to `/api/v1/credentials/custom-providers`. `NativeAgentModel` carries `providerName`, null on
+  built-in models. A custom provider is chosen by sending the `agentType` that the
+  `agentCredentials.listModels()` row returns: there is no `model` field on chat creation or on
+  the message send. A chat created over the `auto` or `websocket` transport keeps being born on
+  the T3 box with `runtime: "T3"`, as in 1.1.3.
+- Sign-in by email: `signInWithEmail()` through the platform auth page, and
+  `requestEmailCode({ email, language? })` with `verifyEmailCode({ receipt, code })` for an
+  application that renders its own address and code fields. Both are completed by
+  `completeEmailSignInRedirect()` at startup, the link in the message lands on the application's
+  own origin as `#emailToken=<token>`, and `mitra.emailLoginEnabled` says whether the app is inside
+  the platform's rollout. `MitraApiError.retryAfterSeconds` reads `Retry-After` on a `429`.
+- Depend on `@mitralab.io/sdk-core@0.2.8`, the stable release of the 0.2.8-beta.0 surface this
+  package already followed.
+
 ## 1.2.0-beta.6
 
 - Follow the box channel the Copilot offers when its `wss:` address is on a fleet box host
