@@ -2,6 +2,30 @@
 
 All notable changes to this project are documented in this file.
 
+## 1.3.0-beta.0
+
+- The direct channel to the chat's box now comes from `@mitralab.io/sdk-core@0.2.9-beta.1`. This
+  package passes it the API URL and keeps only the Copilot WebSocket and SSE streams a chat falls
+  back to, and the offline outbox for what is sent over REST. The browser behavior is the same:
+  same host rule, redial with replay, `channelDeclined`, `channelReconnecting` and
+  `channelConnected` events, and message and interrupt on the box.
+- Only a business agent's chat (one with an `agentId`) is born on the box (`runtime: "T3"`) and
+  asks for the channel. Any other chat is created without `runtime` and stays on the Copilot
+  stream, since the Copilot refuses T3 outside an agent chat.
+- `transport: "http"` changes meaning: it now reaches the box over its HTTP routes (POST to send,
+  SSE to read) instead of the Copilot SSE, which becomes its fallback, and an agent chat created
+  with it is also born on the box. This is why the minor version moves.
+- A message sent on the box counts as sent only when the box starts the admitted turn; the session
+  emits `accepted` then. A box that confirms nothing within 35 seconds fails the send, and a box
+  refusal rejects with the box's `error_code` and message.
+- `channelDeclined` is emitted for every fallback, with the reasons `unavailable`, `body`, `host`,
+  `websocket` and `http_unsupported`.
+- The channel request is not reported to the client's global `onError`, and
+  `agentTasks.channel(taskId)` is not part of the public surface: its answer carries the box grant.
+- `inputUnsent`, `inputSent` and the `INPUT_UNSENT` error reach the session's `raw` and `error`
+  listeners on a chat served by the box too, and a listener that throws no longer stops the outbox
+  nor the session's `close()`.
+
 ## 1.2.0
 
 Stable release of the 1.1.4-beta.0 to 1.2.0-beta.6 line. Everything below is already on the

@@ -105,7 +105,9 @@ function copilot(inputAnswers: InputAnswer[], boxWsUrl?: string) {
       return Promise.resolve({ ok: true, status: 200, body: new ReadableStream<Uint8Array>({ start() {} }) });
     }
     if (url.includes('/messages')) return Promise.resolve({ ok: true, status: 200, json: async () => emptyPage });
-    return Promise.resolve({ ok: true, status: 200, json: async () => task });
+    // Only a business agent's chat has a box, so the box is offered on one.
+    const served = boxWsUrl ? { ...task, agentId: 'agent-1' } : task;
+    return Promise.resolve({ ok: true, status: 200, json: async () => served });
   }));
   return inputs;
 }
@@ -116,9 +118,15 @@ interface Watched {
   raws: AgentTaskEvent[];
 }
 
-async function openSession(): Promise<Watched> {
-  const http = new HttpClient({ baseUrl: 'https://api.mitra.io/copilot' });
-  const tasks = createBrowserAgentTasksModule(http, auth, 'https://api.mitra.io');
+function browserTasks() {
+  return createBrowserAgentTasksModule(
+    new HttpClient({ baseUrl: 'https://api.mitra.io/copilot' }),
+    auth,
+    'https://api.mitra.io'
+  );
+}
+
+async function openSession(tasks = browserTasks()): Promise<Watched> {
   const session = tasks.session({ taskId: 'task-1' });
   const errors: Watched['errors'] = [];
   const raws: AgentTaskEvent[] = [];
@@ -334,6 +342,133 @@ describe('agent input outbox', () => {
       expect(inputs).toHaveBeenCalledExactlyOnceWith({ type: 'interrupt' });
       expect(box().frames()).toHaveLength(1);
       expect(errors).toEqual([]);
+      session.close();
+    });
+
+    it('says through the session that a prompt waits for the network, and sends it on the box', async () => {
+      // Core serves this chat without the SDK's event source, so the outbox frames reach the
+      // app through the session wrapper itself, not through a stream observer.
+      const inputs = copilot([accepted], BOX_WS_URL);
+      const { session, errors, raws } = await openSession();
+      browser.offline = true;
+      vi.stubGlobal('navigator', { onLine: false });
+
+      session.send('hello');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(outboxEvents(raws)).toEqual([{
+        type: 'inputUnsent',
+        payload: { attempt: 0, reason: 'The browser is offline.', waitingForOnline: true },
+      }]);
+
+      browser.offline = false;
+      vi.stubGlobal('navigator', { onLine: true });
+      for (const listener of [...onlineListeners]) listener();
+      await vi.waitFor(() => expect(box().frames()).toEqual([{ type: 'message', content: 'hello' }]));
+      expect(inputs).not.toHaveBeenCalled();
+      expect(errors).toEqual([]);
+      session.close();
+    });
+
+    it('says so when a chat on the box closes with a prompt still waiting for the network', async () => {
+      copilot([accepted], BOX_WS_URL);
+      const { session, errors } = await openSession();
+      browser.offline = true;
+      vi.stubGlobal('navigator', { onLine: false });
+      const waiting = session.sendAndWait('hello').catch((error: Error) => error.message);
+
+      session.close();
+
+      expect(errors).toEqual([{ code: 'INPUT_UNSENT', error: expect.stringContaining('never sent') }]);
+      await expect(waiting).resolves.toContain('never sent');
+      expect(onlineListeners).toHaveLength(0);
+    });
+
+    it('stops telling a listener the app removed', async () => {
+      copilot([accepted], BOX_WS_URL);
+      const { session, errors, raws } = await openSession();
+      const late: unknown[] = [];
+      const off = session.on('raw', (event) => late.push(event));
+      const offError = session.on('error', (payload) => late.push(payload));
+      off();
+      offError();
+      browser.offline = true;
+      vi.stubGlobal('navigator', { onLine: false });
+
+      session.send('hello');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      session.close();
+
+      expect(outboxEvents(raws)).toHaveLength(1);
+      expect(errors).toHaveLength(1);
+      expect(late).toEqual([]);
+    });
+
+    it('keeps holding and closing when a listener of the app throws', async () => {
+      const inputs = copilot([accepted], BOX_WS_URL);
+      const { session, errors, raws } = await openSession();
+      session.on('raw', () => { throw new Error('app listener'); });
+      session.on('error', () => { throw new Error('app listener'); });
+      browser.offline = true;
+      vi.stubGlobal('navigator', { onLine: false });
+
+      session.send('first');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      // The throw did not keep the prompt from waiting for the network.
+      expect(onlineListeners).toHaveLength(1);
+      browser.offline = false;
+      vi.stubGlobal('navigator', { onLine: true });
+      for (const listener of [...onlineListeners]) listener();
+      await vi.waitFor(() => expect(box().frames()).toEqual([{ type: 'message', content: 'first' }]));
+
+      browser.offline = true;
+      vi.stubGlobal('navigator', { onLine: false });
+      session.send('second');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      session.close();
+
+      expect(errors).toEqual([{ code: 'INPUT_UNSENT', error: expect.stringContaining('never sent') }]);
+      expect(outboxEvents(raws).map((event) => event.type)).toEqual(['inputUnsent', 'inputUnsent']);
+      expect(session.status).toBe('closed');
+      expect(box().close).toHaveBeenCalled();
+      expect(inputs).not.toHaveBeenCalled();
+    });
+
+    it('keeps a closed wrapper quiet when the same chat is opened again', async () => {
+      copilot([accepted], BOX_WS_URL);
+      const tasks = browserTasks();
+      const first = await openSession(tasks);
+      const sameCore = tasks.session({ taskId: 'task-1' });
+      const stale: unknown[] = [];
+      sameCore.on('raw', (event) => stale.push(event));
+      first.session.close();
+      const reopened = await openSession(tasks);
+      browser.offline = true;
+      vi.stubGlobal('navigator', { onLine: false });
+
+      reopened.session.send('hello');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(outboxEvents(reopened.raws)).toHaveLength(1);
+      expect(stale).toEqual([]);
+      reopened.session.close();
+    });
+
+    it('reports an interrupt the network lost while the box is being redialed, once', async () => {
+      const inputs = copilot([networkLost], BOX_WS_URL);
+      const { session, errors, raws } = await openSession();
+      session.send('hello');
+      await vi.waitFor(() => expect(box().frames()).toHaveLength(1));
+      box().message({ type: 'stepStart', payload: {}, timestamp: 1, sequence: 1 });
+      box().onclose?.({ code: 1006 } as CloseEvent);
+      expect(raws.map((event) => event.type)).toContain('channelReconnecting');
+
+      await expect(session.cancel()).rejects.toThrow('Failed to fetch');
+
+      // An interrupt is not a prompt: it is not held for the network, it fails where it was asked.
+      expect(inputs).toHaveBeenCalledExactlyOnceWith({ type: 'interrupt' });
+      expect(outboxEvents(raws)).toEqual([]);
+      expect(errors).toEqual([{ error: 'Failed to cancel Agent task: Failed to fetch' }]);
+      expect(box().frames()).toHaveLength(1);
       session.close();
     });
 

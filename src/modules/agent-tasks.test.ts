@@ -63,6 +63,8 @@ describe('createBrowserAgentTasksModule', () => {
     await expect(tasks.sendInput('task-1', { type: 'interrupt' })).resolves.toBeUndefined();
     await expect(tasks.listMessages('task-1')).resolves.toMatchObject({ content: [] });
     expect(typeof tasks.session).toBe('function');
+    // The channel answer carries the box grant: Core follows it, the app never reads it.
+    expect('channel' in tasks).toBe(false);
     expect(fetchMock).toHaveBeenCalledTimes(7);
   });
 
@@ -74,6 +76,14 @@ describe('createBrowserAgentTasksModule', () => {
         : { ok: false, status: 404, json: async () => ({}) }
     ));
     vi.stubGlobal('fetch', fetchMock);
+    // A browser always has one; Node 18, which CI also runs, does not, and Core only creates on
+    // the box when it can reach it.
+    vi.stubGlobal('WebSocket', class {
+      readyState = 0;
+      close(): void {
+        // Never opened: the test ends once the task is created.
+      }
+    });
     const http = new HttpClient({ baseUrl: 'https://api.mitra.io/copilot' });
     const session = createBrowserAgentTasksModule(http, auth, 'https://api.mitra.io').session(options);
     const created = new Promise<void>((resolve) => session.on('taskCreated', () => resolve()));
@@ -85,14 +95,43 @@ describe('createBrowserAgentTasksModule', () => {
   }
 
   it.each<[string, AgentTaskSessionOptions, Record<string, unknown>]>([
-    ['auto is born on the box', { create: true, agentType: 'CLAUDE' }, { runtime: 'T3' }],
-    ['websocket is born on the box', { create: true, agentType: 'CLAUDE', transport: 'websocket' }, { runtime: 'T3' }],
-    ['http stays on the runner', { create: true, agentType: 'CLAUDE', transport: 'http' }, {}],
-    ['an explicit runtime wins', { create: true, agentType: 'CLAUDE', runtime: 'RUNNER' }, { runtime: 'RUNNER' }],
+    ['auto and an agent is born on the box', { create: true, agentType: 'CLAUDE', agentId: 'agent-1' }, { agentId: 'agent-1', runtime: 'T3' }],
+    ['websocket and an agent is born on the box', { create: true, agentType: 'CLAUDE', agentId: 'agent-1', transport: 'websocket' }, { agentId: 'agent-1', runtime: 'T3' }],
+    ['http and an agent is born on the box, reached over its HTTP routes', { create: true, agentType: 'CLAUDE', agentId: 'agent-1', transport: 'http' }, { agentId: 'agent-1', runtime: 'T3' }],
+    ['no agent names no runtime', { create: true, agentType: 'CLAUDE' }, {}],
+    ['no agent over http names no runtime', { create: true, agentType: 'CLAUDE', transport: 'http' }, {}],
+    ['an explicit runtime wins', { create: true, agentType: 'CLAUDE', agentId: 'agent-1', runtime: 'RUNNER' }, { agentId: 'agent-1', runtime: 'RUNNER' }],
     ['scope ACCOUNT sends it in the body', { create: true, agentType: 'CLAUDE', agentId: 'agent-1', scope: 'ACCOUNT' }, { agentId: 'agent-1', runtime: 'T3', scope: 'ACCOUNT' }],
   ])('a chat created with %s', async (_name, options, expected) => {
     const body = await createBody(options);
 
     expect(body).toEqual({ agentType: 'CLAUDE', ...expected });
+  });
+
+  it.each([
+    ['without an agent never asks for the channel', null, false],
+    ['of a business agent asks for the channel', 'agent-1', true],
+  ])('a chat %s', async (_name, agentId, asks) => {
+    // The Copilot refuses T3 outside an agent chat, so only an agent's chat has a box to reach.
+    const fetchMock = vi.fn((input: unknown) => {
+      const url = String(input);
+      if (url.endsWith('/channel')) return Promise.resolve({ ok: false, status: 404, json: async () => ({}) });
+      if (url.endsWith('/events')) {
+        return Promise.resolve({ ok: true, status: 200, body: new ReadableStream<Uint8Array>({ start() {} }) });
+      }
+      if (url.includes('/messages')) return Promise.resolve({ ok: true, status: 200, json: async () => page([]) });
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ ...task, agentId }) });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const http = new HttpClient({ baseUrl: 'https://api.mitra.io/copilot' });
+    const session = createBrowserAgentTasksModule(http, auth, 'https://api.mitra.io')
+      .session({ taskId: 'task-1', transport: 'http' });
+
+    await vi.waitFor(() => expect(session.status).toBe('idle'));
+
+    const urls = fetchMock.mock.calls.map(([input]) => String(input));
+    expect(urls.some((url) => url.endsWith('/channel'))).toBe(asks);
+    expect(urls).toContain('https://api.mitra.io/copilot/api/v1/tasks/task-1/events');
+    session.close();
   });
 });
