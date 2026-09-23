@@ -264,6 +264,17 @@ export class AgentInputOutbox {
 
 type Listener = (payload: unknown) => void;
 
+/** As the core's own emit: a listener that throws never stops the others nor the caller. */
+function notify(listeners: ReadonlySet<Listener>, payload: unknown): void {
+  for (const listener of listeners) {
+    try {
+      listener(payload);
+    } catch {
+      // The app's listener failed; the session goes on.
+    }
+  }
+}
+
 /**
  * The core's send opens the channel and reads the turn baseline before the prompt goes out,
  * and with the browser offline every one of those requests fails before `sendInput` is ever
@@ -287,11 +298,13 @@ export function holdSendsWhileOffline(
   const stopHearing = outbox.listen({
     taskId: () => session.taskId,
     hear: (event) => {
-      for (const listener of raws) listener(event);
+      // Two `session({ taskId })` calls share one core session: the closed wrapper stays quiet.
+      if (session.status === 'closed') return;
+      notify(raws, event);
       if (event.type !== 'error') return;
       // The outbox's only error frame is INPUT_UNSENT, which always carries its code.
       const payload = event.payload as { code: string; message: string };
-      for (const listener of errors) listener({ code: payload.code, error: payload.message });
+      notify(errors, { code: payload.code, error: payload.message });
     },
   });
   const gated: Pick<AgentTaskSession, 'send' | 'sendAndWait' | 'close' | 'on'> = {

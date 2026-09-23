@@ -38,7 +38,10 @@ export function createBrowserAgentTasksModule(
     eventSource: new BrowserAgentTaskEventSource(auth, apiUrl),
     directChannel: { apiUrl },
   });
-  return withAgentTaskSessions(tasks, {
+  // The channel answer carries the box grant: it is Core's to follow, not the app's to read.
+  const publicTasks = { ...tasks };
+  delete publicTasks.channel;
+  return withAgentTaskSessions(publicTasks, {
     session: (options) => holdSendsWhileOffline(manager.session(options), outbox),
   });
 }

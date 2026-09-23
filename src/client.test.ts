@@ -229,7 +229,10 @@ describe('createClient', () => {
     expect(agentOptions.headers['X-App-Id']).toBe('app-1');
   });
 
-  it('does not report a box the Copilot cannot offer to the global onError', async () => {
+  it.each([
+    ['cannot offer (503)', 503, { message: 'No box for this chat' }],
+    ['refuses to this session (401)', 401, { message: 'Not allowed', error_code: 'CHANNEL_FORBIDDEN' }],
+  ])('does not report a box the Copilot %s to the global onError', async (_case, status, body) => {
     // The chat falls back to the Copilot and says so with channelDeclined; an app whose onError
     // shows a toast would otherwise show one on every chat whose box cannot be had.
     const storage = mockLocalStorage();
@@ -239,7 +242,7 @@ describe('createClient', () => {
       refreshToken: 'app-refresh',
     });
     const task = {
-      id: 'task-1', appId: 'app-1', agentId: null, userId: 'u1', title: 'Chat', agentType: 'CLAUDE',
+      id: 'task-1', appId: 'app-1', agentId: 'agent-1', userId: 'u1', title: 'Chat', agentType: 'CLAUDE',
       reasoningEffort: null, archived: false, createdAt: '2026-08-22T00:00:00Z', updatedAt: '2026-08-22T00:00:00Z',
     };
     const emptyPage = { content: [], page: { size: 100, totalElements: 0, totalPages: 0, number: 0 } };
@@ -248,7 +251,9 @@ describe('createClient', () => {
     });
     vi.stubGlobal('fetch', vi.fn((input: unknown) => {
       const url = String(input);
-      if (url.endsWith('/channel')) return Promise.resolve(json(503, { message: 'No box for this chat' }));
+      if (url.endsWith('/channel')) return Promise.resolve(json(status, body));
+      // A transient IAM answer keeps the session, so the 401 is only the channel's refusal.
+      if (url.includes('/iam/')) return Promise.resolve(json(503, {}));
       if (url.endsWith('/events')) {
         return Promise.resolve({ ok: true, status: 200, body: new ReadableStream<Uint8Array>({ start() {} }) });
       }
