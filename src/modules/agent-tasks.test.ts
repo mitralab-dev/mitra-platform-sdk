@@ -87,7 +87,7 @@ describe('createBrowserAgentTasksModule', () => {
   it.each<[string, AgentTaskSessionOptions, Record<string, unknown>]>([
     ['auto is born on the box', { create: true, agentType: 'CLAUDE' }, { runtime: 'T3' }],
     ['websocket is born on the box', { create: true, agentType: 'CLAUDE', transport: 'websocket' }, { runtime: 'T3' }],
-    ['http stays on the runner', { create: true, agentType: 'CLAUDE', transport: 'http' }, {}],
+    ['http is born on the box, reached over its HTTP routes', { create: true, agentType: 'CLAUDE', transport: 'http' }, { runtime: 'T3' }],
     ['an explicit runtime wins', { create: true, agentType: 'CLAUDE', runtime: 'RUNNER' }, { runtime: 'RUNNER' }],
     ['scope ACCOUNT sends it in the body', { create: true, agentType: 'CLAUDE', agentId: 'agent-1', scope: 'ACCOUNT' }, { agentId: 'agent-1', runtime: 'T3', scope: 'ACCOUNT' }],
   ])('a chat created with %s', async (_name, options, expected) => {

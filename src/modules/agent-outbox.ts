@@ -74,6 +74,12 @@ function neverSent(pending: number): Error {
   );
 }
 
+/** A wrapped session that hears the outbox's frames for its task. */
+interface Hearer {
+  readonly taskId: () => string | null;
+  hear(event: AgentTaskEvent): void;
+}
+
 /**
  * Prompts whose request never got a response, kept per task until the network takes them or
  * the session gives up on them. The core's `send()` awaits the promise, so the turn it started
@@ -84,12 +90,24 @@ function neverSent(pending: number): Error {
 export class AgentInputOutbox {
   private readonly held = new Map<string, HeldPrompt[]>();
   private readonly gated = new Map<object, GatedPrompt[]>();
+  private readonly hearers = new Set<Hearer>();
 
   constructor(
     private readonly tasks: AgentTasksModule,
-    private readonly announce: (taskId: string, event: AgentTaskEvent) => void,
     private readonly network: OutboxNetwork = browserNetwork
   ) {}
+
+  /** Returns the way to stop hearing. */
+  listen(hearer: Hearer): () => void {
+    this.hearers.add(hearer);
+    return () => this.hearers.delete(hearer);
+  }
+
+  private announce(taskId: string, event: AgentTaskEvent): void {
+    for (const hearer of this.hearers) {
+      if (hearer.taskId() === taskId) hearer.hear(event);
+    }
+  }
 
   async sendInput(taskId: string, input: AgentTaskInput): Promise<void> {
     try {
@@ -244,6 +262,8 @@ export class AgentInputOutbox {
   }
 }
 
+type Listener = (payload: unknown) => void;
+
 /**
  * The core's send opens the channel and reads the turn baseline before the prompt goes out,
  * and with the browser offline every one of those requests fails before `sendInput` is ever
@@ -251,13 +271,39 @@ export class AgentInputOutbox {
  * the browser says it is offline a prompt therefore does not enter the core at all: it waits
  * in the outbox and is sent, in order, once the network is back. Everything else on the
  * session is the core's, untouched.
+ *
+ * The outbox frames reach the app through this wrapper's own `raw` and `error` listeners: a chat
+ * on the direct channel is served by Core without the event source, so no observer of this SDK
+ * sees its stream.
  */
 export function holdSendsWhileOffline(
   session: AgentTaskSession,
   outbox: AgentInputOutbox
 ): AgentTaskSession {
   const passThrough = (prompt: string) => !outbox.offline || !prompt.trim() || session.status === 'closed';
-  const gated: Pick<AgentTaskSession, 'send' | 'sendAndWait' | 'close'> = {
+  const raws = new Set<Listener>();
+  const errors = new Set<Listener>();
+  const stopHearing = outbox.listen({
+    taskId: () => session.taskId,
+    hear: (event) => {
+      for (const listener of raws) listener(event);
+      if (event.type !== 'error') return;
+      const payload = event.payload as { code?: string; message: string };
+      const error = { ...(payload.code ? { code: payload.code } : {}), error: payload.message };
+      for (const listener of errors) listener(error);
+    },
+  });
+  const gated: Pick<AgentTaskSession, 'send' | 'sendAndWait' | 'close' | 'on'> = {
+    on: (event, handler) => {
+      const off = session.on(event, handler);
+      const own = event === 'raw' ? raws : event === 'error' ? errors : null;
+      if (!own) return off;
+      own.add(handler as Listener);
+      return () => {
+        own.delete(handler as Listener);
+        off();
+      };
+    },
     send: (prompt, options) => {
       if (passThrough(prompt)) {
         session.send(prompt, options);
@@ -276,7 +322,13 @@ export function holdSendsWhileOffline(
         .then(() => turn as Promise<AgentTurnResult>);
     },
     close: () => {
-      outbox.abandonGated(session, session.taskId);
+      if (session.status !== 'closed') {
+        outbox.abandonGated(session, session.taskId);
+        if (session.taskId) outbox.abandon(session.taskId);
+      }
+      stopHearing();
+      raws.clear();
+      errors.clear();
       session.close();
     },
   };

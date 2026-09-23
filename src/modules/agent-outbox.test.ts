@@ -337,6 +337,44 @@ describe('agent input outbox', () => {
       session.close();
     });
 
+    it('says through the session that a prompt waits for the network, and sends it on the box', async () => {
+      // Core serves this chat without the SDK's event source, so the outbox frames reach the
+      // app through the session wrapper itself, not through a stream observer.
+      const inputs = copilot([accepted], BOX_WS_URL);
+      const { session, errors, raws } = await openSession();
+      browser.offline = true;
+      vi.stubGlobal('navigator', { onLine: false });
+
+      session.send('hello');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(outboxEvents(raws)).toEqual([{
+        type: 'inputUnsent',
+        payload: { attempt: 0, reason: 'The browser is offline.', waitingForOnline: true },
+      }]);
+
+      browser.offline = false;
+      vi.stubGlobal('navigator', { onLine: true });
+      for (const listener of [...onlineListeners]) listener();
+      await vi.waitFor(() => expect(box().frames()).toEqual([{ type: 'message', content: 'hello' }]));
+      expect(inputs).not.toHaveBeenCalled();
+      expect(errors).toEqual([]);
+      session.close();
+    });
+
+    it('says so when a chat on the box closes with a prompt still waiting for the network', async () => {
+      copilot([accepted], BOX_WS_URL);
+      const { session, errors } = await openSession();
+      browser.offline = true;
+      vi.stubGlobal('navigator', { onLine: false });
+      const waiting = session.sendAndWait('hello').catch((error: Error) => error.message);
+
+      session.close();
+
+      expect(errors).toEqual([{ code: 'INPUT_UNSENT', error: expect.stringContaining('never sent') }]);
+      await expect(waiting).resolves.toContain('never sent');
+      expect(onlineListeners).toHaveLength(0);
+    });
+
     it('answers an approval by REST', async () => {
       const inputs = copilot([accepted], BOX_WS_URL);
       const { session, errors } = await openSession();

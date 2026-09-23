@@ -2,6 +2,22 @@
 
 All notable changes to this project are documented in this file.
 
+## 1.2.1-beta.0
+
+- The direct channel to the chat's box now comes from `@mitralab.io/sdk-core@0.2.9-beta.0`. This
+  package passes it the API URL and keeps only the Copilot WebSocket and SSE streams a chat falls
+  back to, and the offline outbox for what is sent over REST. The browser behavior is the same:
+  same host rule, redial with replay, `channelDeclined`, `channelReconnecting` and
+  `channelConnected` events, and message and interrupt on the box.
+- From Core: `transport: "http"` now reaches the box over its HTTP routes instead of the Copilot
+  SSE, so a chat created with it is also born on the box (`runtime: "T3"`); `channelDeclined` is
+  emitted for every fallback, with the reasons `unavailable`, `body`, `host`, `websocket` and
+  `http_unsupported`; and the session emits `accepted` once the box starts the admitted turn.
+- The channel request is not reported to the client's global `onError`: a chat whose box cannot
+  be had falls back and says so with `channelDeclined`.
+- `inputUnsent`, `inputSent` and the `INPUT_UNSENT` error reach the session's `raw` and `error`
+  listeners on a chat served by the box too.
+
 ## 1.2.0
 
 Stable release of the 1.1.4-beta.0 to 1.2.0-beta.6 line. Everything below is already on the

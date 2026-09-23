@@ -229,6 +229,44 @@ describe('createClient', () => {
     expect(agentOptions.headers['X-App-Id']).toBe('app-1');
   });
 
+  it('does not report a box the Copilot cannot offer to the global onError', async () => {
+    // The chat falls back to the Copilot and says so with channelDeclined; an app whose onError
+    // shows a toast would otherwise show one on every chat whose box cannot be had.
+    const storage = mockLocalStorage();
+    storage._store['mitra_auth_app-1'] = JSON.stringify({
+      user: { id: 'u1', tenantId: 't1', email: 'user@test.com', name: null },
+      token: 'app-access',
+      refreshToken: 'app-refresh',
+    });
+    const task = {
+      id: 'task-1', appId: 'app-1', agentId: null, userId: 'u1', title: 'Chat', agentType: 'CLAUDE',
+      reasoningEffort: null, archived: false, createdAt: '2026-08-22T00:00:00Z', updatedAt: '2026-08-22T00:00:00Z',
+    };
+    const emptyPage = { content: [], page: { size: 100, totalElements: 0, totalPages: 0, number: 0 } };
+    const json = (status: number, body: unknown) => ({
+      ok: status < 400, status, headers: new Headers(), text: async () => JSON.stringify(body), json: async () => body,
+    });
+    vi.stubGlobal('fetch', vi.fn((input: unknown) => {
+      const url = String(input);
+      if (url.endsWith('/channel')) return Promise.resolve(json(503, { message: 'No box for this chat' }));
+      if (url.endsWith('/events')) {
+        return Promise.resolve({ ok: true, status: 200, body: new ReadableStream<Uint8Array>({ start() {} }) });
+      }
+      return Promise.resolve(json(200, url.includes('/messages') ? emptyPage : task));
+    }));
+    const onError = vi.fn();
+    const mitra = createClient({ appId: 'app-1', apiUrl: 'https://api.mitra.io', onError });
+
+    const session = mitra.agentTasks.session({ taskId: 'task-1', transport: 'http' });
+    const raws: Array<{ type: string; payload: unknown }> = [];
+    session.on('raw', (event) => raws.push(event));
+    await vi.waitFor(() => expect(session.status).toBe('idle'));
+
+    expect(raws[0]).toMatchObject({ type: 'channelDeclined', payload: { reason: 'unavailable' } });
+    expect(onError).not.toHaveBeenCalled();
+    session.close();
+  });
+
   it('should proceed after a transient proactive failure and use reactive refresh on 401', async () => {
     const nowSeconds = Math.floor(Date.now() / 1000);
     const oldAccess = jwt({ app_id: 'app-1', exp: nowSeconds - 1 });

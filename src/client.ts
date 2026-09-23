@@ -363,7 +363,14 @@ export function createClient(config: MitraClientConfig): MitraClient {
   const agentTasksModule = createBrowserAgentTasksModule(
     copilotHttpClient,
     authSession,
-    gatewayUrl
+    gatewayUrl,
+    new HttpClient({
+      baseUrl: copilotUrl,
+      getToken: () => authModule.accessToken,
+      beforeAuthenticatedRequest,
+      onUnauthorized,
+      defaultHeaders,
+    })
   );
   const agentCredentialsModule = createBrowserAgentCredentialsModule(copilotHttpClient);
 

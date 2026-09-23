@@ -2,10 +2,6 @@ import {
   createAgentTaskSessionManager,
   createAgentTasksModule,
   withAgentTaskSessions,
-  type AgentTaskEventConnection,
-  type AgentTaskEventObserver,
-  type AgentTaskEventSource,
-  type AgentTaskSessionOptions,
   type AgentTasksWithSessions,
 } from '@mitralab.io/sdk-core';
 import { coreErrors } from '../core-errors';
@@ -15,64 +11,35 @@ import { AgentInputOutbox, holdSendsWhileOffline } from './agent-outbox';
 import { BrowserAgentTaskEventSource } from './agent-session';
 
 /**
- * A chat opened over the direct channel is served by the box, so it is born there instead of
- * being adopted on the first channel request, which is what made the first open wait for a
- * boot. An SSE chat never reaches the box and stays on the runner. An explicit `runtime` wins.
- */
-function bornOnBox(options: AgentTaskSessionOptions): AgentTaskSessionOptions {
-  if (!('create' in options) || options.runtime || options.transport === 'http') return options;
-  return { ...options, runtime: 'T3' };
-}
-
-/**
- * Composes Core's Agent lifecycle with the browser streaming boundary. On the direct channel
- * the session's message and interrupt are written on the box socket itself. Everything the
- * socket cannot carry right now goes through the outbox, which holds a prompt while the browser
- * is offline or when its request got no response, until the browser is back; the public REST
- * primitive stays plain, so a direct `sendInput` fails as it always did.
+ * Composes Core's Agent lifecycle with the browser boundary. Core owns the direct channel to
+ * the chat's box, message and interrupt included; this SDK supplies the Copilot stream Core
+ * falls back to and the outbox, which takes what Core sends by REST and holds a prompt while the
+ * browser is offline or when its request got no response, until the browser is back. The public
+ * REST primitive stays plain, so a direct `sendInput` fails as it always did.
+ *
+ * `channelHttpClient` asks the Copilot for the channel. It carries no global `onError`: a chat
+ * whose box cannot be had falls back and says so with `channelDeclined`, which is not an error
+ * for the app.
  */
 export function createBrowserAgentTasksModule(
   httpClient: HttpClient,
   auth: AuthSessionPort,
-  apiUrl: string
+  apiUrl: string,
+  channelHttpClient: HttpClient = httpClient
 ): AgentTasksWithSessions {
   const tasks = createAgentTasksModule(httpClient, coreErrors);
-  const source = new BrowserAgentTaskEventSource(auth, apiUrl);
-  // The outbox speaks to the app through the session's own stream, so it needs the observer
-  // the core registered for the task. A close drains the outbox before the observer goes, so
-  // a prompt still waiting is reported while the session can still hear it.
-  const observers = new Map<string, AgentTaskEventObserver>();
-  const outbox = new AgentInputOutbox(tasks, (taskId, event) => observers.get(taskId)?.onEvent(event));
-  const eventSource: AgentTaskEventSource = {
-    async open(taskId, observer, signal, transport) {
-      observers.set(taskId, observer);
-      let connection: AgentTaskEventConnection;
-      try {
-        connection = await source.open(taskId, observer, signal, transport);
-      } catch (error) {
-        observers.delete(taskId);
-        throw error;
-      }
-      return {
-        close: () => {
-          outbox.abandon(taskId);
-          observers.delete(taskId);
-          connection.close();
-        },
-      };
-    },
-  };
+  const outbox = new AgentInputOutbox(tasks);
   const manager = createAgentTaskSessionManager({
     tasks: {
       ...tasks,
-      sendInput: (taskId, input) => (source.sendOnChannel(taskId, input)
-        ? Promise.resolve()
-        : outbox.sendInput(taskId, input)),
+      channel: createAgentTasksModule(channelHttpClient, coreErrors).channel,
+      sendInput: (taskId, input) => outbox.sendInput(taskId, input),
     },
-    eventSource,
+    eventSource: new BrowserAgentTaskEventSource(auth, apiUrl),
+    directChannel: { apiUrl },
   });
   return withAgentTaskSessions(tasks, {
-    session: (options) => holdSendsWhileOffline(manager.session(bornOnBox(options)), outbox),
+    session: (options) => holdSendsWhileOffline(manager.session(options), outbox),
   });
 }
 
