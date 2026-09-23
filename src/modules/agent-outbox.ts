@@ -283,20 +283,21 @@ export function holdSendsWhileOffline(
   const passThrough = (prompt: string) => !outbox.offline || !prompt.trim() || session.status === 'closed';
   const raws = new Set<Listener>();
   const errors = new Set<Listener>();
+  const outboxListeners: Partial<Record<string, Set<Listener>>> = { raw: raws, error: errors };
   const stopHearing = outbox.listen({
     taskId: () => session.taskId,
     hear: (event) => {
       for (const listener of raws) listener(event);
       if (event.type !== 'error') return;
-      const payload = event.payload as { code?: string; message: string };
-      const error = { ...(payload.code ? { code: payload.code } : {}), error: payload.message };
-      for (const listener of errors) listener(error);
+      // The outbox's only error frame is INPUT_UNSENT, which always carries its code.
+      const payload = event.payload as { code: string; message: string };
+      for (const listener of errors) listener({ code: payload.code, error: payload.message });
     },
   });
   const gated: Pick<AgentTaskSession, 'send' | 'sendAndWait' | 'close' | 'on'> = {
     on: (event, handler) => {
       const off = session.on(event, handler);
-      const own = event === 'raw' ? raws : event === 'error' ? errors : null;
+      const own = outboxListeners[event];
       if (!own) return off;
       own.add(handler as Listener);
       return () => {

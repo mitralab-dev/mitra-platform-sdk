@@ -375,6 +375,26 @@ describe('agent input outbox', () => {
       expect(onlineListeners).toHaveLength(0);
     });
 
+    it('stops telling a listener the app removed', async () => {
+      copilot([accepted], BOX_WS_URL);
+      const { session, errors, raws } = await openSession();
+      const late: unknown[] = [];
+      const off = session.on('raw', (event) => late.push(event));
+      const offError = session.on('error', (payload) => late.push(payload));
+      off();
+      offError();
+      browser.offline = true;
+      vi.stubGlobal('navigator', { onLine: false });
+
+      session.send('hello');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      session.close();
+
+      expect(outboxEvents(raws)).toHaveLength(1);
+      expect(errors).toHaveLength(1);
+      expect(late).toEqual([]);
+    });
+
     it('answers an approval by REST', async () => {
       const inputs = copilot([accepted], BOX_WS_URL);
       const { session, errors } = await openSession();

@@ -76,7 +76,12 @@ describe('createBrowserAgentTasksModule', () => {
     vi.stubGlobal('fetch', fetchMock);
     // A browser always has one; Node 18, which CI also runs, does not, and Core only creates on
     // the box when it can reach it.
-    vi.stubGlobal('WebSocket', class { readyState = 0; close() {} });
+    vi.stubGlobal('WebSocket', class {
+      readyState = 0;
+      close(): void {
+        // Never opened: the test ends once the task is created.
+      }
+    });
     const http = new HttpClient({ baseUrl: 'https://api.mitra.io/copilot' });
     const session = createBrowserAgentTasksModule(http, auth, 'https://api.mitra.io').session(options);
     const created = new Promise<void>((resolve) => session.on('taskCreated', () => resolve()));
