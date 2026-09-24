@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented in this file.
 
+## 1.3.0
+
+Stable release of the 1.3.0-beta.0 line, already on the `beta` tag. It pins
+`@mitralab.io/sdk-core` to `0.2.9`, the stable release of the `0.2.9-beta.1` surface this line
+already followed. No code change since 1.3.0-beta.0; the entry below describes what moves from
+1.2.0.
+
 ## 1.3.0-beta.0
 
 - The direct channel to the chat's box now comes from `@mitralab.io/sdk-core@0.2.9-beta.1`. This
