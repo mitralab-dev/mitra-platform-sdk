@@ -467,6 +467,7 @@ export type {
 export type { QueryResult } from './modules/queries';
 export type {
   NativeAgentMessage,
+  AgentProviderUsage,
   AgentQueueItem,
   AgentSendOptions,
   AgentSendAndWaitOptions,
@@ -492,6 +493,8 @@ export type {
   AgentModel as NativeAgentModel,
   AuthenticationResult,
   CredentialStatus,
+  CredentialUsage,
+  CredentialUsageWindow,
   DeviceAuthorization,
   OAuthExchangeInput,
   OAuthStartResult,

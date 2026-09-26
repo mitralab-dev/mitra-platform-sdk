@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented in this file.
 
+## 1.4.0-beta.0
+
+- `agentCredentials.usage("ANTHROPIC" | "OPENAI", { scope })` reads the last subscription reading
+  a chat on that credential reported, with no chat open: `{ harness, observedAt, status, windows:
+  [{ kind, usedPercent, resetsAt, windowSeconds }] }`, or `null` while none has. The session emits
+  the same reading as `providerUsage` during a turn on the box.
+- Depend on `@mitralab.io/sdk-core@0.2.10-beta.0` and export `CredentialUsage`,
+  `CredentialUsageWindow` and `AgentProviderUsage`.
+
 ## 1.3.0
 
 Stable release of the 1.3.0-beta.0 line, already on the `beta` tag. It pins

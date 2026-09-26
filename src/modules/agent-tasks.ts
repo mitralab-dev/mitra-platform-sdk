@@ -48,6 +48,7 @@ export function createBrowserAgentTasksModule(
 
 export type {
   AgentMessage as NativeAgentMessage,
+  AgentProviderUsage,
   AgentQueueItem,
   AgentSendAndWaitOptions,
   AgentSendOptions,

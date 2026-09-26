@@ -27,6 +27,7 @@ describe('createBrowserAgentCredentialsModule', () => {
     ['exchangeOAuth', { connected: true, email: null }, 200, (options) => credentials().exchangeOAuth('ANTHROPIC', { code: 'c', state: 's' }, options)],
     ['startDeviceAuthorization', { deviceAuthId: 'd', userCode: 'u', verificationUri: 'https://v', intervalSeconds: 5 }, 200, (options) => credentials().startDeviceAuthorization('OPENAI', options)],
     ['pollDeviceAuthorization', { connected: false, email: null }, 200, (options) => credentials().pollDeviceAuthorization('OPENAI', 'd', options)],
+    ['usage', usage, 200, (options) => credentials().usage('ANTHROPIC', options)],
     ['listCustomProviders', [], 200, (options) => credentials().listCustomProviders(options)],
     ['createCustomProvider', [], 200, (options) => credentials().createCustomProvider(customProviderInput, options)],
     ['deleteCustomProvider', undefined, 204, (options) => credentials().deleteCustomProvider('p1', options)],
@@ -57,9 +58,24 @@ describe('createBrowserAgentCredentialsModule', () => {
     expect(init.body).toBe(body);
   });
 
+  it('reads the last subscription window and answers null while there is none', async () => {
+    const fetchMock = mockFetch(usage, 200);
+    await expect(credentials().usage('OPENAI')).resolves.toEqual(usage);
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      'https://api.mitra.io/copilot/api/v1/credentials/OPENAI/usage'
+    );
+
+    mockFetch({ error_code: 'CREDENTIAL_USAGE_NOT_FOUND', message: 'No usage' }, 404);
+    await expect(credentials().usage('ANTHROPIC')).resolves.toBeNull();
+
+    mockFetch({ error_code: 'NOT_FOUND', message: 'Not found' }, 404);
+    await expect(credentials().usage('ANTHROPIC')).rejects.toMatchObject({ status: 404 });
+  });
+
   it.each([
     ['saveApiKey', () => credentials().saveApiKey('GOOGLE' as 'ANTHROPIC', 'secret')],
     ['remove', () => credentials().remove('GOOGLE' as 'OPENAI')],
+    ['usage', () => credentials().usage('GOOGLE' as 'OPENAI')],
     ['OAuth', () => credentials().startOAuth('OPENAI' as 'ANTHROPIC')],
     ['device authorization', () => credentials().startDeviceAuthorization('ANTHROPIC' as 'OPENAI')],
   ])('rejects unsupported providers at runtime for %s', (_flow, call) => {
@@ -70,6 +86,16 @@ describe('createBrowserAgentCredentialsModule', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+const usage = {
+  harness: 'claude',
+  observedAt: '2026-09-26T12:00:00Z',
+  status: 'allowed',
+  windows: [
+    { kind: 'FIVE_HOUR', usedPercent: 42, resetsAt: '2026-09-26T15:00:00Z', windowSeconds: 18000 },
+    { kind: 'WEEKLY', usedPercent: 65, resetsAt: '2026-10-01T00:00:00Z', windowSeconds: 604800 },
+  ],
+};
 
 const customProviderInput = {
   name: 'Groq',
