@@ -7,6 +7,7 @@ import {
   type AgentModel,
   type AuthenticationResult,
   type CredentialStatus,
+  type CredentialUsage,
   type DeviceAuthorization,
   type OAuthExchangeInput,
   type OAuthStartResult,
@@ -21,6 +22,14 @@ export type AgentDeviceProvider = 'OPENAI';
 export interface AgentCredentialsModule {
   list(options?: AgentCredentialOptions): Promise<CredentialStatus[]>;
   listModels(agentId?: string, options?: AgentCredentialOptions): Promise<AgentModel[]>;
+  /**
+   * The last subscription window a chat on this credential reported, readable with no chat open.
+   * `null` until a turn on the provider's subscription login has reported one.
+   */
+  usage(
+    provider: AgentCredentialProvider,
+    options?: AgentCredentialOptions
+  ): Promise<CredentialUsage | null>;
   saveApiKey(
     provider: AgentCredentialProvider,
     apiKey: string,
@@ -71,6 +80,10 @@ export function createBrowserAgentCredentialsModule(
   return {
     list: (options) => core.list(options),
     listModels: (agentId, options) => core.listModels(agentId, options),
+    usage: (provider, options) => {
+      requireProvider(provider, ['ANTHROPIC', 'OPENAI'] as const, 'Subscription usage');
+      return core.usage(provider, options);
+    },
     saveApiKey: (provider, apiKey, options) => {
       requireProvider(provider, ['ANTHROPIC', 'OPENAI'] as const, 'API key authentication');
       return core.saveApiKey(provider, apiKey, options);

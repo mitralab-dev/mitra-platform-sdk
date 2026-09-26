@@ -435,6 +435,13 @@ Every `agentCredentials` method takes a trailing `options` with `scope: "ACCOUNT
 
 A custom provider the person adds by API is a credential like the others, managed on `/api/v1/credentials/custom-providers` with the same trailing `options`: `listCustomProviders({ scope: "ACCOUNT" })` returns the person's OpenAI-compatible providers with the API key masked, `createCustomProvider({ name, baseUrl, apiKey, models }, { scope: "ACCOUNT" })` adds one under a name the person chooses and returns the list after creation, and `deleteCustomProvider(id, { scope: "ACCOUNT" })` removes it for good. The API key is write-only and `models` takes 1 to 32 model ids; each joins the catalog `listModels()` returns as `custom/<providerId>/<model>`, and a chat runs on one of them by sending the `agentType` that catalog row returns, the same way a built-in model is chosen. The Copilot requires `scope: "ACCOUNT"` on an app token. The three methods take no provider argument and no provider guard applies.
 
+The subscription window, the meter the IDE shows for a Claude or ChatGPT login, is readable with no chat open: `usage("ANTHROPIC")` (or `"OPENAI"`, with the same trailing `options`) resolves to `{ usedPercent, windowSeconds, resetsAt, observedAt }`, the last reading a chat on that credential reported, or `null` while none has. Only a turn on the person's own subscription login, or the agent connection's, reports a window; an API key, a custom provider and the included AI never do. During a turn on the box the session emits the same reading live as `providerUsage` (`{ harness, usedPercent, windowSeconds, resetsAt, observedAt }`), and the Copilot keeps it for the next `usage()`:
+
+```typescript
+session.on("providerUsage", ({ usedPercent, resetsAt }) => console.log(usedPercent, resetsAt))
+const window = await mitra.agentCredentials.usage("ANTHROPIC")
+```
+
 The browser token roles expose Agent tasks, credential status, and model discovery. Administrative business-Agent CRUD is intentionally not exposed by this adapter because the `USE` app role does not carry `AGENT_*` authority.
 
 ## Custom queries
