@@ -88,10 +88,13 @@ describe('createBrowserAgentCredentialsModule', () => {
 });
 
 const usage = {
-  usedPercent: 42,
-  windowSeconds: 18000,
-  resetsAt: '2026-09-26T15:00:00Z',
+  harness: 'claude',
   observedAt: '2026-09-26T12:00:00Z',
+  status: 'allowed',
+  windows: [
+    { kind: 'FIVE_HOUR', usedPercent: 42, resetsAt: '2026-09-26T15:00:00Z', windowSeconds: 18000 },
+    { kind: 'WEEKLY', usedPercent: 65, resetsAt: '2026-10-01T00:00:00Z', windowSeconds: 604800 },
+  ],
 };
 
 const customProviderInput = {

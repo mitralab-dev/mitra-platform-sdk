@@ -83,6 +83,7 @@ export type {
   AgentOAuthProvider,
   CredentialStatus,
   CredentialUsage,
+  CredentialUsageWindow,
   DeviceAuthorization,
   ExistingAgentTaskSessionOptions,
   NewAgentTaskSessionOptions,

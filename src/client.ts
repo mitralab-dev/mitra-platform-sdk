@@ -494,6 +494,7 @@ export type {
   AuthenticationResult,
   CredentialStatus,
   CredentialUsage,
+  CredentialUsageWindow,
   DeviceAuthorization,
   OAuthExchangeInput,
   OAuthStartResult,
