@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented in this file.
 
+## 1.4.0
+
+Stable release of the 1.4.0-beta.0 line, already on the `beta` tag. It pins
+`@mitralab.io/sdk-core` to `0.2.10`, the stable release of the `0.2.10-beta.0` surface this line
+already followed. No code change since 1.4.0-beta.0; the entry below describes what moves from
+1.3.0.
+
 ## 1.4.0-beta.0
 
 - `agentCredentials.usage("ANTHROPIC" | "OPENAI", { scope })` reads the last subscription reading
