@@ -73,6 +73,8 @@ export type {
   NativeAgentTimelineItem,
   NativeAgentToolEvent,
   AgentTurnResult,
+  AgentTurnUsage,
+  AgentTurnUsageRequest,
   AuthenticationResult,
   AgentConnectionCustomProvider,
   AgentConnectionCustomProviderInput,
