@@ -8,6 +8,7 @@ import {
   type BrowserHarness,
 } from '../test-utils';
 import { AuthModule } from './auth';
+import { expectAuthTokenResponse } from './auth-page-flow';
 
 const APP_ID = '11111111-1111-1111-1111-111111111111';
 const IAM_URL = `${API_URL}/iam`;
@@ -738,5 +739,71 @@ describe('Email auth page flow', () => {
     await expect(signIn).resolves.toEqual(USER);
     expect(fetchMock.mock.calls[0][0]).toBe(EXCHANGE_URL);
     expect(browser.localStorage._store[PENDING_KEY]).toBeUndefined();
+  });
+});
+
+describe('expectAuthTokenResponse', () => {
+  const ALL_TOKENS = {
+    platform: { accessToken: 'session-access', refreshToken: 'session-refresh', tokenType: 'Bearer' },
+    mitraSpace: { token: 'space-token', tokenType: 'Bearer' },
+    b2bToken: { accessToken: 'peer-access', refreshToken: 'peer-refresh', tokenType: 'Bearer' },
+  };
+
+  it('keeps the three families of an enabled app', () => {
+    expect(expectAuthTokenResponse({ ...TOKEN_RESPONSE, allTokens: ALL_TOKENS })).toEqual({
+      ...TOKEN_RESPONSE,
+      allTokens: ALL_TOKENS,
+    });
+  });
+
+  it('keeps the parts IAM sent as null', () => {
+    const allTokens = { platform: null, mitraSpace: null, b2bToken: null };
+
+    expect(expectAuthTokenResponse({ ...TOKEN_RESPONSE, allTokens }).allTokens).toEqual(allTokens);
+  });
+
+  it.each([
+    ['missing fields', {
+      platform: { accessToken: 'session-access', tokenType: 'Bearer' },
+      mitraSpace: { tokenType: 'Bearer' },
+      b2bToken: { accessToken: 'peer-access', refreshToken: 'peer-refresh' },
+    }],
+    ['wrong types', {
+      platform: 'session-access',
+      mitraSpace: { token: 42, tokenType: 'Bearer' },
+      b2bToken: [ALL_TOKENS.b2bToken],
+    }],
+    ['blank strings', {
+      platform: { ...ALL_TOKENS.platform, tokenType: '' },
+      mitraSpace: { token: '   ', tokenType: 'Bearer' },
+      b2bToken: { ...ALL_TOKENS.b2bToken, refreshToken: ' ' },
+    }],
+    ['absent parts', {}],
+  ])('reads parts with %s as null instead of failing the login', (_case, allTokens) => {
+    const response = expectAuthTokenResponse({ ...TOKEN_RESPONSE, allTokens });
+
+    expect(response).toMatchObject(TOKEN_RESPONSE);
+    expect(response.allTokens).toEqual({ platform: null, mitraSpace: null, b2bToken: null });
+  });
+
+  it('keeps the valid parts next to a malformed one', () => {
+    const response = expectAuthTokenResponse({
+      ...TOKEN_RESPONSE,
+      allTokens: { ...ALL_TOKENS, b2bToken: { accessToken: 'peer-access' } },
+    });
+
+    expect(response.allTokens).toEqual({ ...ALL_TOKENS, b2bToken: null });
+  });
+
+  it.each([
+    ['absent', {}],
+    ['null', { allTokens: null }],
+    ['a string', { allTokens: 'nope' }],
+    ['an array', { allTokens: [] }],
+  ])('omits the field when it is %s', (_case, extra) => {
+    const response = expectAuthTokenResponse({ ...TOKEN_RESPONSE, ...extra });
+
+    expect(response).toEqual(TOKEN_RESPONSE);
+    expect(response).not.toHaveProperty('allTokens');
   });
 });

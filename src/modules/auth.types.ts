@@ -74,6 +74,33 @@ export interface EmailCodeVerification {
   code: string;
 }
 
+/** A one-hour IAM session pair, renewed at the `refresh-token` route of the IAM that issued it. */
+export interface PlatformSessionTokens {
+  readonly accessToken: string;
+  readonly refreshToken: string;
+  readonly tokenType: string;
+}
+
+/** Long-lived mitraSpace token issued at login. It has no refresh flow. */
+export interface MitraSpaceToken {
+  readonly token: string;
+  readonly tokenType: string;
+}
+
+/**
+ * Extra tokens IAM returns at login only for apps enabled server-side. The SDK
+ * hands out frozen instances: the object is persisted with the session, so a
+ * write into it would reach storage on the next save.
+ */
+export interface AllTokens {
+  /** Session in the workspace IAM picked for the person, or null when there is none. */
+  readonly platform: PlatformSessionTokens | null;
+  /** Null when mitraSpace is unreachable or the person has no account there. */
+  readonly mitraSpace: MitraSpaceToken | null;
+  /** Session of the same person in the IAM of another environment, or null on any failure there. */
+  readonly b2bToken: PlatformSessionTokens | null;
+}
+
 /**
  * Response from authentication token endpoints.
  * @internal
@@ -82,6 +109,7 @@ export interface AuthTokenResponse {
   accessToken: string;
   refreshToken: string;
   tokenType: string;
+  allTokens?: AllTokens;
 }
 
 /** Callback for auth state changes. Receives the user on login, null on logout. */

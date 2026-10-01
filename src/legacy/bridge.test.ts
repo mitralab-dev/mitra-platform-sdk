@@ -487,6 +487,82 @@ describe('LegacySessionBridge', () => {
     });
   });
 
+  it('should keep the extra login tokens on a legacy token refresh and drop them on a legacy login', () => {
+    const allTokens = {
+      platform: { accessToken: 'session-access', refreshToken: 'session-refresh', tokenType: 'Bearer' },
+      mitraSpace: { token: 'space-token', tokenType: 'Bearer' },
+      b2bToken: { accessToken: 'peer-access', refreshToken: 'peer-refresh', tokenType: 'Bearer' },
+    };
+    storage._store[STORAGE_KEY] = JSON.stringify({
+      user: { id: 'u1', tenantId: 't1', email: 'user@test.com', name: null },
+      token: fakeJwt({ app_id: APP_ID, sub: 'u1', iat: 1 }),
+      refreshToken: appScopedRefreshToken,
+      allTokens,
+    });
+    const mitra = createClient({ appId: APP_ID, apiUrl: API_URL });
+    const refreshedToken = fakeJwt({ app_id: APP_ID, sub: 'u1', iat: 2 });
+
+    getConfig().onTokenRefresh?.({
+      token: refreshedToken,
+      refreshToken: appScopedRefreshToken,
+      baseURL: API_URL,
+    });
+
+    expect(mitra.auth.accessToken).toBe(refreshedToken);
+    expect(mitra.auth.allTokens).toEqual(allTokens);
+    expect(readStoredSession(storage).allTokens).toEqual(allTokens);
+
+    adoptLegacySession({
+      token: 'sso-access-token',
+      refreshToken: appScopedRefreshToken,
+      baseURL: API_URL,
+    });
+
+    expect(mitra.auth.allTokens).toBeNull();
+    expect(readStoredSession(storage).allTokens).toBeUndefined();
+  });
+
+  it('should drop the extra login tokens when a late legacy refresh brings another person', () => {
+    storage._store[STORAGE_KEY] = JSON.stringify({
+      user: { id: 'u1', tenantId: 't1', email: 'user@test.com', name: null },
+      token: fakeJwt({ app_id: APP_ID, sub: 'u1' }),
+      refreshToken: appScopedRefreshToken,
+      allTokens: {
+        platform: { accessToken: 'session-access', refreshToken: 'session-refresh', tokenType: 'Bearer' },
+        mitraSpace: { token: 'space-token', tokenType: 'Bearer' },
+        b2bToken: { accessToken: 'peer-access', refreshToken: 'peer-refresh', tokenType: 'Bearer' },
+      },
+    });
+    const mitra = createClient({ appId: APP_ID, apiUrl: API_URL });
+    const otherPersonToken = fakeJwt({ app_id: APP_ID, sub: 'u2' });
+    const otherPersonRefresh = fakeJwt({ app_id: APP_ID, sub: 'u2' });
+
+    getConfig().onTokenRefresh?.({
+      token: otherPersonToken,
+      refreshToken: otherPersonRefresh,
+      baseURL: API_URL,
+    });
+
+    expect(mitra.auth.accessToken).toBe(otherPersonToken);
+    expect(mitra.auth.allTokens).toBeNull();
+    expect(readStoredSession(storage)).toMatchObject({ token: otherPersonToken, refreshToken: otherPersonRefresh });
+    expect(readStoredSession(storage).allTokens).toBeUndefined();
+  });
+
+  it('should hand a rejected legacy token refresh the session the client still holds', () => {
+    createClient({ appId: APP_ID, apiUrl: API_URL });
+
+    getConfig().onTokenRefresh?.({
+      token: fakeJwt({ app_id: 'other-app' }),
+      refreshToken: fakeJwt({ app_id: 'other-app' }),
+      baseURL: API_URL,
+    });
+
+    expect(getConfig().token).toBeUndefined();
+    expect(getConfig().refreshToken).toBeUndefined();
+    expect(storage._store[STORAGE_KEY]).toBeUndefined();
+  });
+
   it('should reinstate the refresh hook that a legacy login drops', () => {
     createClient({ appId: APP_ID, apiUrl: API_URL });
     const initialHook = getConfig().onTokenRefresh;

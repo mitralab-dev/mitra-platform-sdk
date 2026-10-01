@@ -3,12 +3,13 @@ import { createAuthModule, type AuthModule as CoreAuthModule } from '@mitralab.i
 import { coreErrors } from '../core-errors';
 import { HttpClient, MitraApiError } from '../utils/http-client';
 import { assertServerRuntime, resolveApiKeySession } from './api-key-auth';
-import { expectAuthTokenResponse, AuthPageFlow } from './auth-page-flow';
+import { expectAuthTokenResponse, AuthPageFlow, normalizeAllTokens } from './auth-page-flow';
 import { EmailCodeFlow } from './email-code-flow';
 import type {
   User,
   SignInCredentials,
   SignUpData,
+  AllTokens,
   AuthSession,
   AuthTokenResponse,
   AuthStateChangeCallback,
@@ -24,6 +25,9 @@ export type {
   User,
   SignInCredentials,
   SignUpData,
+  AllTokens,
+  MitraSpaceToken,
+  PlatformSessionTokens,
   AuthSession,
   AuthStateChangeCallback,
   AuthPageSignInOptions,
@@ -64,6 +68,7 @@ export interface AuthSessionPort {
   readSessionTokens(): AuthSessionTokens;
   onSessionChange(callback: AuthSessionChangeCallback): () => void;
   adoptSession(session: { token: string; refreshToken?: string | null }): boolean;
+  rotateSession(session: { token: string; refreshToken?: string | null }): boolean;
 }
 
 const sessionPorts = new WeakMap<AuthModule, AuthSessionPort>();
@@ -95,10 +100,38 @@ function belongsToApp(token: string, appId: string): boolean {
   return payload.app_id === appId;
 }
 
+function subjectOf(token: string): string | null {
+  const sub = decodeJwtPayload(token)?.sub;
+  return typeof sub === 'string' && sub !== '' ? sub : null;
+}
+
 function isTokenExpiring(token: string, minValidityMs: number): boolean {
   const exp = decodeJwtPayload(token)?.exp;
   if (typeof exp !== 'number' || !Number.isFinite(exp)) return false;
   return exp * 1_000 - Date.now() < minValidityMs;
+}
+
+/** A value carrying none of the tokens says nothing, so it reads as no field at all. */
+function discardEmptyAllTokens(tokens: AllTokens | null | undefined): AllTokens | null {
+  if (!tokens || (!tokens.platform && !tokens.mitraSpace && !tokens.b2bToken)) return null;
+  return tokens;
+}
+
+/**
+ * IAM recomputes `platform` on every app refresh, so it is taken as sent,
+ * `null` included. It sends `mitraSpace` and `b2bToken` as `null` on refresh on
+ * purpose: the Space token is long-lived and the peer session is renewed by the
+ * app itself, so a `null` there keeps what the login issued. IAM omits the
+ * field whenever the app is not entitled to these tokens, so a refresh without
+ * it clears everything instead of keeping one-hour pairs that would expire unseen.
+ */
+function mergeAllTokens(current: AllTokens | null, incoming: AllTokens | undefined): AllTokens | null {
+  if (!incoming) return null;
+  return discardEmptyAllTokens(Object.freeze({
+    platform: incoming.platform,
+    mitraSpace: incoming.mitraSpace ?? current?.mitraSpace ?? null,
+    b2bToken: incoming.b2bToken ?? current?.b2bToken ?? null,
+  }));
 }
 
 function isDefinitiveRefreshFailure(error: unknown): boolean {
@@ -129,6 +162,7 @@ export class AuthModule {
   private _currentUser: User | null = null;
   #accessToken: string | null = null;
   #refreshToken: string | null = null;
+  #allTokens: AllTokens | null = null;
   private sessionGeneration = 0;
   private refreshFlight: RefreshFlight | null = null;
   private transientRefreshFailureGeneration: number | null = null;
@@ -199,6 +233,7 @@ export class AuthModule {
       readSessionTokens: () => this.readSessionTokens(),
       onSessionChange: (callback) => this.onSessionChange(callback),
       adoptSession: (session) => this.adoptSession(session),
+      rotateSession: (session) => this.rotateSession(session),
     });
   }
 
@@ -212,17 +247,34 @@ export class AuthModule {
     return this.#accessToken;
   }
 
+  /**
+   * Extra tokens IAM issues at login for apps enabled server-side, or `null`
+   * when IAM did not send them. They are reset by every new session and updated
+   * on each app refresh, and these changes are not announced to auth-state
+   * listeners, so read them here right before use instead of caching them.
+   *
+   * @example
+   * ```typescript
+   * const b2bAccessToken = mitra.auth.allTokens?.b2bToken?.accessToken;
+   * ```
+   */
+  get allTokens(): AllTokens | null {
+    return this.#allTokens;
+  }
+
   /** Whether a user is currently authenticated (local check, not server-validated). */
   get isAuthenticated(): boolean {
     return this._currentUser !== null && this.#accessToken !== null;
   }
 
   /** @deprecated Email/password authentication is not implemented by IAM. Use signInWithEmail() or SSO. */
-  async signIn(_credentials: SignInCredentials): Promise<User> {
-    throw new MitraApiError(
-      'Email/password authentication is not available. Use signInWithEmail(), signInWithGoogle() or signInWithMicrosoft().',
-      0,
-      'UNSUPPORTED_AUTH_METHOD'
+  signIn(_credentials: SignInCredentials): Promise<User> {
+    return Promise.reject(
+      new MitraApiError(
+        'Email/password authentication is not available. Use signInWithEmail(), signInWithGoogle() or signInWithMicrosoft().',
+        0,
+        'UNSUPPORTED_AUTH_METHOD'
+      )
     );
   }
 
@@ -300,6 +352,7 @@ export class AuthModule {
     this.invalidatePendingRefreshes();
     this.#accessToken = token;
     this.#refreshToken = null;
+    this.#allTokens = null;
 
     const user = await this.getCurrentUser();
     this._currentUser = user;
@@ -479,11 +532,13 @@ export class AuthModule {
   }
 
   /** @deprecated Email/password registration is not implemented by IAM. Use signInWithEmail() or SSO. */
-  async signUp(_data: SignUpData): Promise<User> {
-    throw new MitraApiError(
-      'Email/password registration is not available. Use signInWithEmail(), signInWithGoogle() or signInWithMicrosoft().',
-      0,
-      'UNSUPPORTED_AUTH_METHOD'
+  signUp(_data: SignUpData): Promise<User> {
+    return Promise.reject(
+      new MitraApiError(
+        'Email/password registration is not available. Use signInWithEmail(), signInWithGoogle() or signInWithMicrosoft().',
+        0,
+        'UNSUPPORTED_AUTH_METHOD'
+      )
     );
   }
 
@@ -626,7 +681,8 @@ export class AuthModule {
   /**
    * Sets the access token manually (e.g., from SSO/OAuth callback).
    *
-   * Call `me()` afterwards to fetch the associated user data.
+   * Call `me()` afterwards to fetch the associated user data. {@link allTokens}
+   * goes back to `null`, because it belongs to the session being replaced.
    *
    * @param token - JWT access token.
    * @param saveToStorage - Whether to persist to localStorage (default: true).
@@ -644,6 +700,7 @@ export class AuthModule {
     }
     this.invalidatePendingRefreshes();
     this.#accessToken = token;
+    this.#allTokens = null;
     if (saveToStorage) {
       this.saveToStorage();
     }
@@ -670,6 +727,8 @@ export class AuthModule {
    * This preserves the access and refresh tokens together so the normal refresh
    * lifecycle continues after an embedded preview hands its session to the app.
    * Call {@link checkAuth} afterward to validate the token and hydrate the user.
+   * {@link allTokens} goes back to `null`, because it belongs to the session
+   * being replaced.
    */
   setSession(session: AuthSession): boolean {
     return this.adoptSession({
@@ -729,13 +788,39 @@ export class AuthModule {
    *
    * Replaces the in-memory tokens and persists them under the same storage key
    * the rest of the module uses. The current user is left untouched because the
-   * legacy SDK does not return one; call `me()` to hydrate it.
+   * legacy SDK does not return one; call `me()` to hydrate it. It is a new
+   * session, so the extra login tokens of the previous one are dropped.
    *
    * @param session - Access token and, when the issuer returned one, refresh token.
    *
    * @internal
    */
   private adoptSession(session: { token: string; refreshToken?: string | null }): boolean {
+    return this.applySession(session, false);
+  }
+
+  /**
+   * Stores tokens another issuer rotated for the session already in place, such
+   * as a silent refresh performed by the legacy SDK. The extra login tokens are
+   * kept only when the rotated token belongs to the same person.
+   *
+   * @internal
+   */
+  private rotateSession(session: { token: string; refreshToken?: string | null }): boolean {
+    // A legacy refresh started for one person can land after another person
+    // signed in to the same app; keeping allTokens then would mix the two.
+    return this.applySession(session, this.isSamePerson(session.token));
+  }
+
+  private isSamePerson(token: string): boolean {
+    const current = this.#accessToken ? subjectOf(this.#accessToken) : null;
+    return current !== null && current === subjectOf(token);
+  }
+
+  private applySession(
+    session: { token: string; refreshToken?: string | null },
+    keepAllTokens: boolean
+  ): boolean {
     if (
       !this.belongsToConfiguredApp(session.token)
       || (
@@ -747,6 +832,7 @@ export class AuthModule {
       return false;
     }
     this.invalidatePendingRefreshes();
+    if (!keepAllTokens) this.#allTokens = null;
     this.#accessToken = session.token;
     if (session.refreshToken !== undefined) {
       this.#refreshToken = session.refreshToken;
@@ -831,6 +917,7 @@ export class AuthModule {
 
     this.#accessToken = tokenResponse.accessToken;
     this.#refreshToken = tokenResponse.refreshToken;
+    this.#allTokens = mergeAllTokens(this.#allTokens, tokenResponse.allTokens);
     this.transientRefreshFailureGeneration = null;
     this.saveToStorage();
     this.notifySessionListeners();
@@ -849,6 +936,7 @@ export class AuthModule {
     const generation = this.sessionGeneration;
     this.#accessToken = tokenResponse.accessToken;
     this.#refreshToken = tokenResponse.refreshToken;
+    this.#allTokens = discardEmptyAllTokens(tokenResponse.allTokens);
 
     try {
       const user = await this.getCurrentUser();
@@ -887,6 +975,7 @@ export class AuthModule {
     this._currentUser = null;
     this.#accessToken = null;
     this.#refreshToken = null;
+    this.#allTokens = null;
     this.removeFromStorage();
     if (hadAuthState) {
       this.notifySessionListeners();
@@ -953,6 +1042,10 @@ export class AuthModule {
           user: this._currentUser,
           token: this.#accessToken,
           refreshToken: this.#refreshToken,
+          // Persisted with the session on purpose: IAM issues mitraSpace and
+          // b2bToken only at login, so keeping them in memory alone would lose
+          // them on the first reload.
+          ...(this.#allTokens ? { allTokens: this.#allTokens } : {}),
         })
       );
     } catch {
@@ -966,7 +1059,7 @@ export class AuthModule {
     try {
       const stored = localStorage.getItem(this.storageKey);
       if (stored) {
-        const { user, token, refreshToken } = JSON.parse(stored);
+        const { user, token, refreshToken, allTokens } = JSON.parse(stored);
         if (
           typeof token !== 'string'
           || (refreshToken !== null && refreshToken !== undefined && typeof refreshToken !== 'string')
@@ -982,6 +1075,7 @@ export class AuthModule {
         this._currentUser = user;
         this.#accessToken = token;
         this.#refreshToken = refreshToken ?? null;
+        this.#allTokens = discardEmptyAllTokens(normalizeAllTokens(allTokens));
         this.invalidatePendingRefreshes();
       }
     } catch {

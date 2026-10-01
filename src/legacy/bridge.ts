@@ -12,6 +12,10 @@ function stripBearer(token: string): string {
   return token.replace(/^\s*(?:bearer\s+)+/i, '').trim();
 }
 
+function toSessionTokens(session: LoginResponse): { token: string; refreshToken: string | null } {
+  return { token: stripBearer(session.token), refreshToken: session.refreshToken ?? null };
+}
+
 /**
  * Keeps a single session shared between this SDK and `mitra-interactions-sdk`.
  *
@@ -67,7 +71,7 @@ export class LegacySessionBridge {
         authUrl: this.legacyUrl,
         authPageUrl,
         projectId: this.appId,
-        onTokenRefresh: (session) => this.adopt(session),
+        onTokenRefresh: (session) => this.rotate(session),
         ...(session.token ? { token: session.token } : {}),
         ...(session.refreshToken ? { refreshToken: session.refreshToken } : {}),
       });
@@ -85,16 +89,25 @@ export class LegacySessionBridge {
   }
 
   /**
-   * Stores a session produced by the legacy SDK. The AuthModule subscription
+   * Stores a session produced by a legacy login. The AuthModule subscription
    * then writes that session back to the process-wide legacy config and
    * reinstates the refresh hook removed by legacy login.
    */
   adopt(session: LoginResponse): void {
-    const adopted = this.auth.adoptSession({
-      token: stripBearer(session.token),
-      refreshToken: session.refreshToken ?? null,
-    });
-    if (!adopted) this.syncToLegacy(this.auth.readSessionTokens());
+    if (!this.auth.adoptSession(toSessionTokens(session))) {
+      this.syncToLegacy(this.auth.readSessionTokens());
+    }
+  }
+
+  /**
+   * Stores tokens the legacy SDK silently refreshed for the session already in
+   * place. Unlike a legacy login, it keeps the extra login tokens of the client
+   * when the renewed token belongs to the same person.
+   */
+  private rotate(session: LoginResponse): void {
+    if (!this.auth.rotateSession(toSessionTokens(session))) {
+      this.syncToLegacy(this.auth.readSessionTokens());
+    }
   }
 }
 

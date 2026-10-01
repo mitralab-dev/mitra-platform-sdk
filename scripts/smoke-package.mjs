@@ -115,6 +115,7 @@ import {
   MitraApiError,
   executeServerFunctionMitra,
   loginWithGoogleMitra,
+  type AllTokens,
   type EmailCodeRequest,
   type EmailCodeRequestResult,
   type EmailCodeVerification,
@@ -148,6 +149,13 @@ const emailCodeVerification: EmailCodeVerification = { receipt: "receipt", code:
 const unsupportedEmailLanguage: EmailCodeRequest = { email: user.email, language: "es" }
 const emailCodeRequested: Promise<EmailCodeRequestResult> =
   client.auth.requestEmailCode(emailCodeRequest)
+const allTokens: AllTokens | null = client.auth.allTokens
+const b2bAccessToken: string | undefined = allTokens?.b2bToken?.accessToken
+// @ts-expect-error The extra login tokens are issued by IAM, never set by the application.
+client.auth.allTokens = null
+const loginTokens: AllTokens = { platform: null, mitraSpace: null, b2bToken: null }
+// @ts-expect-error The SDK hands out frozen tokens, so a renewed pair cannot be written back.
+loginTokens.b2bToken = null
 
 void client.auth.currentUser
 void client.auth.isAuthenticated
@@ -191,6 +199,7 @@ const interactionsConfig: InteractionsMitraConfig = legacyConfig
 const structurallyIdenticalConfig: MitraConfig = interactionsConfig
 const legacySession: Promise<LoginResponse> = loginWithGoogleMitra({ projectId: "app" })
 
+void b2bAccessToken
 void table
 void query
 void proxy

@@ -160,6 +160,28 @@ const mitra = createClient({
 })
 ```
 
+### Tokens beyond the app session
+
+An app enabled server-side receives an extra `allTokens` field when someone signs in with Google, Microsoft, or email. `mitra.auth.allTokens` is `null` whenever IAM did not send it, which is the case for every other app, and a malformed field never fails the login: a part that does not have the expected shape reads as `null`. When all three parts are `null`, the field reads as `null` as well, the same as for an app outside the flag.
+
+```typescript
+const platformAccessToken = mitra.auth.allTokens?.platform?.accessToken
+const mitraSpaceToken = mitra.auth.allTokens?.mitraSpace?.token
+const b2bAccessToken = mitra.auth.allTokens?.b2bToken?.accessToken
+```
+
+There are three families, each one `null` when IAM could not issue it:
+
+- `platform`: an IAM session pair (`accessToken`, `refreshToken`, `tokenType`) in the workspace IAM chose for the person.
+- `mitraSpace`: a mitraSpace token (`token`, `tokenType`). It lasts for decades and has no refresh flow.
+- `b2bToken`: an IAM session pair for the same person in the IAM of another environment, with the same shape as `platform`.
+
+`platform` and `b2bToken` are sessions of one hour. The SDK refreshes only the app token: each app refresh brings a new `platform`, while `b2bToken` comes from login alone, so the app renews it itself with `POST {iam of that environment}/api/v1/auth/refresh-token`, sending only its `refreshToken`. The SDK does not store what that call returns. On an app refresh, `platform` is replaced by what IAM sent, `null` included; `mitraSpace` and `b2bToken`, which IAM sends as `null` there on purpose, keep the values issued at login; a refresh without the field clears it, because IAM omits it whenever the app is not entitled to these tokens and a stored one-hour pair would expire unnoticed. A new login, `setSession`, `setToken`, or a legacy login replaces the session and resets the field; the silent token refresh of the legacy SDK keeps it when the renewed token belongs to the same person, and resets it otherwise. Auth-state listeners are not notified when only these tokens change, so read them right before use. The returned objects are frozen: keep a renewed `b2bToken` in your own state instead of writing it back. After a reload, the `b2bToken` pair available is the one issued at login: the SDK neither renews nor expires it, so a `401` from the peer means the person has to sign in again. `platform` is renewed only by this SDK's app refresh; the silent rotation through the legacy bridge keeps whatever was stored when the renewed token belongs to the same person.
+
+These tokens are not checked against `appId`: they are issued for other scopes and stay validated by the server that receives them.
+
+**Security note.** These tokens reach more than the app session: `platform` and `b2bToken` act as the person on IAM endpoints the app token cannot reach, and the mitraSpace token lives for decades. `b2bToken` carries the widest exposure: it is the person's session in another environment, the production of the Mitra brand, kept on the origin of an app that runs in a different environment. All three are stored with the rest of the session in `localStorage` under `mitra_auth_{appId}`, so any script running on the application origin can read them. They are persisted, instead of held in memory, because IAM issues `mitraSpace` and `b2bToken` only at login, and `platform` only at login and on refresh: without persistence, a reload would leave `platform` `null` until the next refresh and the other two until the next sign-in. The SDK only carries what IAM sent: the flag is turned on per app in IAM, so whoever enables it there decides which app origins hold these sessions. `signOut()` removes them.
+
 ### Signing in with email
 
 Email sign-in needs neither a password nor an SSO account, and the application
