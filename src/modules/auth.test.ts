@@ -39,6 +39,16 @@ const currentUserResponse = {
 };
 const apiUser = { ...currentUserResponse, tenantId: 't1' };
 const fakeTokenResponse = { accessToken: 'access-123', refreshToken: 'refresh-456', tokenType: 'Bearer' };
+const fakeAllTokens = {
+  platform: { accessToken: 'session-access', refreshToken: 'session-refresh', tokenType: 'Bearer' },
+  mitraSpace: { token: 'space-token', tokenType: 'Bearer' },
+  b2bToken: { accessToken: 'peer-access', refreshToken: 'peer-refresh', tokenType: 'Bearer' },
+};
+const rotatedPlatform = {
+  accessToken: 'new-session-access',
+  refreshToken: 'new-session-refresh',
+  tokenType: 'Bearer',
+};
 
 function jwt(payload: Record<string, unknown>): string {
   const encode = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url');
@@ -51,6 +61,22 @@ function storedSession(
   refreshToken: string,
 ): void {
   storage._store[STORAGE_KEY] = JSON.stringify({ user: fakeUser, token, refreshToken });
+}
+
+function storedSessionWithAllTokens(
+  storage: ReturnType<typeof mockLocalStorage>,
+  allTokens: unknown = fakeAllTokens,
+): void {
+  storage._store[STORAGE_KEY] = JSON.stringify({
+    user: fakeUser,
+    token: 'old-access',
+    refreshToken: 'old-refresh',
+    allTokens,
+  });
+}
+
+function storedAllTokens(storage: ReturnType<typeof mockLocalStorage>): unknown {
+  return JSON.parse(storage._store[STORAGE_KEY]).allTokens;
 }
 
 function deferred<T>(): {
@@ -899,6 +925,234 @@ describe('AuthModule', () => {
 
     // Should NOT have been called again after unsubscribe
     expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  describe('allTokens', () => {
+    it('should expose and persist the three families returned at login', async () => {
+      const browser = mockBrowser();
+      mockFetchSequence([
+        { body: { ...fakeTokenResponse, allTokens: fakeAllTokens } },
+        { body: currentUserResponse },
+      ]);
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+      const signIn = auth.signInWithEmail();
+      const state = browser.getStartUrl().searchParams.get('state')!;
+      browser.dispatchMessage(authPageResult(state, { code: 'exchange-code' }));
+
+      await expect(signIn).resolves.toEqual(apiUser);
+      expect(auth.allTokens).toEqual(fakeAllTokens);
+      expect(storedAllTokens(browser.localStorage)).toEqual(fakeAllTokens);
+    });
+
+    it('should drop the tokens of the previous session when the next login has none', async () => {
+      const browser = mockBrowser();
+      storedSessionWithAllTokens(browser.localStorage);
+      mockFetchSequence([{ body: fakeTokenResponse }, { body: currentUserResponse }]);
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+      expect(auth.allTokens).toEqual(fakeAllTokens);
+
+      const signIn = auth.signInWithEmail();
+      const state = browser.getStartUrl().searchParams.get('state')!;
+      browser.dispatchMessage(authPageResult(state, { code: 'exchange-code' }));
+
+      await expect(signIn).resolves.toEqual(apiUser);
+      expect(auth.allTokens).toBeNull();
+      expect(JSON.parse(browser.localStorage._store[STORAGE_KEY])).not.toHaveProperty('allTokens');
+    });
+
+    it('should read no tokens when the login response carries none of them', async () => {
+      const browser = mockBrowser();
+      mockFetchSequence([
+        { body: { ...fakeTokenResponse, allTokens: { platform: null, mitraSpace: null, b2bToken: null } } },
+        { body: currentUserResponse },
+      ]);
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+      const signIn = auth.signInWithEmail();
+      const state = browser.getStartUrl().searchParams.get('state')!;
+      browser.dispatchMessage(authPageResult(state, { code: 'exchange-code' }));
+
+      await expect(signIn).resolves.toEqual(apiUser);
+      expect(auth.allTokens).toBeNull();
+      expect(JSON.parse(browser.localStorage._store[STORAGE_KEY])).not.toHaveProperty('allTokens');
+    });
+
+    it.each([
+      ['a session stored before the field existed', () => storedSession(storage, 'old-access', 'old-refresh')],
+      ['malformed stored tokens', () => storedSessionWithAllTokens(storage, 'not-an-object')],
+    ])('should still load %s, without extra tokens', (_case, store) => {
+      store();
+
+      const auth = new AuthModule(APP_ID, IAM_URL);
+
+      expect(auth.allTokens).toBeNull();
+      expect(auth.accessToken).toBe('old-access');
+    });
+
+    it('should load a session stored before b2bToken existed', () => {
+      storedSessionWithAllTokens(storage, {
+        platform: fakeAllTokens.platform,
+        mitraSpace: fakeAllTokens.mitraSpace,
+      });
+
+      const auth = new AuthModule(APP_ID, IAM_URL);
+
+      expect(auth.allTokens).toEqual({ ...fakeAllTokens, b2bToken: null });
+    });
+
+    it('should take platform from the refresh and keep mitraSpace and b2bToken from login', async () => {
+      storedSessionWithAllTokens(storage);
+      mockFetchSequence([{
+        body: {
+          ...fakeTokenResponse,
+          allTokens: { platform: rotatedPlatform, mitraSpace: null, b2bToken: null },
+        },
+      }]);
+      const auth = new AuthModule(APP_ID, IAM_URL);
+
+      await expect(auth.refreshSession()).resolves.toBe(true);
+
+      const merged = { ...fakeAllTokens, platform: rotatedPlatform };
+      expect(auth.allTokens).toEqual(merged);
+      expect(storedAllTokens(storage)).toEqual(merged);
+    });
+
+    it('should replace mitraSpace and b2bToken when a refresh carries them', async () => {
+      storedSessionWithAllTokens(storage);
+      const incoming = {
+        platform: rotatedPlatform,
+        mitraSpace: { token: 'new-space-token', tokenType: 'Bearer' },
+        b2bToken: { accessToken: 'new-peer-access', refreshToken: 'new-peer-refresh', tokenType: 'Bearer' },
+      };
+      mockFetchSequence([{ body: { ...fakeTokenResponse, allTokens: incoming } }]);
+      const auth = new AuthModule(APP_ID, IAM_URL);
+
+      await expect(auth.refreshSession()).resolves.toBe(true);
+
+      expect(auth.allTokens).toEqual(incoming);
+    });
+
+    it('should drop platform when the refresh reports none', async () => {
+      storedSessionWithAllTokens(storage);
+      mockFetchSequence([{
+        body: { ...fakeTokenResponse, allTokens: { platform: null, mitraSpace: null, b2bToken: null } },
+      }]);
+      const auth = new AuthModule(APP_ID, IAM_URL);
+
+      await expect(auth.refreshSession()).resolves.toBe(true);
+
+      expect(auth.allTokens).toEqual({ ...fakeAllTokens, platform: null });
+    });
+
+    it.each([
+      ['omits the field', fakeTokenResponse],
+      ['carries a field that is not an object', { ...fakeTokenResponse, allTokens: 'not-an-object' }],
+    ])('should clear the tokens when the refresh %s', async (_case, body) => {
+      storedSessionWithAllTokens(storage);
+      mockFetchSequence([{ body }]);
+      const auth = new AuthModule(APP_ID, IAM_URL);
+
+      await expect(auth.refreshSession()).resolves.toBe(true);
+
+      expect(auth.accessToken).toBe('access-123');
+      expect(auth.allTokens).toBeNull();
+      expect(JSON.parse(storage._store[STORAGE_KEY])).not.toHaveProperty('allTokens');
+    });
+
+    it('should read no tokens once a refresh leaves none of them', async () => {
+      storedSessionWithAllTokens(storage, { platform: fakeAllTokens.platform, mitraSpace: null, b2bToken: null });
+      mockFetchSequence([{
+        body: { ...fakeTokenResponse, allTokens: { platform: null, mitraSpace: null, b2bToken: null } },
+      }]);
+      const auth = new AuthModule(APP_ID, IAM_URL);
+
+      await expect(auth.refreshSession()).resolves.toBe(true);
+
+      expect(auth.allTokens).toBeNull();
+      expect(JSON.parse(storage._store[STORAGE_KEY])).not.toHaveProperty('allTokens');
+    });
+
+    it('should not let a write into the returned tokens reach storage', () => {
+      storedSessionWithAllTokens(storage);
+      const auth = new AuthModule(APP_ID, IAM_URL);
+      const renewedPair = { accessToken: 'renewed-access', refreshToken: 'renewed-refresh', tokenType: 'Bearer' };
+      const tokens = auth.allTokens as { b2bToken: unknown };
+      const b2bToken = auth.allTokens?.b2bToken as { accessToken: string };
+
+      expect(() => { tokens.b2bToken = renewedPair; }).toThrow(TypeError);
+      expect(() => { b2bToken.accessToken = 'renewed-access'; }).toThrow(TypeError);
+      getAuthSessionPort(auth).rotateSession({ token: 'rotated-access', refreshToken: 'rotated-refresh' });
+
+      expect(auth.allTokens).toEqual(fakeAllTokens);
+      expect(storedAllTokens(storage)).toEqual(fakeAllTokens);
+    });
+
+    it('should drop the tokens of the replaced session on setSession', () => {
+      storedSessionWithAllTokens(storage);
+      const auth = new AuthModule(APP_ID, IAM_URL);
+
+      expect(auth.setSession({ accessToken: 'adopted-access', refreshToken: 'adopted-refresh' })).toBe(true);
+
+      expect(auth.allTokens).toBeNull();
+      expect(storedAllTokens(storage)).toBeUndefined();
+    });
+
+    it('should drop the tokens of the replaced session on setToken', () => {
+      storedSessionWithAllTokens(storage);
+      const auth = new AuthModule(APP_ID, IAM_URL);
+
+      auth.setToken('manual-token');
+
+      expect(auth.allTokens).toBeNull();
+      expect(storedAllTokens(storage)).toBeUndefined();
+    });
+
+    it('should drop the tokens of the replaced session on an api key sign-in', async () => {
+      storedSessionWithAllTokens(storage);
+      mockFetchSequence([
+        { body: { accessToken: 'api-key-access', refreshToken: null, tokenType: 'Bearer' } },
+        { body: currentUserResponse },
+      ]);
+      const auth = new AuthModule(APP_ID, IAM_URL);
+
+      await auth.signInWithApiKey('test-api-key');
+
+      expect(auth.accessToken).toBe('api-key-access');
+      expect(auth.allTokens).toBeNull();
+    });
+
+    it('should keep the tokens when another issuer rotates the same session', () => {
+      storedSessionWithAllTokens(storage);
+      const auth = new AuthModule(APP_ID, IAM_URL);
+
+      expect(getAuthSessionPort(auth).rotateSession({ token: 'rotated-access', refreshToken: 'rotated-refresh' }))
+        .toBe(true);
+
+      expect(auth.accessToken).toBe('rotated-access');
+      expect(auth.allTokens).toEqual(fakeAllTokens);
+      expect(storedAllTokens(storage)).toEqual(fakeAllTokens);
+    });
+
+    it('should clear the tokens when a rotated session belongs to another app', () => {
+      storedSessionWithAllTokens(storage);
+      const auth = new AuthModule(APP_ID, IAM_URL);
+
+      expect(getAuthSessionPort(auth).rotateSession({ token: jwt({ app_id: 'other-app' }) })).toBe(false);
+
+      expect(auth.allTokens).toBeNull();
+      expect(storage._store[STORAGE_KEY]).toBeUndefined();
+    });
+
+    it('should clear the tokens on sign out', () => {
+      storedSessionWithAllTokens(storage);
+      const auth = new AuthModule(APP_ID, IAM_URL);
+
+      auth.signOut();
+
+      expect(auth.allTokens).toBeNull();
+      expect(storage._store[STORAGE_KEY]).toBeUndefined();
+    });
   });
 
   describe('email sign-in', () => {

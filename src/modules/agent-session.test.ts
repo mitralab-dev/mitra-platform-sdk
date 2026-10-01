@@ -49,6 +49,7 @@ function auth(): AuthSessionPort & {
     readSessionTokens: vi.fn().mockReturnValue({ token: 'app-access', refreshToken: 'refresh' }),
     onSessionChange: vi.fn().mockReturnValue(() => undefined),
     adoptSession: vi.fn(),
+    rotateSession: vi.fn(),
   };
 }
 

@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented in this file.
 
+## Unreleased
+
+- Expose `auth.allTokens` for apps enabled server-side, with the three families IAM returns at
+  login: `platform` and `b2bToken` session pairs and the `mitraSpace` token. It is `null` for every
+  other app, and a malformed part reads as `null` without failing the login.
+- Persist the field with the session. An app refresh replaces `platform` and keeps `mitraSpace` and
+  `b2bToken` from login, and a refresh without the field clears it; a new login, `setSession`,
+  `setToken` or a legacy login resets it, the legacy SDK's silent refresh keeps it, and `signOut()`
+  clears it.
+- Export `AllTokens`, `PlatformSessionTokens` and `MitraSpaceToken`, with `readonly` fields; the
+  instances the SDK returns are frozen.
+
 ## 1.4.0
 
 Stable release of the 1.4.0-beta.0 line, already on the `beta` tag. It pins
