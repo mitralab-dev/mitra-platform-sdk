@@ -66,6 +66,8 @@ export type {
   AgentTimelineItem as NativeAgentTimelineItem,
   AgentToolEvent as NativeAgentToolEvent,
   AgentTurnResult,
+  AgentTurnUsage,
+  AgentTurnUsageRequest,
   ExistingAgentTaskSessionOptions,
   NewAgentTaskSessionOptions,
   Page,

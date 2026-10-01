@@ -487,6 +487,8 @@ export type {
   NativeAgentTimelineItem,
   NativeAgentToolEvent,
   AgentTurnResult,
+  AgentTurnUsage,
+  AgentTurnUsageRequest,
   ExistingAgentTaskSessionOptions,
   NewAgentTaskSessionOptions,
   Page,

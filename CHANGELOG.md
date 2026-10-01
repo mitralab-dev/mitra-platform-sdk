@@ -17,6 +17,20 @@ All notable changes to this project are documented in this file.
   as the current one; a late refresh for another person, or a token without a readable `sub`,
   resets it.
 
+## 1.4.1
+
+Stable release of the 1.4.1-beta.0 line, already on the `beta` tag. It pins
+`@mitralab.io/sdk-core` to `0.2.11`, the stable release of the `0.2.11-beta.0` surface this line
+already followed. No code change since 1.4.1-beta.0; the entry below describes what moves from
+1.4.0.
+
+## 1.4.1-beta.0
+
+- Depend on `@mitralab.io/sdk-core@0.2.11-beta.0`: the Agent message that closed a turn carries
+  `usage` (`AgentTurnUsage`) from the Copilot history, `loadHistory` keeps it on that `agent` item,
+  and `turnEnd` and `sendAndWait` carry the turn's `usage` from `stepFinish`.
+- Export `AgentTurnUsage` and `AgentTurnUsageRequest`.
+
 ## 1.4.0
 
 Stable release of the 1.4.0-beta.0 line, already on the `beta` tag. It pins
