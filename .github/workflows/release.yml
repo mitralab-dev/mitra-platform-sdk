@@ -12,10 +12,14 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
+      # Two release lines. main publishes stable versions on latest and prereleases on beta. The
+      # all-tokens branch publishes only X.Y.Z-all-tokens.N on the all-tokens dist-tag: the field
+      # it adds hands the app credentials wider than its own token and is opt-in for a few apps,
+      # so it never reaches latest or beta (#147).
       - name: Validate branch
-        if: github.ref_name != 'main'
+        if: github.ref_name != 'main' && github.ref_name != 'all-tokens'
         run: |
-          echo "::error::Releases are only allowed from the main branch."
+          echo "::error::Releases are only allowed from the main or the all-tokens branch."
           exit 1
       - name: Validate version
         env:
@@ -23,6 +27,14 @@ jobs:
         run: |
           if [[ ! "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-([0-9A-Za-z-]+)(\.[0-9A-Za-z-]+)*)?$ ]]; then
             echo "::error::Version must use canonical semantic versioning, for example 1.1.0 or 1.1.0-beta.0."
+            exit 1
+          fi
+          if [[ "$GITHUB_REF_NAME" == "all-tokens" && ! "$VERSION" =~ -all-tokens\.[0-9]+$ ]]; then
+            echo "::error::The all-tokens branch only publishes versions like 1.5.0-all-tokens.0."
+            exit 1
+          fi
+          if [[ "$GITHUB_REF_NAME" == "main" && "$VERSION" == *-all-tokens.* ]]; then
+            echo "::error::all-tokens versions are published from the all-tokens branch, never from main."
             exit 1
           fi
           PRERELEASE="${VERSION#*-}"
@@ -86,8 +98,13 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
       - run: npm ci
       - run: npm run build
+      - name: Publish all-tokens line
+        if: contains(inputs.version, '-all-tokens.')
+        run: npm publish --access public --tag all-tokens
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Publish prerelease
-        if: contains(inputs.version, '-')
+        if: contains(inputs.version, '-') && !contains(inputs.version, '-all-tokens.')
         run: npm publish --access public --tag beta
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

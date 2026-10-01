@@ -550,6 +550,16 @@ The transport refuses HTTP redirects. Statuses `307` and `308`, opaque redirects
 
 Before constructing `MitraApiError`, the SDK recursively redacts the token used by the request and credentials in `Bearer` format from the error message, code, details, arrays, values, and object keys. Values under credential fields such as `accessToken`, `refreshToken`, `apiKey`, `password`, `authorization`, `secret`, and `clientSecret` are also replaced with `[REDACTED]`.
 
+## Release lines
+
+`main` is the official line: stable versions go to `latest` and prereleases (`X.Y.Z-beta.N`) to the
+`beta` dist-tag. The `all-tokens` branch is a separate line for the few apps enabled server-side to
+receive `auth.allTokens`, the login field that hands the app the platform session, the mitraSpace
+token and the session of another environment. That field never reaches `latest` or `beta`: the
+branch publishes only `X.Y.Z-all-tokens.N` on the `all-tokens` dist-tag, through the same
+`release.yml`, and receives `main` by merge after each stable release. An app opts in by pinning
+`@mitralab.io/platform-sdk@all-tokens`; everything else in it is what the official line ships.
+
 ## Development
 
 ```bash
