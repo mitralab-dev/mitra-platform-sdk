@@ -263,11 +263,13 @@ export class AuthModule {
   }
 
   /** @deprecated Email/password authentication is not implemented by IAM. Use signInWithEmail() or SSO. */
-  async signIn(_credentials: SignInCredentials): Promise<User> {
-    throw new MitraApiError(
-      'Email/password authentication is not available. Use signInWithEmail(), signInWithGoogle() or signInWithMicrosoft().',
-      0,
-      'UNSUPPORTED_AUTH_METHOD'
+  signIn(_credentials: SignInCredentials): Promise<User> {
+    return Promise.reject(
+      new MitraApiError(
+        'Email/password authentication is not available. Use signInWithEmail(), signInWithGoogle() or signInWithMicrosoft().',
+        0,
+        'UNSUPPORTED_AUTH_METHOD'
+      )
     );
   }
 
@@ -525,11 +527,13 @@ export class AuthModule {
   }
 
   /** @deprecated Email/password registration is not implemented by IAM. Use signInWithEmail() or SSO. */
-  async signUp(_data: SignUpData): Promise<User> {
-    throw new MitraApiError(
-      'Email/password registration is not available. Use signInWithEmail(), signInWithGoogle() or signInWithMicrosoft().',
-      0,
-      'UNSUPPORTED_AUTH_METHOD'
+  signUp(_data: SignUpData): Promise<User> {
+    return Promise.reject(
+      new MitraApiError(
+        'Email/password registration is not available. Use signInWithEmail(), signInWithGoogle() or signInWithMicrosoft().',
+        0,
+        'UNSUPPORTED_AUTH_METHOD'
+      )
     );
   }
 
