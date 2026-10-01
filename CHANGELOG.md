@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## Unreleased
+## 1.5.0-beta.0
 
 - Expose `auth.allTokens` for apps enabled server-side, with the three families IAM returns at
   login: `platform` and `b2bToken` session pairs and the `mitraSpace` token. It is `null` for every

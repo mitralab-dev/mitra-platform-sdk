@@ -244,9 +244,9 @@ export class AuthModule {
 
   /**
    * Extra tokens IAM issues at login for apps enabled server-side, or `null`
-   * when IAM did not send them. They are replaced by every new login or adopted
-   * session and are not announced to auth-state listeners, so read them here
-   * right before use instead of caching them.
+   * when IAM did not send them. They are reset by every new session and updated
+   * on each app refresh, and these changes are not announced to auth-state
+   * listeners, so read them here right before use instead of caching them.
    *
    * @example
    * ```typescript
@@ -1032,7 +1032,7 @@ export class AuthModule {
           refreshToken: this.#refreshToken,
           // Persisted with the session on purpose: IAM issues mitraSpace and
           // b2bToken only at login, so keeping them in memory alone would lose
-          // them on the first reload. The README states what this exposes.
+          // them on the first reload.
           ...(this.#allTokens ? { allTokens: this.#allTokens } : {}),
         })
       );

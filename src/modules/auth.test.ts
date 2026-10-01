@@ -1073,6 +1073,30 @@ describe('AuthModule', () => {
       expect(JSON.parse(storage._store[STORAGE_KEY])).not.toHaveProperty('allTokens');
     });
 
+    it('should clear the tokens in memory and in storage when the refresh is rejected', async () => {
+      storedSessionWithAllTokens(storage);
+      mockFetchSequence([{ body: { message: 'Invalid refresh' }, status: 401 }]);
+      const auth = new AuthModule(APP_ID, IAM_URL);
+
+      await expect(auth.refreshSession()).resolves.toBe(false);
+
+      expect(auth.allTokens).toBeNull();
+      expect(storage._store[STORAGE_KEY]).toBeUndefined();
+    });
+
+    it.each(['network', '5xx'])('should keep the tokens after a %s refresh failure', async (failure) => {
+      storedSessionWithAllTokens(storage);
+      vi.stubGlobal('fetch', vi.fn().mockImplementationOnce(failure === 'network'
+        ? () => Promise.reject(new TypeError('offline'))
+        : () => Promise.resolve(jsonResponse({ message: 'Unavailable' }, 503))));
+      const auth = new AuthModule(APP_ID, IAM_URL);
+
+      await expect(auth.refreshSession()).resolves.toBe(false);
+
+      expect(auth.allTokens).toEqual(fakeAllTokens);
+      expect(storedAllTokens(storage)).toEqual(fakeAllTokens);
+    });
+
     it('should not let a write into the returned tokens reach storage', () => {
       storedSessionWithAllTokens(storage);
       const auth = new AuthModule(APP_ID, IAM_URL);
