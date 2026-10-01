@@ -2,11 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## 1.5.0-all-tokens.0
-
-First release of the `all-tokens` line: the `main` 1.4.1 plus `auth.allTokens`. Published only under
-the `all-tokens` dist-tag, never on `latest` or `beta`; the line receives `main` after each stable
-release (#147).
+## 1.5.0-beta.0
 
 - Expose `auth.allTokens` for apps enabled server-side, with the three families IAM returns at
   login: `platform` and `b2bToken` session pairs and the `mitraSpace` token. It is `null` for every
