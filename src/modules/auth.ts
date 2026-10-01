@@ -100,6 +100,11 @@ function belongsToApp(token: string, appId: string): boolean {
   return payload.app_id === appId;
 }
 
+function subjectOf(token: string): string | null {
+  const sub = decodeJwtPayload(token)?.sub;
+  return typeof sub === 'string' && sub !== '' ? sub : null;
+}
+
 function isTokenExpiring(token: string, minValidityMs: number): boolean {
   const exp = decodeJwtPayload(token)?.exp;
   if (typeof exp !== 'number' || !Number.isFinite(exp)) return false;
@@ -796,13 +801,20 @@ export class AuthModule {
 
   /**
    * Stores tokens another issuer rotated for the session already in place, such
-   * as a silent refresh performed by the legacy SDK. The person and the session
-   * behind the extra login tokens did not change, so they are kept.
+   * as a silent refresh performed by the legacy SDK. The extra login tokens are
+   * kept only when the rotated token belongs to the same person.
    *
    * @internal
    */
   private rotateSession(session: { token: string; refreshToken?: string | null }): boolean {
-    return this.applySession(session, true);
+    // A legacy refresh started for one person can land after another person
+    // signed in to the same app; keeping allTokens then would mix the two.
+    return this.applySession(session, this.isSamePerson(session.token));
+  }
+
+  private isSamePerson(token: string): boolean {
+    const current = this.#accessToken ? subjectOf(this.#accessToken) : null;
+    return current !== null && current === subjectOf(token);
   }
 
   private applySession(

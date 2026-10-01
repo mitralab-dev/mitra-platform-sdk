@@ -495,19 +495,20 @@ describe('LegacySessionBridge', () => {
     };
     storage._store[STORAGE_KEY] = JSON.stringify({
       user: { id: 'u1', tenantId: 't1', email: 'user@test.com', name: null },
-      token: 'old-access',
+      token: fakeJwt({ app_id: APP_ID, sub: 'u1', iat: 1 }),
       refreshToken: appScopedRefreshToken,
       allTokens,
     });
     const mitra = createClient({ appId: APP_ID, apiUrl: API_URL });
+    const refreshedToken = fakeJwt({ app_id: APP_ID, sub: 'u1', iat: 2 });
 
     getConfig().onTokenRefresh?.({
-      token: 'refreshed-access-token',
+      token: refreshedToken,
       refreshToken: appScopedRefreshToken,
       baseURL: API_URL,
     });
 
-    expect(mitra.auth.accessToken).toBe('refreshed-access-token');
+    expect(mitra.auth.accessToken).toBe(refreshedToken);
     expect(mitra.auth.allTokens).toEqual(allTokens);
     expect(readStoredSession(storage).allTokens).toEqual(allTokens);
 
@@ -518,6 +519,33 @@ describe('LegacySessionBridge', () => {
     });
 
     expect(mitra.auth.allTokens).toBeNull();
+    expect(readStoredSession(storage).allTokens).toBeUndefined();
+  });
+
+  it('should drop the extra login tokens when a late legacy refresh brings another person', () => {
+    storage._store[STORAGE_KEY] = JSON.stringify({
+      user: { id: 'u1', tenantId: 't1', email: 'user@test.com', name: null },
+      token: fakeJwt({ app_id: APP_ID, sub: 'u1' }),
+      refreshToken: appScopedRefreshToken,
+      allTokens: {
+        platform: { accessToken: 'session-access', refreshToken: 'session-refresh', tokenType: 'Bearer' },
+        mitraSpace: { token: 'space-token', tokenType: 'Bearer' },
+        b2bToken: { accessToken: 'peer-access', refreshToken: 'peer-refresh', tokenType: 'Bearer' },
+      },
+    });
+    const mitra = createClient({ appId: APP_ID, apiUrl: API_URL });
+    const otherPersonToken = fakeJwt({ app_id: APP_ID, sub: 'u2' });
+    const otherPersonRefresh = fakeJwt({ app_id: APP_ID, sub: 'u2' });
+
+    getConfig().onTokenRefresh?.({
+      token: otherPersonToken,
+      refreshToken: otherPersonRefresh,
+      baseURL: API_URL,
+    });
+
+    expect(mitra.auth.accessToken).toBe(otherPersonToken);
+    expect(mitra.auth.allTokens).toBeNull();
+    expect(readStoredSession(storage)).toMatchObject({ token: otherPersonToken, refreshToken: otherPersonRefresh });
     expect(readStoredSession(storage).allTokens).toBeUndefined();
   });
 

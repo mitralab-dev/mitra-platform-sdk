@@ -66,10 +66,11 @@ function storedSession(
 function storedSessionWithAllTokens(
   storage: ReturnType<typeof mockLocalStorage>,
   allTokens: unknown = fakeAllTokens,
+  token = 'old-access',
 ): void {
   storage._store[STORAGE_KEY] = JSON.stringify({
     user: fakeUser,
-    token: 'old-access',
+    token,
     refreshToken: 'old-refresh',
     allTokens,
   });
@@ -1098,7 +1099,7 @@ describe('AuthModule', () => {
     });
 
     it('should not let a write into the returned tokens reach storage', () => {
-      storedSessionWithAllTokens(storage);
+      storedSessionWithAllTokens(storage, fakeAllTokens, jwt({ app_id: APP_ID, sub: 'u1', iat: 1 }));
       const auth = new AuthModule(APP_ID, IAM_URL);
       const renewedPair = { accessToken: 'renewed-access', refreshToken: 'renewed-refresh', tokenType: 'Bearer' };
       const tokens = auth.allTokens as { b2bToken: unknown };
@@ -1106,7 +1107,7 @@ describe('AuthModule', () => {
 
       expect(() => { tokens.b2bToken = renewedPair; }).toThrow(TypeError);
       expect(() => { b2bToken.accessToken = 'renewed-access'; }).toThrow(TypeError);
-      getAuthSessionPort(auth).rotateSession({ token: 'rotated-access', refreshToken: 'rotated-refresh' });
+      getAuthSessionPort(auth).rotateSession({ token: jwt({ app_id: APP_ID, sub: 'u1', iat: 2 }) });
 
       expect(auth.allTokens).toEqual(fakeAllTokens);
       expect(storedAllTokens(storage)).toEqual(fakeAllTokens);
@@ -1147,15 +1148,32 @@ describe('AuthModule', () => {
     });
 
     it('should keep the tokens when another issuer rotates the same session', () => {
-      storedSessionWithAllTokens(storage);
+      storedSessionWithAllTokens(storage, fakeAllTokens, jwt({ app_id: APP_ID, sub: 'u1', iat: 1 }));
       const auth = new AuthModule(APP_ID, IAM_URL);
+      const rotated = jwt({ app_id: APP_ID, sub: 'u1', iat: 2 });
 
-      expect(getAuthSessionPort(auth).rotateSession({ token: 'rotated-access', refreshToken: 'rotated-refresh' }))
+      expect(getAuthSessionPort(auth).rotateSession({ token: rotated, refreshToken: 'rotated-refresh' }))
         .toBe(true);
 
-      expect(auth.accessToken).toBe('rotated-access');
+      expect(auth.accessToken).toBe(rotated);
       expect(auth.allTokens).toEqual(fakeAllTokens);
       expect(storedAllTokens(storage)).toEqual(fakeAllTokens);
+    });
+
+    it.each([
+      ['another person', jwt({ app_id: APP_ID, sub: 'u1' }), jwt({ app_id: APP_ID, sub: 'u2' })],
+      ['an unreadable current token', 'old-access', jwt({ app_id: APP_ID, sub: 'u1' })],
+      ['an unreadable rotated token', jwt({ app_id: APP_ID, sub: 'u1' }), 'rotated-access'],
+      ['a token without a subject', jwt({ app_id: APP_ID, sub: 'u1' }), jwt({ app_id: APP_ID })],
+    ])('should drop the tokens when a rotated session comes from %s', (_case, current, rotated) => {
+      storedSessionWithAllTokens(storage, fakeAllTokens, current);
+      const auth = new AuthModule(APP_ID, IAM_URL);
+
+      expect(getAuthSessionPort(auth).rotateSession({ token: rotated })).toBe(true);
+
+      expect(auth.accessToken).toBe(rotated);
+      expect(auth.allTokens).toBeNull();
+      expect(storedAllTokens(storage)).toBeUndefined();
     });
 
     it('should clear the tokens when a rotated session belongs to another app', () => {

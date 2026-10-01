@@ -13,6 +13,9 @@ All notable changes to this project are documented in this file.
   clears it.
 - Export `AllTokens`, `PlatformSessionTokens` and `MitraSpaceToken`, with `readonly` fields; the
   instances the SDK returns are frozen.
+- Keep the field on the legacy SDK's silent refresh only when the renewed token has the same `sub`
+  as the current one; a late refresh for another person, or a token without a readable `sub`,
+  resets it.
 
 ## 1.4.0
 
