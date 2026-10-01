@@ -101,7 +101,8 @@ export class LegacySessionBridge {
 
   /**
    * Stores tokens the legacy SDK silently refreshed for the session already in
-   * place. Unlike a legacy login, it keeps the extra login tokens of the client.
+   * place. Unlike a legacy login, it keeps the extra login tokens of the client
+   * when the renewed token belongs to the same person.
    */
   private rotate(session: LoginResponse): void {
     if (!this.auth.rotateSession(toSessionTokens(session))) {
