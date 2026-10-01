@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented in this file.
 
+## 1.4.1-beta.0
+
+- Depend on `@mitralab.io/sdk-core@0.2.11-beta.0`: the Agent message that closed a turn carries
+  `usage` (`AgentTurnUsage`) from the Copilot history, `loadHistory` keeps it on that `agent` item,
+  and `turnEnd` and `sendAndWait` carry the turn's `usage` from `stepFinish`.
+- Export `AgentTurnUsage` and `AgentTurnUsageRequest`.
+
 ## 1.4.0
 
 Stable release of the 1.4.0-beta.0 line, already on the `beta` tag. It pins
