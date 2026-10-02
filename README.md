@@ -45,14 +45,14 @@ const result = await mitra.queries.execute("query-id", { status: "active" })
 const proxied = await mitra.integration.executeByAlias("billing", { method: "GET", endpoint: "/invoices" })
 ```
 
-Login de pessoa é por Google, Microsoft (`signInWithMicrosoft`) ou e-mail (`requestEmailCode` e `verifyEmailCode`, ou `signInWithEmail` pela página da plataforma). Os antigos `signIn` e `signUp` falham com `UNSUPPORTED_AUTH_METHOD`, porque o IAM não tem login por senha. Processo sem pessoa (cron, coletor) usa `signInWithApiKey()` com uma chave criada em Configurações, API keys. Quem usa redirect chama o `complete...SignInRedirect()` de cada método no startup; cada um devolve `null` para fragmento que não é dele. Chats de agente usam `mitra.agentTasks.session(...)`, cuja máquina de estados e canal direto com a box são do Core.
+Login de pessoa é por Google, Microsoft (`signInWithMicrosoft`) ou e-mail (`requestEmailCode` e `verifyEmailCode`, ou `signInWithEmail` pela página da plataforma). Os antigos `signIn` e `signUp` falham com `UNSUPPORTED_AUTH_METHOD`, porque o IAM não tem login por senha. Processo sem pessoa (cron, coletor) usa `signInWithApiKey()` com uma chave criada em Configurações, API keys, e só fora do browser: com `window` presente o método recusa, porque a chave iria no bundle para todo visitante. Essa sessão não é gravada e não tem refresh. Quem usa redirect chama o `complete...SignInRedirect()` de cada método no startup; cada um devolve `null` para fragmento que não é dele. Chats de agente usam `mitra.agentTasks.session(...)`, cuja máquina de estados e canal direto com a box são do Core.
 
 ## Contratos e armadilhas
 
 - Chame `init()` no startup. Ele lê `/code-studio/api/v1/apps/{appId}/info`: sem ele, `emailLoginEnabled` fica `false`, `allowSignup` fica `true` e `requestEmailCode()` falha com `INVALID_CONFIGURATION`, porque a marca do e-mail vem dali. Entidades e queries não dependem do `init()`: o app sai do JWT (JSON Web Token).
-- A sessão fica no `localStorage` sob `mitra_auth_{appId}`, junto com `auth.allTokens` (sessões do IAM em outro escopo e o token do mitraSpace, que dura décadas) quando o IAM manda. Qualquer script da mesma origem lê esses tokens. Token decodificável com `app_id` diferente do `appId` configurado é recusado.
+- A sessão fica no `localStorage` sob `mitra_auth_{appId}`, junto com `auth.allTokens` (sessões do IAM em outro escopo e o token do mitraSpace, que dura décadas) quando o IAM manda. Qualquer script da mesma origem lê esses tokens. O `b2bToken` é uma sessão de uma hora que o SDK não renova: o app renova pelo `refresh-token` do IAM que emitiu. Token decodificável com `app_id` diferente do `appId` configurado é recusado.
 - Antes de cada chamada autenticada, o SDK renova o token que vence em menos de 30 segundos. Em `401`, renova uma vez e repete a requisição. Falha de rede, `408`, `429` e `5xx` no refresh mantêm a sessão; outro `4xx` limpa.
-- `signInWithApiKey()` recusa rodar quando existe `window`: no browser, a chave iria no bundle para todo visitante. A sessão por API key não é gravada e não tem refresh.
+- Prompt de chat enviado com o browser offline, ou cujo `POST /inputs` ficou sem resposta, vai para um outbox e é reenviado quando o browser volta (ou em backoff de 2 a 40 segundos). Como o Copilot ainda não aceita id de mensagem do cliente, o mesmo prompt pode chegar duas vezes. Sessão fechada com prompt pendente emite `error` com `INPUT_UNSENT`.
 - O link do e-mail só completa no mesmo browser que pediu o código: o pedido pendente fica 10 minutos em `localStorage` sob `mitra_email_redirect_{appId}`. Em outro dispositivo, `completeEmailSignInRedirect()` devolve `null` e a pessoa digita o código.
 - `functions.execute` manda `X-Invocation-Type: sync`, e chamada sem input vai sem corpo. `publicFunctions` usa um transporte anônimo, sem `Authorization` nem `X-App-Id`, e o `executeAsync` público não tem polling. Credencial de provedor de integração nunca passa pelo browser: o serviço de Integration injeta.
 
@@ -69,7 +69,7 @@ Falhas de API lançam `MitraApiError`, com `status`, `code`, `details` e `retryA
 | status da resposta, `error_code` do corpo | resposta HTTP de erro |
 | status da resposta, `REDIRECT_NOT_ALLOWED` | o servidor respondeu com redirect, que o transporte recusa |
 | `0`, `INVALID_CONFIGURATION` | entrada inválida, como path vazio, ou `requestEmailCode()` antes do `init()` |
-| `200`, `INVALID_RESPONSE` | resposta de sucesso fora do contrato |
+| `200` (ou o status, se o corpo não é JSON), `INVALID_RESPONSE` | resposta de sucesso fora do contrato |
 
 O SDK remove o token da requisição, credenciais `Bearer` e campos como `accessToken`, `refreshToken`, `apiKey` e `password` da mensagem e dos detalhes do erro. Falha de rede chega como o erro original do `fetch`, sem passar por `onError`.
 
