@@ -3,7 +3,7 @@
 [![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=mitra-platform-sdk&metric=alert_status&token=28d7be14b66d6f88d706347e2418af5ea39ab3e9)](https://sonarcloud.io/summary/new_code?id=mitra-platform-sdk)
 [![Coverage](https://sonarcloud.io/api/project_badges/measure?project=mitra-platform-sdk&metric=coverage&token=28d7be14b66d6f88d706347e2418af5ea39ab3e9)](https://sonarcloud.io/summary/new_code?id=mitra-platform-sdk)
 
-SDK JavaScript e TypeScript para apps de browser feitos na Mitra: login e sessão da pessoa, entidades do Data Manager, Server Functions, custom queries, integrações e chats de agente. Os módulos de API e os contratos vêm de `@mitralab.io/sdk-core`; este pacote cuida do que é de browser (login, sessão, transporte HTTP, streams do Copilot). Código que roda dentro de Server Function usa `@mitralab.io/functions-sdk`.
+SDK JavaScript e TypeScript para apps de browser feitos na Mitra: login da pessoa, dados do app, Server Functions, queries, integrações e chats de agente. Para código que roda dentro de uma Server Function, use [`@mitralab.io/functions-sdk`](https://www.npmjs.com/package/@mitralab.io/functions-sdk).
 
 ## Instalação
 
@@ -11,73 +11,100 @@ SDK JavaScript e TypeScript para apps de browser feitos na Mitra: login e sessã
 npm install @mitralab.io/platform-sdk
 ```
 
-Node 18 ou mais novo para desenvolvimento. No runtime, usa as Web APIs do browser (`fetch`, `WebSocket`, `localStorage`, `sessionStorage`, `crypto`, `atob`). Traz `@mitralab.io/sdk-core` com versão exata e `mitra-interactions-sdk` (o SDK legado) como dependências.
+Roda no browser, com as APIs dele (`fetch`, `WebSocket`, `localStorage`). Para desenvolver, Node 18 ou mais novo. Publicado em ESM e CommonJS, com tipos.
+
+## Início rápido
+
+```typescript
+import { createClient } from "@mitralab.io/platform-sdk"
+
+export const mitra = createClient({
+  appId: import.meta.env.VITE_MITRA_APP_ID,
+  apiUrl: import.meta.env.VITE_MITRA_API_URL,
+})
+
+await mitra.init()
+
+if (!mitra.auth.isAuthenticated) {
+  await mitra.auth.signInWithGoogle({ mode: "popup" })
+}
+
+const { data: tasks } = await mitra.entities.Task.list({ sort: "-created_at", limit: 10 })
+```
+
+No app gerado pelo Code Studio, `VITE_MITRA_APP_ID` e `VITE_MITRA_API_URL` já vêm preenchidos no build.
+
+## O que dá para fazer
+
+- `auth`: login com Google (`signInWithGoogle`), Microsoft (`signInWithMicrosoft`) ou código por e-mail, mais `currentUser`, `onAuthStateChange` e `signOut`.
+- `entities.<Tabela>`: `list`, `filter`, `get`, `create`, `bulkCreate`, `update`, `delete` e `deleteMany` nas tabelas do app.
+- `queries.execute(id, params)`: roda uma query salva no app.
+- `functions`: `execute` espera o resultado da Server Function; `executeAsync` devolve a execução para acompanhar com `getExecution` ou parar com `cancelExecution`. `publicFunctions` chama as Functions publicadas como públicas, sem login.
+- `integration.executeByAlias(alias, request)`: chama uma API externa configurada no app. A credencial do provedor fica na Mitra e não passa pelo browser.
+- `agentTasks.session(...)`: chat com agente, com `send`, `sendAndWait`, `cancel` e eventos como `delta`, `turnEnd` e `error`.
+- `agentCredentials`: credenciais de provedor de IA e modelos disponíveis.
+
+Login por código no e-mail, para quem monta a própria tela:
+
+```typescript
+const { receipt } = await mitra.auth.requestEmailCode({ email })
+const user = await mitra.auth.verifyEmailCode({ receipt, code })
+```
+
+Chat com agente:
+
+```typescript
+const chat = mitra.agentTasks.session({ taskId })
+chat.on("delta", ({ delta }) => render(delta))
+const { content } = await chat.sendAndWait("Resuma os pedidos de hoje")
+chat.close()
+```
 
 ## Configuração
 
 | Campo | Obrigatório | Uso |
 |---|---|---|
-| `appId` | sim | ID do app publicado no Code Studio, enviado em `X-App-Id` em toda chamada autenticada |
-| `apiUrl` | sim | URL base do API gateway; os serviços saem dela: `/iam`, `/data-manager`, `/functions`, `/integration`, `/copilot`, `/code-studio` e `/legacy` |
-| `authPageUrl` | não | URL absoluta do `sdk-auth.html`; sem ela, vale `window.__mitraEnv.authPageUrl` e depois `/sdk-auth.html` na origem do `apiUrl` |
+| `appId` | sim | ID do app no Code Studio |
+| `apiUrl` | sim | URL do API gateway da Mitra |
+| `onError` | não | callback chamado com o `MitraApiError` de toda requisição que falha; bom para toast e log |
+| `authPageUrl` | não | URL da página de login da Mitra; sem ela, o SDK descobre sozinho |
 | `apiKey` | não | chave padrão de `auth.signInWithApiKey()`; só em código de servidor |
-| `onError` | não | callback com o `MitraApiError` de toda requisição que falha |
-
-No app gerado pelo Code Studio, os valores vêm de `VITE_MITRA_APP_ID` e `VITE_MITRA_API_URL`, injetados no build.
-
-## Uso
-
-```typescript
-import { createClient, MitraApiError } from "@mitralab.io/platform-sdk"
-
-export const mitra = createClient({
-  appId: import.meta.env.VITE_MITRA_APP_ID,
-  apiUrl: import.meta.env.VITE_MITRA_API_URL,
-  onError: (error: MitraApiError) => console.error(error.status, error.code, error.message),
-})
-
-await mitra.init()
-const user = await mitra.auth.signInWithGoogle({ mode: "popup" })
-
-const { data: tasks } = await mitra.entities.Task.list({ sort: "-created_at", limit: 10 })
-const execution = await mitra.functions.execute("function-id", { orderId: "order-123" })
-const result = await mitra.queries.execute("query-id", { status: "active" })
-const proxied = await mitra.integration.executeByAlias("billing", { method: "GET", endpoint: "/invoices" })
-```
-
-Login de pessoa é por Google, Microsoft (`signInWithMicrosoft`) ou e-mail (`requestEmailCode` e `verifyEmailCode`, ou `signInWithEmail` pela página da plataforma). Os antigos `signIn` e `signUp` falham com `UNSUPPORTED_AUTH_METHOD`, porque o IAM não tem login por senha. Processo sem pessoa (cron, coletor) usa `signInWithApiKey()` com uma chave criada em Configurações, API keys, e só fora do browser: com `window` presente o método recusa, porque a chave iria no bundle para todo visitante. Essa sessão não é gravada e não tem refresh. Quem usa redirect chama o `complete...SignInRedirect()` de cada método no startup; cada um devolve `null` para fragmento que não é dele. Chats de agente usam `mitra.agentTasks.session(...)`, cuja máquina de estados e canal direto com a box são do Core.
-
-## Contratos e armadilhas
-
-- Chame `init()` no startup. Ele lê `/code-studio/api/v1/apps/{appId}/info`: sem ele, `emailLoginEnabled` fica `false`, `allowSignup` fica `true` e `requestEmailCode()` falha com `INVALID_CONFIGURATION`, porque a marca do e-mail vem dali. Entidades e queries não dependem do `init()`: o app sai do JWT (JSON Web Token).
-- A sessão fica no `localStorage` sob `mitra_auth_{appId}`, junto com `auth.allTokens` (sessões do IAM em outro escopo e o token do mitraSpace, que dura décadas) quando o IAM manda. Qualquer script da mesma origem lê esses tokens. O `b2bToken` é uma sessão de uma hora que o SDK não renova: o app renova pelo `refresh-token` do IAM que emitiu. Token decodificável com `app_id` diferente do `appId` configurado é recusado.
-- Antes de cada chamada autenticada, o SDK renova o token que vence em menos de 30 segundos. Em `401`, renova uma vez e repete a requisição. Falha de rede, `408`, `429` e `5xx` no refresh mantêm a sessão; outro `4xx` limpa.
-- Prompt de chat enviado com o browser offline, ou cujo `POST /inputs` ficou sem resposta, vai para um outbox e é reenviado quando o browser volta (ou em backoff de 2 a 40 segundos). Como o Copilot ainda não aceita id de mensagem do cliente, o mesmo prompt pode chegar duas vezes. Sessão fechada com prompt pendente emite `error` com `INPUT_UNSENT`.
-- O link do e-mail só completa no mesmo browser que pediu o código: o pedido pendente fica 10 minutos em `localStorage` sob `mitra_email_redirect_{appId}`. Em outro dispositivo, `completeEmailSignInRedirect()` devolve `null` e a pessoa digita o código.
-- `functions.execute` manda `X-Invocation-Type: sync`, e chamada sem input vai sem corpo. `publicFunctions` usa um transporte anônimo, sem `Authorization` nem `X-App-Id`, e o `executeAsync` público não tem polling. Credencial de provedor de integração nunca passa pelo browser: o serviço de Integration injeta.
-
-## SDK legado
-
-Este pacote reexporta, como `@deprecated`, a superfície pública do `mitra-interactions-sdk`, para um app trocar a dependência sem reescrever as chamadas. O `createClient` configura o SDK legado em `${apiUrl}/legacy` e compartilha a sessão nos dois sentidos. Só `loginMitra('mitra')` ainda não tem equivalente nativo. Chamar `configureSdkMitra` direto substitui essa configuração; deixe o `createClient` como dono dela durante a migração.
 
 ## Erros
 
-Falhas de API lançam `MitraApiError`, com `status`, `code`, `details` e `retryAfterSeconds` (lido de `Retry-After`; `null` quando o header não chega ao browser).
+Falhas de API lançam `MitraApiError`, com `status`, `code`, `details` e `retryAfterSeconds`. O SDK tira token e senha da mensagem e dos detalhes.
 
-| `status` e `code` | Quando |
-|---|---|
-| status da resposta, `error_code` do corpo | resposta HTTP de erro |
-| status da resposta, `REDIRECT_NOT_ALLOWED` | o servidor respondeu com redirect, que o transporte recusa |
-| `0`, `INVALID_CONFIGURATION` | entrada inválida, como path vazio, ou `requestEmailCode()` antes do `init()` |
-| `200` (ou o status, se o corpo não é JSON), `INVALID_RESPONSE` | resposta de sucesso fora do contrato |
+| `status` ou `code` | Quando | O que fazer |
+|---|---|---|
+| `401` | a sessão acabou e não deu para renovar | leve a pessoa ao login de novo |
+| `403` | a pessoa não tem acesso ao recurso | confira as permissões dela no app |
+| `429`, `5xx` | limite de requisições ou falha no servidor | espere `retryAfterSeconds`, quando vier, e repita se a operação puder ser repetida |
+| `INVALID_CONFIGURATION` | argumento inválido, ou `requestEmailCode()` antes de `init()` | corrija o argumento ou chame `init()` no startup |
+| `UNSUPPORTED_AUTH_METHOD` | `signIn` ou `signUp` com senha | use Google, Microsoft ou código por e-mail |
+| `INVALID_CODE` | o código digitado não confere | peça para a pessoa conferir o código |
+| `MAGIC_LINK_EXPIRED`, `MAGIC_LINK_USED`, `MAGIC_LINK_INVALID` | o link do e-mail venceu, já foi usado ou não vale | peça um código novo |
+| `REDIRECT_NOT_ALLOWED` | o servidor respondeu com redirect | confira o `apiUrl` |
+| `INVALID_RESPONSE` | resposta fora do formato esperado | atualize o SDK; se continuar, abra uma issue |
 
-O SDK remove o token da requisição, credenciais `Bearer` e campos como `accessToken`, `refreshToken`, `apiKey` e `password` da mensagem e dos detalhes do erro. Falha de rede chega como o erro original do `fetch`, sem passar por `onError`.
+Falha de rede chega como o erro do próprio `fetch` (`TypeError`), sem passar por `onError`.
+
+## Boas práticas
+
+- Chame `await mitra.init()` no startup, antes de montar a tela de login: `allowSignup`, `emailLoginEnabled` e o login por e-mail dependem dele.
+- Com `mode: "redirect"`, chame no startup o `completeGoogleSignInRedirect()`, `completeMicrosoftSignInRedirect()` ou `completeEmailSignInRedirect()` do método que você usa. Cada um devolve `null` quando a URL não é dele. O link do e-mail completa o login no mesmo browser que pediu o código; em outro aparelho, a pessoa digita o código.
+- A sessão fica no `localStorage` do domínio do app, na chave `mitra_auth_{appId}`, e é renovada sozinha antes de vencer. `signOut()` limpa.
+- O SDK só repete uma requisição depois de renovar o token num `401`. Fora isso, quem decide repetir é o app.
+- API key não vai para o browser: `signInWithApiKey()` recusa quando roda num. Para processo sem pessoa, como cron ou coletor, use `@mitralab.io/functions-sdk` com `createClientFromApiKey`.
+
+## Migração do `mitra-interactions-sdk`
+
+Os exports do SDK legado continuam neste pacote, marcados `@deprecated`, e dividem a sessão com o cliente novo. Troque a dependência, crie o cliente com `createClient` e substitua as chamadas aos poucos: o aviso de cada export diz o método novo. Não chame `configureSdkMitra` direto, porque o `createClient` já configura o legado.
 
 ## Desenvolvimento
 
 ```bash
-npm install
+npm ci
 npm run check
 ```
 
-O `@mitralab.io/sdk-core` fica fixado com integridade no `package-lock.json`. Para validar contra um Core ainda não publicado, aponte `MITRA_SDK_CORE_TARBALL` para o tarball dele no smoke test. Não commite dependência `file:`.
+O `check` roda lint, typecheck, testes, build e um smoke test do pacote. A publicação no npm sai do workflow Release.
