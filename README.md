@@ -96,7 +96,7 @@ Falha de rede chega como o erro do próprio `fetch` (`TypeError`), sem passar po
 - Com `mode: "redirect"`, chame no startup o `completeGoogleSignInRedirect()`, `completeMicrosoftSignInRedirect()` ou `completeEmailSignInRedirect()` do método que você usa. Cada um devolve `null` quando a URL não é dele. O link do e-mail completa o login no mesmo browser que pediu o código; em outro aparelho, a pessoa digita o código.
 - A sessão fica no `localStorage` do domínio do app, na chave `mitra_auth_{appId}`, e é renovada sozinha antes de vencer. `signOut()` limpa.
 - O SDK só repete uma requisição depois de renovar o token num `401`. Fora isso, quem decide repetir é o app.
-- Nunca coloque API key em código que vai para o browser, nem em `createClient({ apiKey })`: o bundle entrega a chave a quem abrir o app. O `signInWithApiKey()` recusa rodar no browser, mas isso não tira do bundle uma chave escrita nele. Para processo sem pessoa, como cron ou coletor, use `@mitralab.io/functions-sdk` com `createClientFromApiKey`.
+- Nunca coloque API key em código que vai para o browser, nem passe uma em `createClient({ apiKey })` num app de browser: o bundle entrega a chave a quem abrir o app. O `signInWithApiKey()` recusa rodar no browser, mas isso não tira do bundle uma chave escrita nele. Para processo sem pessoa, como cron ou coletor, use `@mitralab.io/functions-sdk` com `createClientFromApiKey`.
 
 ## Migração do `mitra-interactions-sdk`
 
