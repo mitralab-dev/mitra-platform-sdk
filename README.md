@@ -55,7 +55,9 @@ Chat com agente:
 
 ```typescript
 const chat = mitra.agentTasks.session({ taskId })
-chat.on("delta", ({ delta }) => render(delta))
+chat.on("delta", ({ delta, kind }) => {
+  if (kind === "text") render(delta)
+})
 const { content } = await chat.sendAndWait("Resuma os pedidos de hoje")
 chat.close()
 ```
@@ -66,13 +68,13 @@ chat.close()
 |---|---|---|
 | `appId` | sim | ID do app no Code Studio |
 | `apiUrl` | sim | URL do API gateway da Mitra |
-| `onError` | não | callback chamado com o `MitraApiError` de toda requisição que falha; bom para toast e log |
+| `onError` | não | callback com o `MitraApiError` das falhas de `entities`, `queries`, `functions`, `integration`, `agentTasks` e `agentCredentials`; `init()`, login, `publicFunctions` e falha de rede não passam por ele e são tratados no `catch` de cada chamada |
 | `authPageUrl` | não | URL da página de login da Mitra; sem ela, o SDK descobre sozinho |
-| `apiKey` | não | chave padrão de `auth.signInWithApiKey()`; só em código de servidor |
+| `apiKey` | não | chave padrão de `auth.signInWithApiKey()`; só em código de servidor, nunca no bundle do browser |
 
 ## Erros
 
-Falhas de API lançam `MitraApiError`, com `status`, `code`, `details` e `retryAfterSeconds`. O SDK tira token e senha da mensagem e dos detalhes.
+Falhas de API lançam `MitraApiError`, com `status`, `code`, `details` e `retryAfterSeconds`. O SDK mascara o token da sessão, credenciais `Bearer` e campos com nome sensível, como `password` ou `apiKey`, em `details`. Texto livre fora disso, como `password=...` dentro de uma mensagem, passa como veio: não trate mensagem e detalhes como saneados antes de mandar para log.
 
 | `status` ou `code` | Quando | O que fazer |
 |---|---|---|
@@ -94,7 +96,7 @@ Falha de rede chega como o erro do próprio `fetch` (`TypeError`), sem passar po
 - Com `mode: "redirect"`, chame no startup o `completeGoogleSignInRedirect()`, `completeMicrosoftSignInRedirect()` ou `completeEmailSignInRedirect()` do método que você usa. Cada um devolve `null` quando a URL não é dele. O link do e-mail completa o login no mesmo browser que pediu o código; em outro aparelho, a pessoa digita o código.
 - A sessão fica no `localStorage` do domínio do app, na chave `mitra_auth_{appId}`, e é renovada sozinha antes de vencer. `signOut()` limpa.
 - O SDK só repete uma requisição depois de renovar o token num `401`. Fora isso, quem decide repetir é o app.
-- API key não vai para o browser: `signInWithApiKey()` recusa quando roda num. Para processo sem pessoa, como cron ou coletor, use `@mitralab.io/functions-sdk` com `createClientFromApiKey`.
+- Nunca coloque API key em código que vai para o browser, nem em `createClient({ apiKey })`: o bundle entrega a chave a quem abrir o app. O `signInWithApiKey()` recusa rodar no browser, mas isso não tira do bundle uma chave escrita nele. Para processo sem pessoa, como cron ou coletor, use `@mitralab.io/functions-sdk` com `createClientFromApiKey`.
 
 ## Migração do `mitra-interactions-sdk`
 
