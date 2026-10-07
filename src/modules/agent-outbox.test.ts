@@ -322,7 +322,12 @@ describe('agent input outbox', () => {
       session.send('hello');
       await vi.waitFor(() => expect(box().frames()).toHaveLength(1));
 
-      await session.cancel();
+      // A stop pressed before the box starts the turn waits for that start (sdk-core 0.2.12).
+      const cancelling = session.cancel();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(box().frames()).toHaveLength(1);
+      box().message({ type: 'stepStart', payload: {}, timestamp: 1, sequence: 1 });
+      await cancelling;
 
       expect(box().frames().at(-1)).toEqual({ type: 'interrupt' });
       expect(inputs).not.toHaveBeenCalled();
@@ -335,7 +340,8 @@ describe('agent input outbox', () => {
       const { session, errors } = await openSession();
       session.send('hello');
       await vi.waitFor(() => expect(box().frames()).toHaveLength(1));
-      box().message({ type: 'textDelta', payload: { text: 'a' }, timestamp: 1, sequence: 1 });
+      box().message({ type: 'stepStart', payload: {}, timestamp: 1, sequence: 1 });
+      box().message({ type: 'textDelta', payload: { text: 'a' }, timestamp: 1, sequence: 2 });
       box().onclose?.({ code: 1006 } as CloseEvent);
 
       await session.cancel();
