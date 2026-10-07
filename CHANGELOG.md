@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented in this file.
 
+## 1.5.0-beta.1
+
+- Depend on `@mitralab.io/sdk-core@0.2.12-beta.1`: a `cancel()` pressed before the agent turn starts
+  waits for the box to admit the prompt and goes out right after it, instead of being dropped while
+  the answer kept coming. `cancelled` is only emitted once the stop was delivered, and a stop pressed
+  for a prompt the box refuses never goes out, so it cannot stop a later turn.
+
 ## 1.5.0-beta.0
 
 - Expose `auth.allTokens` for apps enabled server-side, with the three families IAM returns at
