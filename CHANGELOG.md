@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented in this file.
 
+## 1.5.0
+
+Stable release of the 1.5.0-beta line, already on the `beta` tag.
+
+- `auth.allTokens` for apps enabled server-side, as in 1.5.0-beta.0.
+- Depend on `@mitralab.io/sdk-core@0.2.12`, the stable release of the 0.2.12-beta.1 surface: a
+  `cancel()` pressed before the agent turn starts waits for the box to admit the prompt and goes out
+  right after it.
+
 ## 1.5.0-beta.1
 
 - Depend on `@mitralab.io/sdk-core@0.2.12-beta.1`: a `cancel()` pressed before the agent turn starts
