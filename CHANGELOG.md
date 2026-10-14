@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented in this file.
 
+## 1.6.0
+
+- Depend on `@mitralab.io/sdk-core@0.2.13`: `AgentTurnUsage` gains `contextTokens`, the tokens
+  occupying the chat's context window at the end of the turn (subagents excluded), and
+  `contextWindow`, the model's window size. Both show live in `turnEnd` and `sendAndWait` and in
+  the `agent` item of the history, and are absent when the box does not report them.
+
 ## 1.5.0
 
 Stable release of the 1.5.0-beta line, already on the `beta` tag.
