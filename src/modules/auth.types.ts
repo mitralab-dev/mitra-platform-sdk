@@ -88,6 +88,20 @@ export interface MitraSpaceToken {
 }
 
 /**
+ * Access token for the backoffice of the Mitra brand, so an app can reach it
+ * with the access the person already has there. It carries the resources of
+ * their backoffice grant and no refresh token, because the backoffice refresh
+ * is only accepted on an internal IAM route: in the browser it is replaced by
+ * the app refresh, which mints a new one.
+ */
+export interface BackofficeToken {
+  readonly accessToken: string;
+  readonly tokenType: string;
+  /** Lifetime of `accessToken` in seconds, as IAM issued it. */
+  readonly expiresIn: number;
+}
+
+/**
  * Extra tokens IAM returns at login only for apps enabled server-side. The SDK
  * hands out frozen instances: the object is persisted with the session, so a
  * write into it would reach storage on the next save.
@@ -99,6 +113,12 @@ export interface AllTokens {
   readonly mitraSpace: MitraSpaceToken | null;
   /** Session of the same person in the IAM of another environment, or null on any failure there. */
   readonly b2bToken: PlatformSessionTokens | null;
+  /**
+   * Null unless the app is enabled for this token and the person is Mitra staff
+   * with a backoffice grant. It turns null again on the first app refresh after
+   * either stops holding, which is how a revoked grant arrives.
+   */
+  readonly backoffice: BackofficeToken | null;
 }
 
 /**

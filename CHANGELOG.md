@@ -2,6 +2,25 @@
 
 All notable changes to this project are documented in this file.
 
+## 1.7.0-beta.0
+
+- `auth.allTokens` gains a fourth family, `backoffice`: the access token of the person's own
+  backoffice grant (`accessToken`, `tokenType`, `expiresIn`), for an app that reaches the backoffice
+  of the Mitra brand with the access they already have there. It is `null` unless IAM enabled the
+  app for this token and the person is staff with a backoffice grant, and a malformed part reads as
+  `null` without failing the login, as the other families already do.
+- It is the only family without a `refreshToken`: the backoffice refresh is accepted only on an
+  internal IAM route. IAM mints a new one on every app refresh instead, so on a refresh the field
+  follows the `platform` rule and is replaced by what IAM sent, `null` included. A `null` there is
+  how a grant the person lost, or an app taken out of the flag, arrives.
+- `auth.ensureFreshBackofficeToken()` answers that token, refreshing the app session first when it
+  is within 60 seconds of expiring, and `null` when this session has none. The backoffice access
+  lives one hour while the app session lives far longer, so reading the field directly would hand
+  out a dead token from the second hour on. The refresh is shared with every other caller, and a
+  transient failure answers the token in hand instead of dropping it.
+- An `allTokens` carrying only `backoffice` is no longer read as empty.
+- Export `BackofficeToken`.
+
 ## 1.6.0
 
 - Depend on `@mitralab.io/sdk-core@0.2.13`: `AgentTurnUsage` gains `contextTokens`, the tokens

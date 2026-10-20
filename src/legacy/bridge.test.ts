@@ -492,6 +492,7 @@ describe('LegacySessionBridge', () => {
       platform: { accessToken: 'session-access', refreshToken: 'session-refresh', tokenType: 'Bearer' },
       mitraSpace: { token: 'space-token', tokenType: 'Bearer' },
       b2bToken: { accessToken: 'peer-access', refreshToken: 'peer-refresh', tokenType: 'Bearer' },
+      backoffice: { accessToken: 'backoffice-access', tokenType: 'Bearer', expiresIn: 3600 },
     };
     storage._store[STORAGE_KEY] = JSON.stringify({
       user: { id: 'u1', tenantId: 't1', email: 'user@test.com', name: null },
@@ -531,6 +532,7 @@ describe('LegacySessionBridge', () => {
         platform: { accessToken: 'session-access', refreshToken: 'session-refresh', tokenType: 'Bearer' },
         mitraSpace: { token: 'space-token', tokenType: 'Bearer' },
         b2bToken: { accessToken: 'peer-access', refreshToken: 'peer-refresh', tokenType: 'Bearer' },
+        backoffice: { accessToken: 'backoffice-access', tokenType: 'Bearer', expiresIn: 3600 },
       },
     });
     const mitra = createClient({ appId: APP_ID, apiUrl: API_URL });

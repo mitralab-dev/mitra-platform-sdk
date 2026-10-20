@@ -116,6 +116,7 @@ import {
   executeServerFunctionMitra,
   loginWithGoogleMitra,
   type AllTokens,
+  type BackofficeToken,
   type EmailCodeRequest,
   type EmailCodeRequestResult,
   type EmailCodeVerification,
@@ -153,9 +154,12 @@ const allTokens: AllTokens | null = client.auth.allTokens
 const b2bAccessToken: string | undefined = allTokens?.b2bToken?.accessToken
 // @ts-expect-error The extra login tokens are issued by IAM, never set by the application.
 client.auth.allTokens = null
-const loginTokens: AllTokens = { platform: null, mitraSpace: null, b2bToken: null }
+const loginTokens: AllTokens = { platform: null, mitraSpace: null, b2bToken: null, backoffice: null }
 // @ts-expect-error The SDK hands out frozen tokens, so a renewed pair cannot be written back.
 loginTokens.b2bToken = null
+const backoffice: Promise<BackofficeToken | null> = client.auth.ensureFreshBackofficeToken()
+// @ts-expect-error The backoffice token is renewed by the app refresh, so it has no refresh of its own.
+const backofficeRefresh: string | undefined = allTokens?.backoffice?.refreshToken
 
 void client.auth.currentUser
 void client.auth.isAuthenticated
@@ -163,6 +167,8 @@ void client.auth.onAuthStateChange(() => undefined)
 void client.auth.checkAuth()
 void client.auth.ensureFreshSession()
 void client.auth.ensureFreshSession(15_000)
+void client.auth.ensureFreshBackofficeToken()
+void client.auth.ensureFreshBackofficeToken(15_000)
 void client.auth.signIn({ email: user.email, password: "password" })
 void client.auth.signUp({ email: user.email, password: "password" })
 void client.auth.signInWithGoogle(googleOptions)
@@ -200,6 +206,8 @@ const structurallyIdenticalConfig: MitraConfig = interactionsConfig
 const legacySession: Promise<LoginResponse> = loginWithGoogleMitra({ projectId: "app" })
 
 void b2bAccessToken
+void backoffice
+void backofficeRefresh
 void table
 void query
 void proxy

@@ -7,6 +7,7 @@ import type {
   AllTokens,
   AuthPageSignInOptions,
   AuthTokenResponse,
+  BackofficeToken,
   MitraSpaceToken,
   PlatformSessionTokens,
 } from './auth.types';
@@ -113,6 +114,14 @@ function readMitraSpaceToken(value: unknown): MitraSpaceToken | null {
   return Object.freeze({ token, tokenType });
 }
 
+function readBackofficeToken(value: unknown): BackofficeToken | null {
+  if (!isPlainObject(value)) return null;
+  const { accessToken, tokenType, expiresIn } = value;
+  if (!isNonEmptyString(accessToken) || !isNonEmptyString(tokenType)) return null;
+  if (typeof expiresIn !== 'number' || !Number.isFinite(expiresIn)) return null;
+  return Object.freeze({ accessToken, tokenType, expiresIn });
+}
+
 /**
  * Reads the optional `allTokens` field, from a response or from storage. Each
  * part is an extra of a login that already succeeded, so a malformed part reads
@@ -126,6 +135,7 @@ export function normalizeAllTokens(value: unknown): AllTokens | undefined {
     platform: readSessionPair(value.platform),
     mitraSpace: readMitraSpaceToken(value.mitraSpace),
     b2bToken: readSessionPair(value.b2bToken),
+    backoffice: readBackofficeToken(value.backoffice),
   });
 }
 

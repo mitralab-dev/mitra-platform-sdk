@@ -43,16 +43,32 @@ const fakeAllTokens = {
   platform: { accessToken: 'session-access', refreshToken: 'session-refresh', tokenType: 'Bearer' },
   mitraSpace: { token: 'space-token', tokenType: 'Bearer' },
   b2bToken: { accessToken: 'peer-access', refreshToken: 'peer-refresh', tokenType: 'Bearer' },
+  backoffice: { accessToken: 'backoffice-access', tokenType: 'Bearer', expiresIn: 3600 },
 };
+const noAllTokens = { platform: null, mitraSpace: null, b2bToken: null, backoffice: null };
 const rotatedPlatform = {
   accessToken: 'new-session-access',
   refreshToken: 'new-session-refresh',
   tokenType: 'Bearer',
 };
+const rotatedBackoffice = {
+  accessToken: 'new-backoffice-access',
+  tokenType: 'Bearer',
+  expiresIn: 3600,
+};
 
 function jwt(payload: Record<string, unknown>): string {
   const encode = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url');
   return `${encode({ alg: 'none', typ: 'JWT' })}.${encode(payload)}.signature`;
+}
+
+/** A backoffice token whose access expires `inSeconds` from now, negative for expired. */
+function backofficeToken(inSeconds: number, accessToken = 'backoffice-access') {
+  return {
+    accessToken: jwt({ sub: 'u1', exp: Math.floor(Date.now() / 1_000) + inSeconds, jti: accessToken }),
+    tokenType: 'Bearer',
+    expiresIn: 3600,
+  };
 }
 
 function storedSession(
@@ -929,7 +945,7 @@ describe('AuthModule', () => {
   });
 
   describe('allTokens', () => {
-    it('should expose and persist the three families returned at login', async () => {
+    it('should expose and persist the four families returned at login', async () => {
       const browser = mockBrowser();
       mockFetchSequence([
         { body: { ...fakeTokenResponse, allTokens: fakeAllTokens } },
@@ -965,7 +981,7 @@ describe('AuthModule', () => {
     it('should read no tokens when the login response carries none of them', async () => {
       const browser = mockBrowser();
       mockFetchSequence([
-        { body: { ...fakeTokenResponse, allTokens: { platform: null, mitraSpace: null, b2bToken: null } } },
+        { body: { ...fakeTokenResponse, allTokens: noAllTokens } },
         { body: currentUserResponse },
       ]);
       const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
@@ -991,7 +1007,7 @@ describe('AuthModule', () => {
       expect(auth.accessToken).toBe('old-access');
     });
 
-    it('should load a session stored before b2bToken existed', () => {
+    it('should load a session stored before b2bToken and backoffice existed', () => {
       storedSessionWithAllTokens(storage, {
         platform: fakeAllTokens.platform,
         mitraSpace: fakeAllTokens.mitraSpace,
@@ -999,22 +1015,45 @@ describe('AuthModule', () => {
 
       const auth = new AuthModule(APP_ID, IAM_URL);
 
-      expect(auth.allTokens).toEqual({ ...fakeAllTokens, b2bToken: null });
+      expect(auth.allTokens).toEqual({ ...fakeAllTokens, b2bToken: null, backoffice: null });
     });
 
-    it('should take platform from the refresh and keep mitraSpace and b2bToken from login', async () => {
+    it('should keep the field when backoffice is the only family IAM sent', async () => {
+      const browser = mockBrowser();
+      const allTokens = { ...noAllTokens, backoffice: fakeAllTokens.backoffice };
+      mockFetchSequence([
+        { body: { ...fakeTokenResponse, allTokens } },
+        { body: currentUserResponse },
+      ]);
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+      const signIn = auth.signInWithEmail();
+      const state = browser.getStartUrl().searchParams.get('state')!;
+      browser.dispatchMessage(authPageResult(state, { code: 'exchange-code' }));
+
+      await expect(signIn).resolves.toEqual(apiUser);
+      expect(auth.allTokens).toEqual(allTokens);
+      expect(storedAllTokens(browser.localStorage)).toEqual(allTokens);
+    });
+
+    it('should take platform and backoffice from the refresh and keep mitraSpace and b2bToken from login', async () => {
       storedSessionWithAllTokens(storage);
       mockFetchSequence([{
         body: {
           ...fakeTokenResponse,
-          allTokens: { platform: rotatedPlatform, mitraSpace: null, b2bToken: null },
+          allTokens: {
+            platform: rotatedPlatform,
+            mitraSpace: null,
+            b2bToken: null,
+            backoffice: rotatedBackoffice,
+          },
         },
       }]);
       const auth = new AuthModule(APP_ID, IAM_URL);
 
       await expect(auth.refreshSession()).resolves.toBe(true);
 
-      const merged = { ...fakeAllTokens, platform: rotatedPlatform };
+      const merged = { ...fakeAllTokens, platform: rotatedPlatform, backoffice: rotatedBackoffice };
       expect(auth.allTokens).toEqual(merged);
       expect(storedAllTokens(storage)).toEqual(merged);
     });
@@ -1025,6 +1064,7 @@ describe('AuthModule', () => {
         platform: rotatedPlatform,
         mitraSpace: { token: 'new-space-token', tokenType: 'Bearer' },
         b2bToken: { accessToken: 'new-peer-access', refreshToken: 'new-peer-refresh', tokenType: 'Bearer' },
+        backoffice: rotatedBackoffice,
       };
       mockFetchSequence([{ body: { ...fakeTokenResponse, allTokens: incoming } }]);
       const auth = new AuthModule(APP_ID, IAM_URL);
@@ -1034,16 +1074,15 @@ describe('AuthModule', () => {
       expect(auth.allTokens).toEqual(incoming);
     });
 
-    it('should drop platform when the refresh reports none', async () => {
+    it('should drop platform and backoffice when the refresh reports them as null', async () => {
       storedSessionWithAllTokens(storage);
-      mockFetchSequence([{
-        body: { ...fakeTokenResponse, allTokens: { platform: null, mitraSpace: null, b2bToken: null } },
-      }]);
+      mockFetchSequence([{ body: { ...fakeTokenResponse, allTokens: noAllTokens } }]);
       const auth = new AuthModule(APP_ID, IAM_URL);
 
       await expect(auth.refreshSession()).resolves.toBe(true);
 
-      expect(auth.allTokens).toEqual({ ...fakeAllTokens, platform: null });
+      expect(auth.allTokens).toEqual({ ...fakeAllTokens, platform: null, backoffice: null });
+      expect(storedAllTokens(storage)).toEqual({ ...fakeAllTokens, platform: null, backoffice: null });
     });
 
     it.each([
@@ -1062,10 +1101,8 @@ describe('AuthModule', () => {
     });
 
     it('should read no tokens once a refresh leaves none of them', async () => {
-      storedSessionWithAllTokens(storage, { platform: fakeAllTokens.platform, mitraSpace: null, b2bToken: null });
-      mockFetchSequence([{
-        body: { ...fakeTokenResponse, allTokens: { platform: null, mitraSpace: null, b2bToken: null } },
-      }]);
+      storedSessionWithAllTokens(storage, { ...noAllTokens, platform: fakeAllTokens.platform });
+      mockFetchSequence([{ body: { ...fakeTokenResponse, allTokens: noAllTokens } }]);
       const auth = new AuthModule(APP_ID, IAM_URL);
 
       await expect(auth.refreshSession()).resolves.toBe(true);
@@ -1194,6 +1231,100 @@ describe('AuthModule', () => {
 
       expect(auth.allTokens).toBeNull();
       expect(storage._store[STORAGE_KEY]).toBeUndefined();
+    });
+  });
+
+  describe('ensureFreshBackofficeToken', () => {
+    const REFRESH_URL = `${IAM_URL}/api/v1/auth/refresh-token`;
+
+    function refreshWith(backoffice: unknown) {
+      return mockFetchSequence([{
+        body: { ...fakeTokenResponse, allTokens: { ...noAllTokens, backoffice } },
+      }]);
+    }
+
+    it.each([
+      ['has expired', -1],
+      ['is inside the default margin', 45],
+    ])('should refresh the app session when the backoffice token %s', async (_case, inSeconds) => {
+      storedSessionWithAllTokens(storage, { ...fakeAllTokens, backoffice: backofficeToken(inSeconds) });
+      const fresh = backofficeToken(3_600, 'fresh-backoffice');
+      const fetchMock = refreshWith(fresh);
+      const auth = new AuthModule(APP_ID, IAM_URL);
+
+      await expect(auth.ensureFreshBackofficeToken()).resolves.toEqual(fresh);
+
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(fetchMock.mock.calls[0][0]).toBe(REFRESH_URL);
+    });
+
+    it.each([
+      ['far from expiry', backofficeToken(3_600)],
+      ['opaque, so its expiry is unreadable', fakeAllTokens.backoffice],
+    ])('should answer the token in hand when it is %s', async (_case, backoffice) => {
+      storedSessionWithAllTokens(storage, { ...fakeAllTokens, backoffice });
+      const fetchMock = mockFetchSequence([]);
+      const auth = new AuthModule(APP_ID, IAM_URL);
+
+      await expect(auth.ensureFreshBackofficeToken()).resolves.toEqual(backoffice);
+
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('should reject a margin that is not a finite positive number', async () => {
+      storedSessionWithAllTokens(storage);
+      const auth = new AuthModule(APP_ID, IAM_URL);
+
+      await expect(auth.ensureFreshBackofficeToken(-1)).rejects.toThrow(RangeError);
+    });
+
+    it.each([
+      ['the session carries no extra tokens', () => storedSession(storage, 'old-access', 'old-refresh')],
+      ['the app is not entitled to this one', () => storedSessionWithAllTokens(
+        storage,
+        { ...fakeAllTokens, backoffice: null },
+      )],
+    ])('should answer null without refreshing when %s', async (_case, store) => {
+      store();
+      const fetchMock = mockFetchSequence([]);
+      const auth = new AuthModule(APP_ID, IAM_URL);
+
+      await expect(auth.ensureFreshBackofficeToken()).resolves.toBeNull();
+
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('should answer null when the refresh reports the grant is gone', async () => {
+      storedSessionWithAllTokens(storage, { ...fakeAllTokens, backoffice: backofficeToken(-1) });
+      refreshWith(null);
+      const auth = new AuthModule(APP_ID, IAM_URL);
+
+      await expect(auth.ensureFreshBackofficeToken()).resolves.toBeNull();
+
+      expect(auth.allTokens).toEqual({ ...fakeAllTokens, platform: null, backoffice: null });
+    });
+
+    it('should answer the token in hand when the refresh fails transiently', async () => {
+      const expiring = backofficeToken(-1);
+      storedSessionWithAllTokens(storage, { ...fakeAllTokens, backoffice: expiring });
+      mockFetchSequence([{ body: { message: 'Unavailable' }, status: 503 }]);
+      const auth = new AuthModule(APP_ID, IAM_URL);
+
+      await expect(auth.ensureFreshBackofficeToken()).resolves.toEqual(expiring);
+    });
+
+    it('should share one refresh between concurrent callers', async () => {
+      storedSessionWithAllTokens(storage, { ...fakeAllTokens, backoffice: backofficeToken(-1) });
+      const fresh = backofficeToken(3_600, 'fresh-backoffice');
+      const fetchMock = refreshWith(fresh);
+      const auth = new AuthModule(APP_ID, IAM_URL);
+
+      await expect(Promise.all([
+        auth.ensureFreshBackofficeToken(),
+        auth.ensureFreshBackofficeToken(),
+      ])).resolves.toEqual([fresh, fresh]);
+
+      expect(fetchMock).toHaveBeenCalledOnce();
     });
   });
 
