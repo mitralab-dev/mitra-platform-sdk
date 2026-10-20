@@ -38,6 +38,7 @@ export type {
   SignInCredentials,
   SignUpData,
   AllTokens,
+  BackofficeToken,
   MitraSpaceToken,
   PlatformSessionTokens,
   AuthPageSignInOptions,

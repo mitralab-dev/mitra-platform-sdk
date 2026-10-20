@@ -747,9 +747,11 @@ describe('expectAuthTokenResponse', () => {
     platform: { accessToken: 'session-access', refreshToken: 'session-refresh', tokenType: 'Bearer' },
     mitraSpace: { token: 'space-token', tokenType: 'Bearer' },
     b2bToken: { accessToken: 'peer-access', refreshToken: 'peer-refresh', tokenType: 'Bearer' },
+    backoffice: { accessToken: 'backoffice-access', tokenType: 'Bearer', expiresIn: 3600 },
   };
+  const NO_TOKENS = { platform: null, mitraSpace: null, b2bToken: null, backoffice: null };
 
-  it('keeps the three families of an enabled app', () => {
+  it('keeps the four families of an enabled app', () => {
     expect(expectAuthTokenResponse({ ...TOKEN_RESPONSE, allTokens: ALL_TOKENS })).toEqual({
       ...TOKEN_RESPONSE,
       allTokens: ALL_TOKENS,
@@ -757,9 +759,8 @@ describe('expectAuthTokenResponse', () => {
   });
 
   it('keeps the parts IAM sent as null', () => {
-    const allTokens = { platform: null, mitraSpace: null, b2bToken: null };
-
-    expect(expectAuthTokenResponse({ ...TOKEN_RESPONSE, allTokens }).allTokens).toEqual(allTokens);
+    expect(expectAuthTokenResponse({ ...TOKEN_RESPONSE, allTokens: NO_TOKENS }).allTokens)
+      .toEqual(NO_TOKENS);
   });
 
   it.each([
@@ -767,32 +768,38 @@ describe('expectAuthTokenResponse', () => {
       platform: { accessToken: 'session-access', tokenType: 'Bearer' },
       mitraSpace: { tokenType: 'Bearer' },
       b2bToken: { accessToken: 'peer-access', refreshToken: 'peer-refresh' },
+      backoffice: { accessToken: 'backoffice-access', expiresIn: 3600 },
     }],
     ['wrong types', {
       platform: 'session-access',
       mitraSpace: { token: 42, tokenType: 'Bearer' },
       b2bToken: [ALL_TOKENS.b2bToken],
+      backoffice: { ...ALL_TOKENS.backoffice, expiresIn: '3600' },
     }],
     ['blank strings', {
       platform: { ...ALL_TOKENS.platform, tokenType: '' },
       mitraSpace: { token: '   ', tokenType: 'Bearer' },
       b2bToken: { ...ALL_TOKENS.b2bToken, refreshToken: ' ' },
+      backoffice: { ...ALL_TOKENS.backoffice, accessToken: ' ' },
     }],
     ['absent parts', {}],
   ])('reads parts with %s as null instead of failing the login', (_case, allTokens) => {
     const response = expectAuthTokenResponse({ ...TOKEN_RESPONSE, allTokens });
 
     expect(response).toMatchObject(TOKEN_RESPONSE);
-    expect(response.allTokens).toEqual({ platform: null, mitraSpace: null, b2bToken: null });
+    expect(response.allTokens).toEqual(NO_TOKENS);
   });
 
-  it('keeps the valid parts next to a malformed one', () => {
+  it.each([
+    ['b2bToken', { b2bToken: { accessToken: 'peer-access' } }],
+    ['backoffice', { backoffice: { ...ALL_TOKENS.backoffice, expiresIn: Number.NaN } }],
+  ])('keeps the valid parts next to a malformed %s', (field, malformed) => {
     const response = expectAuthTokenResponse({
       ...TOKEN_RESPONSE,
-      allTokens: { ...ALL_TOKENS, b2bToken: { accessToken: 'peer-access' } },
+      allTokens: { ...ALL_TOKENS, ...malformed },
     });
 
-    expect(response.allTokens).toEqual({ ...ALL_TOKENS, b2bToken: null });
+    expect(response.allTokens).toEqual({ ...ALL_TOKENS, [field]: null });
   });
 
   it.each([
