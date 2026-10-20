@@ -97,7 +97,7 @@ export interface MitraSpaceToken {
 export interface BackofficeToken {
   readonly accessToken: string;
   readonly tokenType: string;
-  /** Lifetime of `accessToken` in seconds, as IAM issued it. */
+  /** Lifetime of `accessToken` in seconds, as IAM issued it. Renewal reads the JWT `exp`, not this. */
   readonly expiresIn: number;
 }
 
@@ -114,9 +114,8 @@ export interface AllTokens {
   /** Session of the same person in the IAM of another environment, or null on any failure there. */
   readonly b2bToken: PlatformSessionTokens | null;
   /**
-   * Null unless the app is enabled for this token and the person is Mitra staff
-   * with a backoffice grant. It turns null again on the first app refresh after
-   * either stops holding, which is how a revoked grant arrives.
+   * Null unless the app is enabled for this token and the person is Mitra staff with a backoffice
+   * grant, and null again on the first app refresh after either stops holding.
    */
   readonly backoffice: BackofficeToken | null;
 }

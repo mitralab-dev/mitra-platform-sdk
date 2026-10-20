@@ -768,7 +768,7 @@ describe('expectAuthTokenResponse', () => {
       platform: { accessToken: 'session-access', tokenType: 'Bearer' },
       mitraSpace: { tokenType: 'Bearer' },
       b2bToken: { accessToken: 'peer-access', refreshToken: 'peer-refresh' },
-      backoffice: { accessToken: 'backoffice-access', tokenType: 'Bearer' },
+      backoffice: { accessToken: 'backoffice-access', expiresIn: 3600 },
     }],
     ['wrong types', {
       platform: 'session-access',
