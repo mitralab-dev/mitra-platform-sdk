@@ -17,8 +17,12 @@ All notable changes to this project are documented in this file.
   is within 60 seconds of expiring, and `null` when this session has none. The backoffice access
   lives one hour while the app session lives far longer, so reading the field directly would hand
   out a dead token from the second hour on. The refresh is shared with every other caller, and a
-  transient failure answers the token in hand instead of dropping it.
+  transient failure answers the token in hand instead of dropping it. A login by another person
+  landing during the refresh answers `null`, never their token.
 - An `allTokens` carrying only `backoffice` is no longer read as empty.
+- A session stored by 1.6.0 or earlier carries no `backoffice` key, so it reads as `null` until the
+  next app refresh. An app that needs the token right after the upgrade can call
+  `auth.refreshSession()` once.
 - Export `BackofficeToken`.
 
 ## 1.6.0

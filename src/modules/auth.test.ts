@@ -1326,6 +1326,37 @@ describe('AuthModule', () => {
 
       expect(fetchMock).toHaveBeenCalledOnce();
     });
+
+    it('should answer null when another person signs in while the refresh is in flight', async () => {
+      const browser = mockBrowser();
+      storedSessionWithAllTokens(browser.localStorage, {
+        ...fakeAllTokens,
+        backoffice: backofficeToken(-1),
+      });
+      const personB = backofficeToken(3_600, 'person-b-backoffice');
+      const pendingRefresh = deferred<Response>();
+      vi.stubGlobal('fetch', vi.fn()
+        .mockReturnValueOnce(pendingRefresh.promise)
+        .mockResolvedValueOnce(jsonResponse({
+          ...fakeTokenResponse,
+          allTokens: { ...noAllTokens, backoffice: personB },
+        }))
+        .mockResolvedValueOnce(jsonResponse(currentUserResponse)));
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+      const answering = auth.ensureFreshBackofficeToken();
+      const signIn = auth.signInWithEmail();
+      const state = browser.getStartUrl().searchParams.get('state')!;
+      browser.dispatchMessage(authPageResult(state, { code: 'exchange-code' }));
+      await expect(signIn).resolves.toEqual(apiUser);
+      pendingRefresh.resolve(jsonResponse({
+        ...fakeTokenResponse,
+        allTokens: { ...noAllTokens, backoffice: backofficeToken(3_600, 'person-a-backoffice') },
+      }));
+
+      await expect(answering).resolves.toBeNull();
+      expect(auth.allTokens?.backoffice).toEqual(personB);
+    });
   });
 
   describe('email sign-in', () => {

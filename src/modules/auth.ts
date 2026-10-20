@@ -130,14 +130,13 @@ function discardEmptyAllTokens(tokens: AllTokens | null | undefined): AllTokens 
 }
 
 /**
- * IAM recomputes `platform` and `backoffice` on every app refresh, both locally,
- * so they are taken as sent, `null` included: a `null` is how a backoffice grant
- * the person lost arrives. It sends `mitraSpace` and `b2bToken` as `null` on
- * refresh on purpose: the Space token is long-lived and the peer session is
- * renewed by the app itself, so a `null` there keeps what the login issued. IAM
- * omits the field whenever the app is not entitled to these tokens, so a refresh
- * without it clears everything instead of keeping one-hour pairs that would
- * expire unseen.
+ * IAM recomputes `platform` and `backoffice` on every app refresh, so they are
+ * taken as sent, `null` included: a `null` is how a revoked backoffice grant
+ * arrives. It sends `mitraSpace` and `b2bToken` as `null` on refresh on purpose:
+ * the Space token is long-lived and the peer session is renewed by the app
+ * itself, so a `null` there keeps what the login issued. IAM omits the field
+ * whenever the app is not entitled to these tokens, so a refresh without it
+ * clears everything instead of keeping one-hour pairs that would expire unseen.
  */
 function mergeAllTokens(current: AllTokens | null, incoming: AllTokens | undefined): AllTokens | null {
   if (!incoming) return null;
@@ -791,27 +790,25 @@ export class AuthModule {
    * The backoffice token of {@link allTokens}, renewed when it is close to
    * expiring.
    *
-   * This token has no refresh of its own: IAM mints a new one on every app
-   * refresh, so renewing it means refreshing the app session, which this method
-   * does when the token is within `minValidityMs` of its expiry. The app session
-   * outlives this token by far, so the field goes stale long before the session
-   * does. Call it before each backoffice request: refreshes are shared with
-   * every other caller, so it costs one request per expiry, not one per call.
-   * Reading the expiry decodes the JWT as a scheduling heuristic, the same as
-   * {@link ensureFreshSession}, so a token whose `exp` cannot be read is used as
-   * it is.
+   * Renewing it means refreshing the app session, which this method does when
+   * the token is within `minValidityMs` of its expiry. Call it before each
+   * backoffice request: refreshes are shared with every other caller, so it
+   * costs one request per expiry, not one per call. The expiry is read from the
+   * JWT as a scheduling heuristic, the same as {@link ensureFreshSession}, so a
+   * token whose `exp` cannot be read is used as it is.
    *
    * @param minValidityMs - Minimum remaining token lifetime. Defaults to 60 seconds.
-   * @returns The token to use, or `null` when this session has none, which is
-   * also the answer when the refresh reports the grant is gone. A refresh that
-   * fails transiently keeps the session, so the token in hand is returned and
-   * the receiving service decides.
+   * @returns The token to use, or `null` when this session has none, when the
+   * refresh reports the grant is gone, or when another person signed in while
+   * the refresh was in flight. A refresh that fails transiently keeps the
+   * session, so the token in hand is returned and the receiving service decides.
    *
    * @example
    * ```typescript
    * const backoffice = await mitra.auth.ensureFreshBackofficeToken();
    * if (!backoffice) return renderWithoutAdminArea();
-   * await fetch(url, { headers: { Authorization: `Bearer ${backoffice.accessToken}` } });
+   * const authorization = `${backoffice.tokenType} ${backoffice.accessToken}`;
+   * await fetch(url, { headers: { Authorization: authorization } });
    * ```
    */
   async ensureFreshBackofficeToken(
@@ -824,7 +821,11 @@ export class AuthModule {
     if (!current) return null;
     if (!isTokenExpiring(current.accessToken, minValidityMs)) return current;
 
+    // Another person can sign in to this app while the refresh is in flight;
+    // answering then would hand their grant to whoever asked for the first.
+    const generation = this.sessionGeneration;
     await this.refreshSession();
+    if (generation !== this.sessionGeneration) return null;
     return this.#allTokens?.backoffice ?? null;
   }
 
