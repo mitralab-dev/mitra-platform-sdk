@@ -42,6 +42,7 @@ No app gerado pelo Code Studio, `VITE_MITRA_APP_ID` e `VITE_MITRA_API_URL` já v
 - `functions`: `execute` espera o resultado da Server Function; `executeAsync` devolve a execução para acompanhar com `getExecution` ou parar com `cancelExecution`. `publicFunctions` chama as Functions publicadas como públicas, sem login.
 - `integration.executeByAlias(alias, request)`: chama uma API externa configurada no app. A credencial do provedor fica na Mitra e não passa pelo browser.
 - `agentTasks.session(...)`: chat com agente, com `send`, `sendAndWait`, `cancel` e eventos como `delta`, `turnEnd` e `error`.
+  `send` devolve o id da mensagem; com o browser offline a mensagem espera a rede e `send` devolve `undefined`.
 - `agentCredentials`: credenciais de provedor de IA e modelos disponíveis.
 
 Login por código no e-mail, para quem monta a própria tela:

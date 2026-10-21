@@ -1,7 +1,8 @@
-import type { AgentTaskEvent, AgentTaskSession } from '@mitralab.io/sdk-core';
+import type { AgentTaskEvent, AgentTaskSession, AgentTasksModule } from '@mitralab.io/sdk-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HttpClient } from '../utils/http-client';
-import { OUTBOX_DELAYS_MS } from './agent-outbox';
+import { AgentInputOutbox, holdSendsWhileOffline, OUTBOX_DELAYS_MS } from './agent-outbox';
+import type { OutboxNetwork } from './agent-outbox';
 import { createBrowserAgentTasksModule } from './agent-tasks';
 import type { AuthSessionPort } from './auth';
 
@@ -529,5 +530,30 @@ describe('agent input outbox', () => {
     }]);
     expect(session.status).toBe('idle');
     session.close();
+  });
+});
+
+describe('send on the offline gate', () => {
+  // Issue #91: the core's send returns the message id since 0.3.0 and the wrapper dropped it.
+  function gated(offline: boolean) {
+    const send = vi.fn().mockReturnValue('msg-1');
+    const session = { taskId: 'task-1', status: 'idle', send } as unknown as AgentTaskSession;
+    const network: OutboxNetwork = { isOffline: () => offline, onOnline: () => () => undefined };
+    const outbox = new AgentInputOutbox({} as AgentTasksModule, network);
+    return { send, wrapped: holdSendsWhileOffline(session, outbox) };
+  }
+
+  it('returns the id the core gives the message it sends', () => {
+    const { send, wrapped } = gated(false);
+
+    expect(wrapped.send('hello')).toBe('msg-1');
+    expect(send).toHaveBeenCalledExactlyOnceWith('hello', undefined);
+  });
+
+  it('returns undefined for a message held while the browser is offline', () => {
+    const { send, wrapped } = gated(true);
+
+    expect(wrapped.send('hello')).toBeUndefined();
+    expect(send).not.toHaveBeenCalled();
   });
 });
