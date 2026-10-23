@@ -68,6 +68,21 @@ export interface EmailCodeRequestResult {
   resendAfterSeconds: number;
 }
 
+/** Options for `auth.requestPasswordReset()`. */
+export interface PasswordResetOptions {
+  /** Defaults to the browser language, and to `pt-BR` when that is neither. */
+  language?: EmailCodeLanguage;
+}
+
+/**
+ * What IAM accepted for a reset. Neutral like {@link EmailCodeRequestResult}:
+ * it says nothing about whether the address has an account.
+ */
+export interface PasswordResetRequestResult {
+  /** How long to wait before offering to send another message. */
+  resendAfterSeconds: number;
+}
+
 /** The code the person read in the message, against the request that sent it. */
 export interface EmailCodeVerification {
   receipt: string;

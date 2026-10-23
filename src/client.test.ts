@@ -160,6 +160,23 @@ describe('createClient', () => {
     expect(mitra.emailLoginEnabled).toBe(expected);
   });
 
+  it.each([
+    ['reads password login as enabled', { passwordLoginEnabled: true }, true],
+    ['denies password login when the server omits the field', {}, false],
+    ['denies password login when the field is not a boolean', { passwordLoginEnabled: 'true' }, false],
+  ])('%s', async (_case, passwordLogin, expected) => {
+    mockLocalStorage();
+    mockFetch({ dataSourceId: 'ds-1', allowSignup: true, ...passwordLogin });
+    const mitra = createClient({
+      appId: 'app-1',
+      apiUrl: 'https://api.mitra.io',
+    });
+
+    expect(mitra.passwordLoginEnabled).toBe(false);
+    await expect(mitra.init()).resolves.toBeUndefined();
+    expect(mitra.passwordLoginEnabled).toBe(expected);
+  });
+
   it('should not serialize persisted access or refresh tokens', () => {
     const accessToken = 'persisted-access-token';
     const refreshToken = 'persisted-refresh-token';

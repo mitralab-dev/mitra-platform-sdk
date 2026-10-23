@@ -127,6 +127,8 @@ import {
   type LoginResponse,
   type MitraClient,
   type MitraConfig,
+  type PasswordResetOptions,
+  type PasswordResetRequestResult,
   type ProxyInput,
   type QueryResult,
   type User,
@@ -176,6 +178,15 @@ void client.auth.completeGoogleSignInRedirect()
 void client.auth.signInWithEmail({ mode: "popup" })
 void client.auth.verifyEmailCode(emailCodeVerification)
 void client.auth.completeEmailSignInRedirect()
+const passwordUser: Promise<User> = client.auth.signInWithPassword()
+void client.auth.signUpWithPassword()
+void client.auth.changePassword()
+const passwordResetOptions: PasswordResetOptions = { language: "en" }
+const passwordResetRequested: Promise<PasswordResetRequestResult> =
+  client.auth.requestPasswordReset(user.email, passwordResetOptions)
+const passwordLoginEnabled: boolean = client.passwordLoginEnabled
+// @ts-expect-error The password is typed on the Mitra auth page, never handed to the SDK.
+void client.auth.signInWithPassword({ email: user.email, password: "password" })
 client.auth.signOut()
 client.auth.redirectToLogin()
 void client.init()
@@ -217,6 +228,9 @@ void error
 void retryAfterSeconds
 void unsupportedEmailLanguage
 void emailCodeRequested
+void passwordUser
+void passwordResetRequested
+void passwordLoginEnabled
 void legacyConfig
 void interactionsConfig
 void structurallyIdenticalConfig

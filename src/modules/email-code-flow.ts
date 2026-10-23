@@ -146,7 +146,7 @@ function expectMagicLinkInspection(value: unknown): MagicLinkInspection {
  * does not, the browser does; and when the browser asks for a language the
  * platform does not write, the message goes out in the platform's own.
  */
-function resolveLanguage(
+export function resolveLanguage(
   requested: EmailCodeLanguage | undefined,
   browserWindow: Window
 ): EmailCodeLanguage {

@@ -2,6 +2,33 @@
 
 All notable changes to this project are documented in this file.
 
+## 1.8.0-beta.0
+
+Sign-in by email and password for apps whose accounts are their own (exclusive login mode).
+
+- `auth.signInWithPassword()`, `auth.signUpWithPassword()` and `auth.changePassword()` open the
+  Mitra auth page (`sdk-auth.html`) in a popup with `provider=password` and `view=login`, `signup`
+  or `change`. The password is typed only there and never passes through the app's code. The page
+  hands back the same single-use exchange code as the email sign-in, redeemed at
+  `/auth/magic-link/exchange`. Popup only: there is no redirect mode for these methods.
+- `changePassword()` needs a session. The page asks for it with a `mitra-auth-session-request`
+  message, and the SDK answers `mitra-auth-session` with the access token through `postMessage`
+  to the auth page origin, never in the URL. IAM ends every session of the account when the
+  password changes, so the page signs in again and the new session replaces the current one. When
+  the change goes through but that sign-in fails, the call rejects with
+  `PASSWORD_CHANGED_SIGN_IN_AGAIN` and the local session is cleared.
+- `auth.requestPasswordReset(email, { language })` asks IAM to email a reset link and returns
+  `{ resendAfterSeconds }`, neutral about whether the address has an account. The link opens the
+  Mitra auth page, where the new password is typed, so there is no `confirmPasswordReset`. Asking
+  too often answers `RATE_LIMITED` (per address) or `RATE_LIMIT_EXCEEDED` (per network).
+- `auth.signOut()` also ends the session on the server when it belongs to an exclusive app
+  account: it sends the refresh token to `POST /auth/logout` with `keepalive`, ignores the answer,
+  and clears the local state right away, as before. A shared app session, or one without a
+  refresh token, is only cleared locally.
+- `mitra.passwordLoginEnabled`, read from the app info by `init()`, `false` when the server omits it.
+- `signIn` and `signUp` with a password stay deprecated and now point to the new methods.
+- Export `PasswordResetOptions` and `PasswordResetRequestResult`.
+
 ## 1.7.0
 
 Stable release of the 1.7.0-beta line, with `@mitralab.io/sdk-core@0.3.0`.
