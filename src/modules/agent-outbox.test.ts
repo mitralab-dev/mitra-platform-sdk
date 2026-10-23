@@ -549,7 +549,7 @@ describe('agent input outbox', () => {
 });
 
 describe('send on the offline gate', () => {
-  // Issue #91: the core's send returns the message id since 0.3.0 and the wrapper dropped it.
+  // The core's send returns the message id since 0.3.0, and the wrapper has to hand it on.
   function gated(offline: boolean) {
     const send = vi.fn().mockReturnValue('msg-1');
     const session = { taskId: 'task-1', status: 'idle', send } as unknown as AgentTaskSession;
