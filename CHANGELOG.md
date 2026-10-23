@@ -2,6 +2,23 @@
 
 All notable changes to this project are documented in this file.
 
+## 1.7.0
+
+Stable release of the 1.7.0-beta line, with `@mitralab.io/sdk-core@0.3.0`.
+
+- Depend on `@mitralab.io/sdk-core@0.3.0`, the agent session that follows T3. A message sent while
+  a reply runs no longer waits in a local queue of the SDK: it goes to the box at once, with no mode
+  by default, and T3 decides, steering it into the running turn or queueing it.
+  `send(prompt, { mode: "queue" | "steer" })` asks on purpose. `session.history` is the live
+  conversation in the box's order (asked with `kinds=all`), with a tool's call and result as two
+  items, as in 0.2.13, the question as the person wrote it, and T3's approvals and mid-turn
+  questions where they came. `queue` mirrors T3's queue, with `steerQueueItem`, `resumeQueue` and
+  `backgroundTasks`. The history keeps the 0.2.13 format; against an old box the new functions show
+  nothing.
+- `agentTasks.session(...).send` returns the id of the message the core sends (its
+  `clientMessageId`); a prompt held while the browser is offline returns `undefined`.
+- Includes `auth.allTokens.backoffice` and `auth.ensureFreshBackofficeToken()` from 1.7.0-beta.0.
+
 ## 1.7.0-beta.0
 
 - `auth.allTokens` gains a fourth family, `backoffice`: the access token of the person's own

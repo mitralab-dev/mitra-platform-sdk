@@ -1,7 +1,8 @@
-import type { AgentTaskEvent, AgentTaskSession } from '@mitralab.io/sdk-core';
+import type { AgentTaskEvent, AgentTaskSession, AgentTasksModule } from '@mitralab.io/sdk-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HttpClient } from '../utils/http-client';
-import { OUTBOX_DELAYS_MS } from './agent-outbox';
+import { AgentInputOutbox, holdSendsWhileOffline, OUTBOX_DELAYS_MS } from './agent-outbox';
+import type { OutboxNetwork } from './agent-outbox';
 import { createBrowserAgentTasksModule } from './agent-tasks';
 import type { AuthSessionPort } from './auth';
 
@@ -59,6 +60,10 @@ class FakeWebSocket {
     return this.send.mock.calls.map(([frame]) => JSON.parse(String(frame)) as unknown);
   }
 }
+
+// The core gives every message a random UUID v4 as its `clientMessageId`, or its own id where the
+// runtime has no global crypto (Node 18).
+const CLIENT_MESSAGE_ID = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|m-\d+-\d+)$/;
 
 const BOX_WS_URL = 'wss://api.mitra.io/__ide/3773-box.e2b.app/api/mitra/chat/ws?grant=g&ticket=t';
 
@@ -272,9 +277,12 @@ describe('agent input outbox', () => {
       session.send('second');
       goOnline();
 
-      await vi.waitFor(() => expect(inputs).toHaveBeenCalledTimes(1));
-      expect(JSON.parse(String(vi.mocked(fetch).mock.calls.at(-1)?.[1]?.body))).toMatchObject({ content: 'first' });
-      expect(session.queue.map((item) => item.text)).toEqual(['second']);
+      await vi.waitFor(() => expect(inputs).toHaveBeenCalledTimes(2));
+      expect(inputs.mock.calls.map(([body]) => body)).toEqual([
+        { type: 'message', content: 'first', clientMessageId: expect.stringMatching(CLIENT_MESSAGE_ID) },
+        { type: 'message', content: 'second', clientMessageId: expect.stringMatching(CLIENT_MESSAGE_ID) },
+      ]);
+      expect(session.queue).toEqual([]);
       expect(errors).toEqual([]);
       session.close();
     });
@@ -306,7 +314,7 @@ describe('agent input outbox', () => {
 
       session.send('hello', { agentType: 'CLAUDE' });
       await vi.waitFor(() => expect(box().frames()).toEqual([
-        { type: 'message', content: 'hello', agentType: 'CLAUDE' },
+        { type: 'message', content: 'hello', agentType: 'CLAUDE', clientMessageId: expect.stringMatching(CLIENT_MESSAGE_ID) },
       ]));
 
       expect(box().url).toBe(BOX_WS_URL);
@@ -370,7 +378,9 @@ describe('agent input outbox', () => {
       browser.offline = false;
       vi.stubGlobal('navigator', { onLine: true });
       for (const listener of [...onlineListeners]) listener();
-      await vi.waitFor(() => expect(box().frames()).toEqual([{ type: 'message', content: 'hello' }]));
+      await vi.waitFor(() => expect(box().frames()).toEqual([
+        { type: 'message', content: 'hello', clientMessageId: expect.stringMatching(CLIENT_MESSAGE_ID) },
+      ]));
       expect(inputs).not.toHaveBeenCalled();
       expect(errors).toEqual([]);
       session.close();
@@ -425,7 +435,9 @@ describe('agent input outbox', () => {
       browser.offline = false;
       vi.stubGlobal('navigator', { onLine: true });
       for (const listener of [...onlineListeners]) listener();
-      await vi.waitFor(() => expect(box().frames()).toEqual([{ type: 'message', content: 'first' }]));
+      await vi.waitFor(() => expect(box().frames()).toEqual([
+        { type: 'message', content: 'first', clientMessageId: expect.stringMatching(CLIENT_MESSAGE_ID) },
+      ]));
 
       browser.offline = true;
       vi.stubGlobal('navigator', { onLine: false });
@@ -498,7 +510,11 @@ describe('agent input outbox', () => {
 
     session.send('hello');
 
-    await vi.waitFor(() => expect(inputs).toHaveBeenCalledExactlyOnceWith({ type: 'message', content: 'hello' }));
+    await vi.waitFor(() => expect(inputs).toHaveBeenCalledExactlyOnceWith({
+      type: 'message',
+      content: 'hello',
+      clientMessageId: expect.stringMatching(CLIENT_MESSAGE_ID),
+    }));
     expect(FakeWebSocket.instances[0].frames()).toEqual([]);
     expect(errors).toEqual([]);
     session.close();
@@ -529,5 +545,30 @@ describe('agent input outbox', () => {
     }]);
     expect(session.status).toBe('idle');
     session.close();
+  });
+});
+
+describe('send on the offline gate', () => {
+  // The core's send returns the message id since 0.3.0, and the wrapper has to hand it on.
+  function gated(offline: boolean) {
+    const send = vi.fn().mockReturnValue('msg-1');
+    const session = { taskId: 'task-1', status: 'idle', send } as unknown as AgentTaskSession;
+    const network: OutboxNetwork = { isOffline: () => offline, onOnline: () => () => undefined };
+    const outbox = new AgentInputOutbox({} as AgentTasksModule, network);
+    return { send, wrapped: holdSendsWhileOffline(session, outbox) };
+  }
+
+  it('returns the id the core gives the message it sends', () => {
+    const { send, wrapped } = gated(false);
+
+    expect(wrapped.send('hello')).toBe('msg-1');
+    expect(send).toHaveBeenCalledExactlyOnceWith('hello', undefined);
+  });
+
+  it('returns undefined for a message held while the browser is offline', () => {
+    const { send, wrapped } = gated(true);
+
+    expect(wrapped.send('hello')).toBeUndefined();
+    expect(send).not.toHaveBeenCalled();
   });
 });

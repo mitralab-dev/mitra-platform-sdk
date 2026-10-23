@@ -283,6 +283,9 @@ function notify(listeners: ReadonlySet<Listener>, payload: unknown): void {
  * in the outbox and is sent, in order, once the network is back. Everything else on the
  * session is the core's, untouched.
  *
+ * `send` returns the id the core gives the message when it goes out now; a prompt held offline
+ * returns undefined, since the core only assigns the id once the network takes it.
+ *
  * The outbox frames reach the app through this wrapper's own `raw` and `error` listeners: a chat
  * on the direct channel is served by Core without the event source, so no observer of this SDK
  * sees its stream.
@@ -319,12 +322,10 @@ export function holdSendsWhileOffline(
       };
     },
     send: (prompt, options) => {
-      if (passThrough(prompt)) {
-        session.send(prompt, options);
-        return;
-      }
+      if (passThrough(prompt)) return session.send(prompt, options);
       void outbox.holdUntilOnline(session, session.taskId, () => session.send(prompt, options))
         .catch(() => undefined);
+      return undefined;
     },
     sendAndWait: (prompt, options) => {
       if (passThrough(prompt)) return session.sendAndWait(prompt, options);
