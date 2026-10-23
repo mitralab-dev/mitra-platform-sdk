@@ -3,7 +3,12 @@ import { createAuthModule, expectObject, type AuthModule as CoreAuthModule } fro
 import { coreErrors } from '../core-errors';
 import { HttpClient, MitraApiError } from '../utils/http-client';
 import { assertServerRuntime, resolveApiKeySession } from './api-key-auth';
-import { expectAuthTokenResponse, AuthPageFlow, normalizeAllTokens } from './auth-page-flow';
+import {
+  expectAuthTokenResponse,
+  AuthPageFlow,
+  normalizeAllTokens,
+  PASSWORD_CHANGED_SIGN_IN_AGAIN,
+} from './auth-page-flow';
 import { EmailCodeFlow, resolveLanguage } from './email-code-flow';
 import type {
   User,
@@ -659,8 +664,13 @@ export class AuthModule {
    * included, so the page signs in again with the new password and hands back a
    * new session, which replaces the current one.
    *
+   * When the change goes through but that new sign-in fails, the call rejects
+   * with `PASSWORD_CHANGED_SIGN_IN_AGAIN` and the local session is cleared,
+   * since IAM already ended it: send the person to sign in with the new password.
+   *
    * @returns The user of the new session.
-   * @throws {MitraApiError} `401` when nobody is signed in.
+   * @throws {MitraApiError} `401` when nobody is signed in, and
+   * `PASSWORD_CHANGED_SIGN_IN_AGAIN` (status `401`) as above.
    * @throws The same errors as {@link signInWithPassword}, and an error when the
    * session ends while the popup is open.
    *
@@ -679,9 +689,22 @@ export class AuthModule {
       await this.ensureFreshSession();
       return this.#accessToken;
     };
-    return this.establishSession(
-      await this.passwordAuth.signInWithPopup({ view: 'change', sessionToken })
-    );
+    const generation = this.sessionGeneration;
+    let tokenResponse: AuthTokenResponse;
+    try {
+      tokenResponse = await this.passwordAuth.signInWithPopup({ view: 'change', sessionToken });
+    } catch (error) {
+      // A session that replaced this one meanwhile is not the one IAM ended.
+      if (
+        error instanceof MitraApiError
+        && error.code === PASSWORD_CHANGED_SIGN_IN_AGAIN
+        && generation === this.sessionGeneration
+      ) {
+        this.clearAuthState();
+      }
+      throw error;
+    }
+    return this.establishSession(tokenResponse);
   }
 
   /**

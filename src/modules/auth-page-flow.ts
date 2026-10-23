@@ -1,7 +1,7 @@
 import { stripTrailingSlashes } from '../utils/url';
 import { expectObject } from '@mitralab.io/sdk-core';
 import { coreErrors } from '../core-errors';
-import type { HttpClient } from '../utils/http-client';
+import { MitraApiError, type HttpClient } from '../utils/http-client';
 import { resolveAuthPageUrl } from './auth-page-url';
 import type {
   AllTokens,
@@ -17,6 +17,13 @@ const RESULT_TYPE = 'mitra-oauth-result';
 const SESSION_REQUEST_TYPE = 'mitra-auth-session-request';
 /** The answer to {@link SESSION_REQUEST_TYPE}, posted only to the auth page origin. */
 const SESSION_TYPE = 'mitra-auth-session';
+
+/**
+ * The password changed on the auth page, but signing in again with the new
+ * one failed. IAM already ended every session of the account, so the
+ * application has to send the person to sign in.
+ */
+export const PASSWORD_CHANGED_SIGN_IN_AGAIN = 'PASSWORD_CHANGED_SIGN_IN_AGAIN';
 
 export type AuthPageProvider = 'google' | 'microsoft' | 'email' | 'password';
 
@@ -579,28 +586,10 @@ export class AuthPageFlow {
           return;
         }
         if (data.type !== RESULT_TYPE) return;
-        if (data.state !== expectedState) {
-          cleanup();
-          reject(new Error(`Invalid ${this.providerLabel} sign-in state (possible CSRF).`));
-          return;
-        }
-        if (data.success !== true) {
-          cleanup();
-          reject(new Error(typeof data.error === 'string' && data.error.trim()
-            ? data.error
-            : `${this.providerLabel} sign-in failed.`));
-          return;
-        }
-
-        const code = typeof data.code === 'string' && data.code.trim() ? data.code : undefined;
-        if (!code && data.token === undefined) {
-          cleanup();
-          reject(new Error(`${this.providerLabel} auth page returned neither code nor token.`));
-          return;
-        }
-
+        const outcome = readPopupResult(data, expectedState, this.providerLabel);
         cleanup();
-        resolve({ ...(code ? { code } : {}), ...(data.token !== undefined ? { token: data.token } : {}) });
+        if ('error' in outcome) reject(outcome.error);
+        else resolve(outcome.value);
       };
 
       const cleanup = () => {
@@ -666,4 +655,38 @@ export class AuthPageFlow {
     }
     return globalThis.window as MitraWindow;
   }
+}
+
+type PopupResultOutcome = { value: { code?: string; token?: unknown } } | { error: Error };
+
+function readPopupResult(
+  data: Record<string, unknown>,
+  expectedState: string,
+  providerLabel: string
+): PopupResultOutcome {
+  if (data.state !== expectedState) {
+    return { error: new Error(`Invalid ${providerLabel} sign-in state (possible CSRF).`) };
+  }
+  if (data.success !== true && data.passwordChanged === true) {
+    return {
+      error: new MitraApiError(
+        'The password was changed, but signing in again failed. Sign in with the new password.',
+        401,
+        PASSWORD_CHANGED_SIGN_IN_AGAIN
+      ),
+    };
+  }
+  if (data.success !== true) {
+    return {
+      error: new Error(typeof data.error === 'string' && data.error.trim()
+        ? data.error
+        : `${providerLabel} sign-in failed.`),
+    };
+  }
+
+  const code = typeof data.code === 'string' && data.code.trim() ? data.code : undefined;
+  if (!code && data.token === undefined) {
+    return { error: new Error(`${providerLabel} auth page returned neither code nor token.`) };
+  }
+  return { value: { ...(code ? { code } : {}), ...(data.token !== undefined ? { token: data.token } : {}) } };
 }

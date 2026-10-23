@@ -14,7 +14,9 @@ Sign-in by email and password for apps whose accounts are their own (exclusive l
 - `changePassword()` needs a session. The page asks for it with a `mitra-auth-session-request`
   message, and the SDK answers `mitra-auth-session` with the access token through `postMessage`
   to the auth page origin, never in the URL. IAM ends every session of the account when the
-  password changes, so the page signs in again and the new session replaces the current one.
+  password changes, so the page signs in again and the new session replaces the current one. When
+  the change goes through but that sign-in fails, the call rejects with
+  `PASSWORD_CHANGED_SIGN_IN_AGAIN` and the local session is cleared.
 - `auth.requestPasswordReset(email, { language })` asks IAM to email a reset link and returns
   `{ resendAfterSeconds }`, neutral about whether the address has an account. The link opens the
   Mitra auth page, where the new password is typed, so there is no `confirmPasswordReset`. Asking

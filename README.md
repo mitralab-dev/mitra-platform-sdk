@@ -92,6 +92,7 @@ Falhas de API lançam `MitraApiError`, com `status`, `code`, `details` e `retryA
 | `429`, `5xx` | limite de requisições ou falha no servidor | espere `retryAfterSeconds`, quando vier, e repita se a operação puder ser repetida |
 | `INVALID_CONFIGURATION` | argumento inválido, ou `requestEmailCode()` antes de `init()` | corrija o argumento ou chame `init()` no startup |
 | `UNSUPPORTED_AUTH_METHOD` | `signIn` ou `signUp` antigos, com senha no código do app | use `signInWithPassword()` ou `signUpWithPassword()` |
+| `PASSWORD_CHANGED_SIGN_IN_AGAIN` | `changePassword()` trocou a senha, mas o novo login falhou; a sessão local já foi limpa | leve a pessoa ao login com a senha nova |
 | `RATE_LIMITED`, `RATE_LIMIT_EXCEEDED` | `requestPasswordReset()` pedido vezes demais para o mesmo endereço (`RATE_LIMITED`) ou da mesma rede (`RATE_LIMIT_EXCEEDED`) | espere `retryAfterSeconds`, quando vier |
 | `INVALID_CODE` | o código digitado não confere | peça para a pessoa conferir o código |
 | `MAGIC_LINK_EXPIRED`, `MAGIC_LINK_USED`, `MAGIC_LINK_INVALID` | o link do e-mail venceu, já foi usado ou não vale | peça um código novo |

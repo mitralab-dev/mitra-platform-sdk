@@ -1635,6 +1635,44 @@ describe('AuthModule password methods', () => {
       }
     });
 
+    it('should clear the session when the password changed but signing in again failed', async () => {
+      const browser = mockBrowser();
+      storedSession(browser.localStorage, 'access-123', exclusiveRefresh);
+      const fetchMock = mockFetchSequence([]);
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+      const change = auth.changePassword();
+      const state = browser.getStartUrl().searchParams.get('state')!;
+      browser.dispatchMessage({
+        type: 'mitra-oauth-result', success: false, passwordChanged: true, state, error: 'Login failed',
+      });
+
+      await expect(change).rejects.toMatchObject({
+        name: 'MitraApiError',
+        status: 401,
+        code: 'PASSWORD_CHANGED_SIGN_IN_AGAIN',
+      });
+      expect(auth.accessToken).toBeNull();
+      expect(browser.localStorage._store[STORAGE_KEY]).toBeUndefined();
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['a failure without the password changed', { passwordChanged: false }, 'Change failed'],
+      ['a password changed for another state', { passwordChanged: true, state: 'password.forged' }, 'possible CSRF'],
+    ])('should keep the session on %s', async (_case, result, message) => {
+      const browser = mockBrowser();
+      storedSession(browser.localStorage, 'access-123', exclusiveRefresh);
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+      const change = auth.changePassword();
+      const state = browser.getStartUrl().searchParams.get('state')!;
+      browser.dispatchMessage({ type: 'mitra-oauth-result', success: false, state, error: 'Change failed', ...result });
+
+      await expect(change).rejects.toThrow(message);
+      expect(auth.accessToken).toBe('access-123');
+    });
+
     it('should end the popup when the session is gone by the time the page asks for it', async () => {
       const browser = mockBrowser();
       storedSession(browser.localStorage, 'access-123', 'refresh-456');
