@@ -1,7 +1,7 @@
 # Mitra Platform SDK
 
-[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=mitra-platform-sdk&metric=alert_status&token=28d7be14b66d6f88d706347e2418af5ea39ab3e9)](https://sonarcloud.io/summary/new_code?id=mitra-platform-sdk)
-[![Coverage](https://sonarcloud.io/api/project_badges/measure?project=mitra-platform-sdk&metric=coverage&token=28d7be14b66d6f88d706347e2418af5ea39ab3e9)](https://sonarcloud.io/summary/new_code?id=mitra-platform-sdk)
+[![Quality Gate Status](https://sonar.mitralab.ai/api/project_badges/measure?project=mitra-platform-sdk&metric=alert_status&token=sqb_203da0d84eec5dab002ebc06d34d6ff798847314)](https://sonar.mitralab.ai/dashboard?id=mitra-platform-sdk)
+[![Coverage](https://sonar.mitralab.ai/api/project_badges/measure?project=mitra-platform-sdk&metric=coverage&token=sqb_203da0d84eec5dab002ebc06d34d6ff798847314)](https://sonar.mitralab.ai/dashboard?id=mitra-platform-sdk)
 
 SDK JavaScript e TypeScript para apps de browser feitos na Mitra: login da pessoa, dados do app, Server Functions, queries, integrações e chats de agente. Para código que roda dentro de uma Server Function, use [`@mitralab.io/functions-sdk`](https://www.npmjs.com/package/@mitralab.io/functions-sdk).
 
