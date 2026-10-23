@@ -61,8 +61,9 @@ class FakeWebSocket {
   }
 }
 
-// The core gives every message a random UUID v4 as its `clientMessageId`.
-const CLIENT_MESSAGE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+// The core gives every message a random UUID v4 as its `clientMessageId`, or its own id where the
+// runtime has no global crypto (Node 18).
+const CLIENT_MESSAGE_ID = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|m-\d+-\d+)$/;
 
 const BOX_WS_URL = 'wss://api.mitra.io/__ide/3773-box.e2b.app/api/mitra/chat/ws?grant=g&ticket=t';
 
