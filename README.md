@@ -36,7 +36,7 @@ No app gerado pelo Code Studio, `VITE_MITRA_APP_ID` e `VITE_MITRA_API_URL` já v
 
 ## O que dá para fazer
 
-- `auth`: login com Google (`signInWithGoogle`), Microsoft (`signInWithMicrosoft`) ou código por e-mail, mais `currentUser`, `onAuthStateChange` e `signOut`.
+- `auth`: login com Google (`signInWithGoogle`), Microsoft (`signInWithMicrosoft`), código por e-mail ou e-mail e senha (`signInWithPassword`), mais `currentUser`, `onAuthStateChange` e `signOut`.
 - `entities.<Tabela>`: `list`, `filter`, `get`, `create`, `bulkCreate`, `update`, `delete` e `deleteMany` nas tabelas do app.
 - `queries.execute(id, params)`: roda uma query salva no app.
 - `functions`: `execute` espera o resultado da Server Function; `executeAsync` devolve a execução para acompanhar com `getExecution` ou parar com `cancelExecution`. `publicFunctions` chama as Functions publicadas como públicas, sem login.
@@ -50,6 +50,14 @@ Login por código no e-mail, para quem monta a própria tela:
 ```typescript
 const { receipt } = await mitra.auth.requestEmailCode({ email })
 const user = await mitra.auth.verifyEmailCode({ receipt, code })
+```
+
+Login por e-mail e senha, só em app com contas próprias (modo exclusivo) e quando `mitra.passwordLoginEnabled` for `true`. A senha é digitada no popup da Mitra e nunca passa pelo código do app; chame direto do clique, antes de qualquer `await`, para o browser não bloquear o popup:
+
+```typescript
+const user = await mitra.auth.signInWithPassword()   // ou signUpWithPassword()
+await mitra.auth.changePassword()                     // com a pessoa logada
+const { resendAfterSeconds } = await mitra.auth.requestPasswordReset(email)  // o link do e-mail abre a página da Mitra
 ```
 
 Chat com agente:
@@ -83,7 +91,8 @@ Falhas de API lançam `MitraApiError`, com `status`, `code`, `details` e `retryA
 | `403` | a pessoa não tem acesso ao recurso | confira as permissões dela no app |
 | `429`, `5xx` | limite de requisições ou falha no servidor | espere `retryAfterSeconds`, quando vier, e repita se a operação puder ser repetida |
 | `INVALID_CONFIGURATION` | argumento inválido, ou `requestEmailCode()` antes de `init()` | corrija o argumento ou chame `init()` no startup |
-| `UNSUPPORTED_AUTH_METHOD` | `signIn` ou `signUp` com senha | use Google, Microsoft ou código por e-mail |
+| `UNSUPPORTED_AUTH_METHOD` | `signIn` ou `signUp` antigos, com senha no código do app | use `signInWithPassword()` ou `signUpWithPassword()` |
+| `RATE_LIMITED`, `RATE_LIMIT_EXCEEDED` | `requestPasswordReset()` pedido vezes demais para o mesmo endereço (`RATE_LIMITED`) ou da mesma rede (`RATE_LIMIT_EXCEEDED`) | espere `retryAfterSeconds`, quando vier |
 | `INVALID_CODE` | o código digitado não confere | peça para a pessoa conferir o código |
 | `MAGIC_LINK_EXPIRED`, `MAGIC_LINK_USED`, `MAGIC_LINK_INVALID` | o link do e-mail venceu, já foi usado ou não vale | peça um código novo |
 | `REDIRECT_NOT_ALLOWED` | o servidor respondeu com redirect | confira o `apiUrl` |
@@ -93,9 +102,9 @@ Falha de rede chega como o erro do próprio `fetch` (`TypeError`), sem passar po
 
 ## Boas práticas
 
-- Chame `await mitra.init()` no startup, antes de montar a tela de login: `allowSignup`, `emailLoginEnabled` e o login por e-mail dependem dele.
+- Chame `await mitra.init()` no startup, antes de montar a tela de login: `allowSignup`, `emailLoginEnabled`, `passwordLoginEnabled` e o login por e-mail dependem dele.
 - Com `mode: "redirect"`, chame no startup o `completeGoogleSignInRedirect()`, `completeMicrosoftSignInRedirect()` ou `completeEmailSignInRedirect()` do método que você usa. Cada um devolve `null` quando a URL não é dele. O link do e-mail completa o login no mesmo browser que pediu o código; em outro aparelho, a pessoa digita o código.
-- A sessão fica no `localStorage` do domínio do app, na chave `mitra_auth_{appId}`, e é renovada sozinha antes de vencer. `signOut()` limpa.
+- A sessão fica no `localStorage` do domínio do app, na chave `mitra_auth_{appId}`, e é renovada sozinha antes de vencer. `signOut()` limpa e, em app com contas próprias, encerra a sessão no servidor: o refresh token deixa de renovar, e o access token já emitido vale até vencer.
 - Alguns apps recebem tokens extras junto da sessão, em `auth.allTokens`, liberados app por app pela Mitra. O de backoffice é o mais sensível: ele carrega os acessos que a pessoa tem no backoffice da Mitra, vale uma hora e fica no mesmo `localStorage` da sessão, onde qualquer script do domínio do app consegue ler. Leia ele por `auth.ensureFreshBackofficeToken()`, que renova o token quando está perto de vencer e devolve `null` quando o app ou a pessoa não têm esse acesso. Use só contra o backoffice e não repasse para outro serviço.
 - O SDK só repete uma requisição depois de renovar o token num `401`. Fora isso, quem decide repetir é o app.
 - Nunca coloque API key em código que vai para o browser, nem passe uma em `createClient({ apiKey })` num app de browser: o bundle entrega a chave a quem abrir o app. O `signInWithApiKey()` recusa rodar no browser, mas isso não tira do bundle uma chave escrita nele. Para processo sem pessoa, como cron ou coletor, use `@mitralab.io/functions-sdk` com `createClientFromApiKey`.

@@ -120,6 +120,8 @@ export interface RequestOptions extends Omit<TransportRequestOptions, 'method'> 
   params?: Record<string, QueryParamValue>;
   /** @internal Flag to prevent infinite retry loops on 401 */
   isRetry?: boolean;
+  /** Lets the request outlive the page that sent it, as `fetch` `keepalive` does. */
+  keepalive?: boolean;
 }
 
 /**
@@ -181,7 +183,7 @@ export class HttpClient implements Transport {
    * ```
    */
   async request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-    const { method = 'GET', body, headers = {}, params, isRetry } = options;
+    const { method = 'GET', body, headers = {}, params, isRetry, keepalive } = options;
 
     const url = buildRequestUrl(this.baseUrl, path, params);
 
@@ -205,6 +207,7 @@ export class HttpClient implements Transport {
       headers: requestHeaders,
       body: body ? JSON.stringify(body) : undefined,
       redirect: 'manual',
+      ...(keepalive ? { keepalive } : {}),
     });
 
     if (response.redirected || response.type === 'opaqueredirect') {

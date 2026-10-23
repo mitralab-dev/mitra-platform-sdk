@@ -6,6 +6,7 @@ import {
   mockBrowser,
   mockFetchSequence,
   mockLocalStorage,
+  type BrowserHarness,
 } from '../test-utils';
 
 const APP_ID = 'test-app';
@@ -1456,6 +1457,317 @@ describe('AuthModule', () => {
       await expect(auth.completeEmailSignInRedirect()).rejects.toThrow(
         'only available in a browser'
       );
+    });
+  });
+});
+
+describe('AuthModule password methods', () => {
+  const LOGOUT_URL = `${IAM_URL}/api/v1/auth/logout`;
+  const RESET_URL = `${IAM_URL}/api/v1/auth/password/reset`;
+  const exclusiveRefresh = jwt({ app_id: APP_ID, login_mode: 'exclusive', sid: 'session-1' });
+  const sharedRefresh = jwt({ app_id: APP_ID });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function sessionRequest(state: string) {
+    return { type: 'mitra-auth-session-request', state };
+  }
+
+  /** Lets the async hand-over of the session reach `postMessage`. */
+  function flushMicrotasks(): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  describe('signInWithPassword and signUpWithPassword', () => {
+    it.each([
+      ['signInWithPassword', 'login'],
+      ['signUpWithPassword', 'signup'],
+    ] as const)('%s should open the password view %s and redeem the exchange code', async (method, view) => {
+      const browser = mockBrowser();
+      const fetchMock = mockFetchSequence([
+        { body: fakeTokenResponse },
+        { body: currentUserResponse },
+      ]);
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+      const signIn = auth[method]();
+      const startUrl = browser.getStartUrl();
+      const state = startUrl.searchParams.get('state')!;
+      browser.dispatchMessage(authPageResult(state, { code: 'exchange-code' }));
+
+      await expect(signIn).resolves.toEqual(apiUser);
+      expect(startUrl.origin + startUrl.pathname).toBe(AUTH_PAGE_URL);
+      expect(startUrl.searchParams.get('provider')).toBe('password');
+      expect(startUrl.searchParams.get('view')).toBe(view);
+      expect(startUrl.searchParams.get('origin')).toBe('https://app.example.com');
+      expect(state.startsWith('password.')).toBe(true);
+      expect(fetchMock.mock.calls[0][0]).toBe(EXCHANGE_URL);
+      expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ appId: APP_ID, code: 'exchange-code' });
+      expect(browser.popup.postMessage).not.toHaveBeenCalled();
+    });
+
+    it('should not hand the session to a login popup that asks for it', async () => {
+      const browser = mockBrowser();
+      storedSession(browser.localStorage, 'access-123', exclusiveRefresh);
+      mockFetchSequence([]);
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+      void auth.signInWithPassword().catch(() => undefined);
+      const state = browser.getStartUrl().searchParams.get('state')!;
+      browser.dispatchMessage(sessionRequest(state));
+      await flushMicrotasks();
+
+      expect(browser.popup.postMessage).not.toHaveBeenCalled();
+    });
+
+    it('should refuse a popup on another view while one is open, without navigating it away', async () => {
+      const browser = mockBrowser();
+      mockFetchSequence([{ body: fakeTokenResponse }, { body: currentUserResponse }]);
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+      const signIn = auth.signInWithPassword();
+      await expect(auth.signUpWithPassword()).rejects.toThrow('Another Password popup is already open.');
+      const state = browser.getStartUrl().searchParams.get('state')!;
+      browser.dispatchMessage(authPageResult(state, { code: 'exchange-code' }));
+
+      await expect(signIn).resolves.toEqual(apiUser);
+      expect(browser.window.open).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe('changePassword', () => {
+    it('should refuse without a session before opening any popup', async () => {
+      const browser = mockBrowser();
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+      await expect(auth.changePassword()).rejects.toMatchObject({ name: 'MitraApiError', status: 401 });
+      expect(browser.window.open).not.toHaveBeenCalled();
+    });
+
+    it('should hand the token over by postMessage only, and adopt the session the page signs in again with', async () => {
+      const browser = mockBrowser();
+      storedSession(browser.localStorage, 'access-123', exclusiveRefresh);
+      const fetchMock = mockFetchSequence([
+        { body: { accessToken: 'access-new', refreshToken: 'refresh-new', tokenType: 'Bearer' } },
+        { body: currentUserResponse },
+      ]);
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+      const change = auth.changePassword();
+      const startUrl = browser.getStartUrl();
+      const state = startUrl.searchParams.get('state')!;
+      expect(startUrl.searchParams.get('view')).toBe('change');
+      expect(startUrl.toString()).not.toContain('access-123');
+
+      browser.dispatchMessage(sessionRequest('password.forged'));
+      browser.dispatchMessage(sessionRequest(state), { origin: 'https://evil.example.com' });
+      browser.dispatchMessage(sessionRequest(state), { source: null });
+      await flushMicrotasks();
+      expect(browser.popup.postMessage).not.toHaveBeenCalled();
+
+      browser.dispatchMessage(sessionRequest(state));
+      await flushMicrotasks();
+      expect(browser.popup.postMessage).toHaveBeenCalledExactlyOnceWith(
+        { type: 'mitra-auth-session', state, accessToken: 'access-123' },
+        API_URL
+      );
+
+      browser.dispatchMessage(authPageResult(state, { code: 'exchange-code' }));
+      await expect(change).resolves.toEqual(apiUser);
+      expect(fetchMock.mock.calls[0][0]).toBe(EXCHANGE_URL);
+      expect(auth.accessToken).toBe('access-new');
+      expect(JSON.parse(browser.localStorage._store[STORAGE_KEY]).refreshToken).toBe('refresh-new');
+    });
+
+    it('should renew a token close to expiry before handing it over', async () => {
+      const browser = mockBrowser();
+      const expiring = jwt({ app_id: APP_ID, exp: Math.floor(Date.now() / 1_000) + 10 });
+      storedSession(browser.localStorage, expiring, exclusiveRefresh);
+      const fetchMock = mockFetchSequence([
+        { body: { accessToken: 'access-fresh', refreshToken: exclusiveRefresh, tokenType: 'Bearer' } },
+      ]);
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+      void auth.changePassword().catch(() => undefined);
+      const state = browser.getStartUrl().searchParams.get('state')!;
+      browser.dispatchMessage(sessionRequest(state));
+      await flushMicrotasks();
+
+      expect(fetchMock.mock.calls[0][0]).toBe(`${IAM_URL}/api/v1/auth/refresh-token`);
+      expect(browser.popup.postMessage).toHaveBeenCalledExactlyOnceWith(
+        { type: 'mitra-auth-session', state, accessToken: 'access-fresh' },
+        API_URL
+      );
+    });
+
+    it.each([
+      ['the result arrives', (browser: BrowserHarness, state: string) => {
+        browser.dispatchMessage({ type: 'mitra-oauth-result', success: false, state, error: 'Cancelled' });
+      }],
+      ['the popup is closed', (browser: BrowserHarness) => {
+        (browser.popup as { closed: boolean }).closed = true;
+        vi.advanceTimersByTime(500);
+      }],
+    ])('should not hand the token over when %s while it is being read', async (_case, settle) => {
+      vi.useFakeTimers();
+      try {
+        const browser = mockBrowser();
+        const expiring = jwt({ app_id: APP_ID, exp: Math.floor(Date.now() / 1_000) + 10 });
+        storedSession(browser.localStorage, expiring, exclusiveRefresh);
+        const refresh = deferred<Response>();
+        vi.stubGlobal('fetch', vi.fn().mockReturnValueOnce(refresh.promise));
+        const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+        const change = auth.changePassword();
+        const state = browser.getStartUrl().searchParams.get('state')!;
+        browser.dispatchMessage(sessionRequest(state));
+        settle(browser, state);
+        await expect(change).rejects.toThrow();
+
+        refresh.resolve(jsonResponse({ accessToken: 'access-fresh', refreshToken: exclusiveRefresh, tokenType: 'Bearer' }));
+        await vi.runAllTimersAsync();
+
+        expect(browser.popup.postMessage).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('should end the popup when the session is gone by the time the page asks for it', async () => {
+      const browser = mockBrowser();
+      storedSession(browser.localStorage, 'access-123', 'refresh-456');
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+      const change = auth.changePassword();
+      const state = browser.getStartUrl().searchParams.get('state')!;
+      auth.signOut();
+      browser.dispatchMessage(sessionRequest(state));
+
+      await expect(change).rejects.toThrow('Password popup needs a signed-in session.');
+      expect(browser.popup.postMessage).not.toHaveBeenCalled();
+      expect(browser.popup.close).toHaveBeenCalled();
+    });
+  });
+
+  describe('requestPasswordReset', () => {
+    it('should send only the address, the app, this origin and the language, without a session', async () => {
+      const browser = mockBrowser();
+      storedSession(browser.localStorage, 'access-123', 'refresh-456');
+      const fetchMock = mockFetchSequence([{ status: 202, body: { resendAfterSeconds: 60 } }]);
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+      await expect(auth.requestPasswordReset('person@example.com', { language: 'en' }))
+        .resolves.toEqual({ resendAfterSeconds: 60 });
+
+      expect(fetchMock.mock.calls[0][0]).toBe(RESET_URL);
+      expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+        email: 'person@example.com',
+        appId: APP_ID,
+        origin: 'https://app.example.com',
+        language: 'en',
+      });
+      expect(fetchMock.mock.calls[0][1].headers).not.toHaveProperty('Authorization');
+    });
+
+    it('should surface the IAM error, retry delay included', async () => {
+      mockBrowser();
+      mockFetchSequence([{
+        status: 429,
+        body: { message: 'Too many requests', error_code: 'RATE_LIMITED' },
+        headers: { 'Retry-After': '30' },
+      }]);
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+      await expect(auth.requestPasswordReset('person@example.com')).rejects.toMatchObject({
+        status: 429,
+        code: 'RATE_LIMITED',
+        retryAfterSeconds: 30,
+      });
+    });
+
+    it('should refuse an answer without the resend delay', async () => {
+      mockBrowser();
+      mockFetchSequence([{ status: 202, body: {} }]);
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+      await expect(auth.requestPasswordReset('person@example.com')).rejects.toMatchObject({
+        code: 'INVALID_RESPONSE',
+      });
+    });
+
+    it('should require a browser', async () => {
+      vi.stubGlobal('window', undefined);
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+      await expect(auth.requestPasswordReset('person@example.com')).rejects.toThrow('only available in a browser');
+    });
+  });
+
+  describe('signOut', () => {
+    it('should end an exclusive app session on the server, with keepalive and no access token', () => {
+      const storage = mockLocalStorage();
+      storedSession(storage, 'access-123', exclusiveRefresh);
+      const fetchMock = mockFetchSequence([{ status: 204, body: undefined }]);
+      const auth = new AuthModule(APP_ID, IAM_URL);
+
+      auth.signOut();
+
+      expect(auth.accessToken).toBeNull();
+      expect(storage._store[STORAGE_KEY]).toBeUndefined();
+      expect(fetchMock).toHaveBeenCalledOnce();
+      const [url, init] = fetchMock.mock.calls[0];
+      expect(url).toBe(LOGOUT_URL);
+      expect(init).toMatchObject({ method: 'POST', keepalive: true });
+      expect(JSON.parse(init.body)).toEqual({ refreshToken: exclusiveRefresh });
+      expect(init.headers).not.toHaveProperty('Authorization');
+    });
+
+    it('should clear the local state even when the logout request fails', async () => {
+      const storage = mockLocalStorage();
+      storedSession(storage, 'access-123', exclusiveRefresh);
+      const fetchMock = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+      vi.stubGlobal('fetch', fetchMock);
+      const auth = new AuthModule(APP_ID, IAM_URL);
+      const listener = vi.fn();
+      auth.onAuthStateChange(listener);
+
+      expect(() => auth.signOut()).not.toThrow();
+      await Promise.resolve();
+
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(auth.isAuthenticated).toBe(false);
+      expect(storage._store[STORAGE_KEY]).toBeUndefined();
+      expect(listener).toHaveBeenLastCalledWith(null);
+    });
+
+    it.each([
+      ['a shared app session', sharedRefresh],
+      ['an opaque refresh token', 'refresh-456'],
+      ['no refresh token', null],
+    ])('should not call the logout for %s', (_case, refreshToken) => {
+      const storage = mockLocalStorage();
+      storage._store[STORAGE_KEY] = JSON.stringify({ user: fakeUser, token: 'access-123', refreshToken });
+      const fetchMock = mockFetchSequence([]);
+      const auth = new AuthModule(APP_ID, IAM_URL);
+
+      auth.signOut();
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(auth.accessToken).toBeNull();
+    });
+
+    it('should not call the logout twice when signing out of a session already gone', () => {
+      const storage = mockLocalStorage();
+      storedSession(storage, 'access-123', exclusiveRefresh);
+      const fetchMock = mockFetchSequence([{ status: 204, body: undefined }]);
+      const auth = new AuthModule(APP_ID, IAM_URL);
+
+      auth.signOut();
+      auth.signOut();
+
+      expect(fetchMock).toHaveBeenCalledOnce();
     });
   });
 });

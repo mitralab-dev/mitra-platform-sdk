@@ -108,6 +108,7 @@ export function mockBrowser(injectedAuthPageUrl?: unknown): BrowserHarness {
     close: vi.fn(function close(this: { closed: boolean }) {
       this.closed = true;
     }),
+    postMessage: vi.fn(),
   } as unknown as Window;
   const location = {
     origin: 'https://app.example.com',

@@ -49,6 +49,8 @@ export type {
   EmailSignInOptions,
   GoogleSignInOptions,
   MicrosoftSignInOptions,
+  PasswordResetOptions,
+  PasswordResetRequestResult,
   EntityListOptions,
   EntityTable,
   FunctionExecution,

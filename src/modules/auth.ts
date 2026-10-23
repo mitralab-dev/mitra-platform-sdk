@@ -1,10 +1,10 @@
 import { stripTrailingSlashes } from '../utils/url';
-import { createAuthModule, type AuthModule as CoreAuthModule } from '@mitralab.io/sdk-core';
+import { createAuthModule, expectObject, type AuthModule as CoreAuthModule } from '@mitralab.io/sdk-core';
 import { coreErrors } from '../core-errors';
 import { HttpClient, MitraApiError } from '../utils/http-client';
 import { assertServerRuntime, resolveApiKeySession } from './api-key-auth';
 import { expectAuthTokenResponse, AuthPageFlow, normalizeAllTokens } from './auth-page-flow';
-import { EmailCodeFlow } from './email-code-flow';
+import { EmailCodeFlow, resolveLanguage } from './email-code-flow';
 import type {
   User,
   SignInCredentials,
@@ -20,6 +20,8 @@ import type {
   EmailSignInOptions,
   GoogleSignInOptions,
   MicrosoftSignInOptions,
+  PasswordResetOptions,
+  PasswordResetRequestResult,
 } from './auth.types';
 
 export type {
@@ -40,6 +42,8 @@ export type {
   EmailSignInOptions,
   GoogleSignInOptions,
   MicrosoftSignInOptions,
+  PasswordResetOptions,
+  PasswordResetRequestResult,
 } from './auth.types';
 
 interface AuthModuleOptions {
@@ -62,6 +66,8 @@ interface RefreshFlight {
 }
 
 const DEFAULT_TOKEN_VALIDITY_MS = 30_000;
+const LOGOUT_PATH = '/api/v1/auth/logout';
+const PASSWORD_RESET_PATH = '/api/v1/auth/password/reset';
 
 /**
  * Twice the app session's margin because there is no second chance here: the
@@ -115,6 +121,30 @@ function subjectOf(token: string): string | null {
   return typeof sub === 'string' && sub !== '' ? sub : null;
 }
 
+/**
+ * Whether a refresh token is the session of an exclusive app account, the only
+ * kind IAM ends at `/auth/logout`. In a shared app the session is the person's
+ * platform session, which that route leaves alone while still answering 204,
+ * so the request would only cost a round trip.
+ */
+function isExclusiveAppSession(refreshToken: string): boolean {
+  return decodeJwtPayload(refreshToken)?.login_mode === 'exclusive';
+}
+
+function expectPasswordResetRequestResult(value: unknown): PasswordResetRequestResult {
+  const response = expectObject<Record<string, unknown>>(
+    value,
+    'Password reset request response',
+    coreErrors
+  );
+  if (typeof response.resendAfterSeconds !== 'number' || !Number.isFinite(response.resendAfterSeconds)) {
+    throw coreErrors.invalidResponse(
+      'Password reset request response has an invalid resendAfterSeconds field'
+    );
+  }
+  return { resendAfterSeconds: response.resendAfterSeconds };
+}
+
 function isTokenExpiring(token: string, minValidityMs: number): boolean {
   const exp = decodeJwtPayload(token)?.exp;
   if (typeof exp !== 'number' || !Number.isFinite(exp)) return false;
@@ -159,7 +189,7 @@ function isDefinitiveRefreshFailure(error: unknown): boolean {
 /**
  * Authentication module for managing user sessions.
  *
- * Handles Google and Microsoft SSO, email sign-in, trusted session adoption, sign-out,
+ * Handles Google and Microsoft SSO, email and password sign-in, trusted session adoption, sign-out,
  * and automatic token refresh.
  * Auth state is persisted to localStorage with key `mitra_auth_{appId}`
  * and restored on page reload.
@@ -189,6 +219,7 @@ export class AuthModule {
   private readonly googleAuth: AuthPageFlow;
   private readonly microsoftAuth: AuthPageFlow;
   private readonly emailAuth: AuthPageFlow;
+  private readonly passwordAuth: AuthPageFlow;
   private readonly emailCode: EmailCodeFlow;
   private brand: string | null = null;
 
@@ -230,6 +261,13 @@ export class AuthModule {
       authPageUrl: options.authPageUrl,
       client: this.publicClient,
       provider: 'email',
+    });
+    this.passwordAuth = new AuthPageFlow({
+      appId,
+      apiUrl,
+      authPageUrl: options.authPageUrl,
+      client: this.publicClient,
+      provider: 'password',
     });
     this.emailCode = new EmailCodeFlow({
       appId,
@@ -285,11 +323,14 @@ export class AuthModule {
     return this._currentUser !== null && this.#accessToken !== null;
   }
 
-  /** @deprecated Email/password authentication is not implemented by IAM. Use signInWithEmail() or SSO. */
+  /**
+   * @deprecated The password never goes through the app's code. Use
+   * signInWithPassword(), which opens the Mitra auth page, signInWithEmail() or SSO.
+   */
   signIn(_credentials: SignInCredentials): Promise<User> {
     return Promise.reject(
       new MitraApiError(
-        'Email/password authentication is not available. Use signInWithEmail(), signInWithGoogle() or signInWithMicrosoft().',
+        'Email/password authentication is not available. Use signInWithPassword(), signInWithEmail(), signInWithGoogle() or signInWithMicrosoft().',
         0,
         'UNSUPPORTED_AUTH_METHOD'
       )
@@ -549,11 +590,14 @@ export class AuthModule {
     return tokenResponse ? this.establishSession(tokenResponse) : null;
   }
 
-  /** @deprecated Email/password registration is not implemented by IAM. Use signInWithEmail() or SSO. */
+  /**
+   * @deprecated The password never goes through the app's code. Use
+   * signUpWithPassword(), which opens the Mitra auth page, signInWithEmail() or SSO.
+   */
   signUp(_data: SignUpData): Promise<User> {
     return Promise.reject(
       new MitraApiError(
-        'Email/password registration is not available. Use signInWithEmail(), signInWithGoogle() or signInWithMicrosoft().',
+        'Email/password registration is not available. Use signUpWithPassword(), signInWithEmail(), signInWithGoogle() or signInWithMicrosoft().',
         0,
         'UNSUPPORTED_AUTH_METHOD'
       )
@@ -561,7 +605,131 @@ export class AuthModule {
   }
 
   /**
+   * Signs in with email and password, typed into the Mitra auth page in a popup.
+   * The password never reaches the app's code: the page sends it to IAM and
+   * hands back a single-use exchange code, redeemed like the email sign-in.
+   *
+   * Offer it only when `mitra.passwordLoginEnabled` is `true`, which needs an
+   * app whose accounts are its own (exclusive login mode). Call it straight
+   * from the click handler, before any `await`, or the browser blocks the popup.
+   *
+   * @returns The authenticated and hydrated user.
+   * @throws {MitraApiError} When IAM rejects the exchange code.
+   * @throws {Error} When the browser blocks or cancels the popup, the flow times
+   * out, or the response fails origin, source, state, or shape validation. Wrong
+   * credentials are answered on the auth page itself, not here.
+   *
+   * @example
+   * ```typescript
+   * const user = await mitra.auth.signInWithPassword();
+   * ```
+   */
+  async signInWithPassword(): Promise<User> {
+    return this.establishSession(await this.passwordAuth.signInWithPopup({ view: 'login' }));
+  }
+
+  /**
+   * Creates a password for an app account, on the Mitra auth page in a popup:
+   * the page asks for the address, sends a code to it to prove the mailbox is
+   * the person's, and takes the password with that code. The person ends signed
+   * in, as with {@link signInWithPassword}.
+   *
+   * @returns The authenticated and hydrated user.
+   * @throws The same errors as {@link signInWithPassword}.
+   *
+   * @example
+   * ```typescript
+   * const user = await mitra.auth.signUpWithPassword();
+   * ```
+   */
+  async signUpWithPassword(): Promise<User> {
+    return this.establishSession(await this.passwordAuth.signInWithPopup({ view: 'signup' }));
+  }
+
+  /**
+   * Changes the password of the signed-in person, on the Mitra auth page in a
+   * popup. The page asks for the current and the new password itself, so the
+   * app never sees either one.
+   *
+   * The page acts on this session, so it asks for the access token once it
+   * loads, and the SDK answers with `postMessage` to the auth page origin only:
+   * the token never goes in the popup URL.
+   *
+   * IAM ends every session of the account when the password changes, this one
+   * included, so the page signs in again with the new password and hands back a
+   * new session, which replaces the current one.
+   *
+   * @returns The user of the new session.
+   * @throws {MitraApiError} `401` when nobody is signed in.
+   * @throws The same errors as {@link signInWithPassword}, and an error when the
+   * session ends while the popup is open.
+   *
+   * @example
+   * ```typescript
+   * await mitra.auth.changePassword();
+   * ```
+   */
+  async changePassword(): Promise<User> {
+    if (!this.#accessToken) {
+      throw new MitraApiError('Sign in before changing the password.', 401);
+    }
+    // Read when the page asks, not now: the popup has to open within the click,
+    // and the token may be renewed while the person types.
+    const sessionToken = async () => {
+      await this.ensureFreshSession();
+      return this.#accessToken;
+    };
+    return this.establishSession(
+      await this.passwordAuth.signInWithPopup({ view: 'change', sessionToken })
+    );
+  }
+
+  /**
+   * Asks IAM to email a link to set a new password. Only the address goes: the
+   * link opens the Mitra auth page, where the new password is typed, so there
+   * is no method here to confirm the reset.
+   *
+   * IAM answers the same whether or not the address has an account, so this
+   * resolves without saying which.
+   *
+   * @param email - The address of the account.
+   * @param options - The language of the message.
+   * @returns How long the application should wait before offering to resend.
+   * @throws {MitraApiError} `RATE_LIMITED` when this address asked too often,
+   * and `RATE_LIMIT_EXCEEDED` when this network did, both with
+   * `retryAfterSeconds` when IAM sends it.
+   *
+   * @example
+   * ```typescript
+   * const { resendAfterSeconds } = await mitra.auth.requestPasswordReset('person@example.com');
+   * ```
+   */
+  async requestPasswordReset(
+    email: string,
+    options: PasswordResetOptions = {}
+  ): Promise<PasswordResetRequestResult> {
+    if (globalThis.window === undefined) {
+      throw new Error('Password reset is only available in a browser.');
+    }
+    const browserWindow = globalThis.window;
+    return expectPasswordResetRequestResult(
+      await this.publicClient.post<unknown>(PASSWORD_RESET_PATH, {
+        email,
+        appId: this.appId,
+        origin: browserWindow.location.origin,
+        language: resolveLanguage(options.language, browserWindow),
+      })
+    );
+  }
+
+  /**
    * Signs out the current user, clearing all auth state and localStorage.
+   *
+   * In an app whose accounts are its own, the session also ends on the server:
+   * the refresh token is sent to IAM's logout, so it can no longer be renewed.
+   * The local state is cleared right away whatever IAM answers, and the request
+   * survives a navigation to `redirectUrl`. The access token already issued
+   * stays valid until it expires.
    *
    * @param redirectUrl - Optional URL to navigate to after sign-out.
    *
@@ -572,7 +740,11 @@ export class AuthModule {
    * ```
    */
   signOut(redirectUrl?: string): void {
+    const refreshToken = this.#refreshToken;
     this.clearAuthState();
+    if (refreshToken && isExclusiveAppSession(refreshToken)) {
+      this.endServerSession(refreshToken);
+    }
 
     if (globalThis.window !== undefined && redirectUrl) {
       globalThis.window.location.href = redirectUrl;
@@ -946,6 +1118,13 @@ export class AuthModule {
     return () => {
       this.listeners.delete(callback);
     };
+  }
+
+  /** Best effort: the person asked to leave, and that already happened locally. */
+  private endServerSession(refreshToken: string): void {
+    this.publicClient
+      .request<unknown>(LOGOUT_PATH, { method: 'POST', body: { refreshToken }, keepalive: true })
+      .catch(() => undefined);
   }
 
   private async doRefresh(generation: number, refreshToken: string): Promise<boolean> {

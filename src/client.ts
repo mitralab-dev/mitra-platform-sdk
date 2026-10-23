@@ -85,6 +85,7 @@ interface AppInfoResponse {
   dataSourceId: string | null;
   allowSignup: boolean;
   emailLoginEnabled: boolean;
+  passwordLoginEnabled: boolean;
   /** Which platform brand answers for this app, `null` when the server omits it. */
   brand: string | null;
 }
@@ -116,6 +117,7 @@ function expectAppInfoResponse(value: unknown): AppInfoResponse {
     // answers without this field, and an app that cannot prove it is enabled
     // should stop offering the option, not stop starting.
     emailLoginEnabled: response.emailLoginEnabled === true,
+    passwordLoginEnabled: response.passwordLoginEnabled === true,
     // Same reasoning, and the brand is never guessed: without it the headless
     // email methods refuse instead of asking IAM to brand a message at random.
     brand: typeof response.brand === 'string' && response.brand.trim() ? response.brand : null,
@@ -149,8 +151,9 @@ export interface MitraClient {
   /**
    * Initializes the client by resolving app config from the server.
    *
-   * Fetches the compatibility dataSourceId, allowSignup, emailLoginEnabled, and
-   * the brand `requestEmailCode()` sends with, from the public app info endpoint.
+   * Fetches the compatibility dataSourceId, allowSignup, emailLoginEnabled,
+   * passwordLoginEnabled, and the brand `requestEmailCode()` sends with, from
+   * the public app info endpoint.
    *
    * Safe to call multiple times. Subsequent calls are no-ops.
    *
@@ -255,6 +258,13 @@ export interface MitraClient {
   readonly emailLoginEnabled: boolean;
 
   /**
+   * Whether this app offers sign-in by email and password, which only an app
+   * whose accounts are its own can. Defaults to `false` before `init()` is
+   * called, and stays `false` when the server does not answer the field.
+   */
+  readonly passwordLoginEnabled: boolean;
+
+  /**
    * The configuration used to create this client.
    */
   config: MitraClientConfig;
@@ -271,7 +281,7 @@ export interface MitraClient {
  * - **queries**: Custom query management and execution
  *
  * After creating the client, call `init()` to resolve the app's public config
- * (dataSourceId, allowSignup, emailLoginEnabled) automatically from the server.
+ * (dataSourceId, allowSignup, emailLoginEnabled, passwordLoginEnabled) automatically from the server.
  *
  * @param config - Configuration options for the client.
  * @returns A configured MitraClient instance.
@@ -395,6 +405,7 @@ export function createClient(config: MitraClientConfig): MitraClient {
   let initialized = false;
   let allowSignup = true;
   let emailLoginEnabled = false;
+  let passwordLoginEnabled = false;
 
   async function init(): Promise<void> {
     if (initialized) return;
@@ -418,6 +429,7 @@ export function createClient(config: MitraClientConfig): MitraClient {
     }
     allowSignup = appInfo.allowSignup;
     emailLoginEnabled = appInfo.emailLoginEnabled;
+    passwordLoginEnabled = appInfo.passwordLoginEnabled;
 
     initialized = true;
   }
@@ -437,6 +449,9 @@ export function createClient(config: MitraClientConfig): MitraClient {
     },
     get emailLoginEnabled() {
       return emailLoginEnabled;
+    },
+    get passwordLoginEnabled() {
+      return passwordLoginEnabled;
     },
     config,
   };
@@ -459,6 +474,8 @@ export type {
   EmailSignInOptions,
   GoogleSignInOptions,
   MicrosoftSignInOptions,
+  PasswordResetOptions,
+  PasswordResetRequestResult,
 } from './modules/auth';
 export type { EntityListOptions, EntityTable } from './modules/entities';
 export type { FunctionExecution } from './modules/functions';

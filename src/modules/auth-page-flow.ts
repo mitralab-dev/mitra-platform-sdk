@@ -13,8 +13,30 @@ import type {
 } from './auth.types';
 
 const RESULT_TYPE = 'mitra-oauth-result';
+/** The auth page asks for the app session with this, once it is ready to receive it. */
+const SESSION_REQUEST_TYPE = 'mitra-auth-session-request';
+/** The answer to {@link SESSION_REQUEST_TYPE}, posted only to the auth page origin. */
+const SESSION_TYPE = 'mitra-auth-session';
 
-export type AuthPageProvider = 'google' | 'microsoft' | 'email';
+export type AuthPageProvider = 'google' | 'microsoft' | 'email' | 'password';
+
+/**
+ * What one popup of the auth page is opened for: which screen it starts on and,
+ * for a screen that acts on the current session, how to read that session.
+ *
+ * @internal
+ */
+export interface AuthPagePopupRequest {
+  /** Screen the auth page starts on, sent as the `view` parameter. */
+  view?: string;
+  /**
+   * Reads the access token handed to the auth page when it asks for it. The
+   * token goes by `postMessage` to the auth page origin only, never in the URL,
+   * where it would stay in history and in the logs of every hop. `null` means
+   * there is no session to hand over, which ends the popup.
+   */
+  sessionToken?: () => Promise<string | null>;
+}
 
 interface AuthPageProviderProfile {
   /** Name of the provider in errors handed to the application. */
@@ -66,6 +88,17 @@ const PROVIDERS: Record<AuthPageProvider, AuthPageProviderProfile> = {
     sendsRedirectUri: false,
     redirectStorage: 'localStorage',
     pendingRequestTtlMs: TEN_MINUTES_MS,
+    popupTimeoutMs: TEN_MINUTES_MS,
+  },
+  // IAM answers a password login, signup or change with the same single-use
+  // exchange code the email flow gets. Signing up waits on a code read from a
+  // mailbox, hence the email timeout; there is no link, so nothing pending is
+  // written for another tab.
+  password: {
+    label: 'Password',
+    exchangePath: '/api/v1/auth/magic-link/exchange',
+    sendsRedirectUri: false,
+    redirectStorage: 'sessionStorage',
     popupTimeoutMs: TEN_MINUTES_MS,
   },
 };
@@ -164,7 +197,7 @@ export function expectAuthTokenResponse(value: unknown): AuthTokenResponse {
   };
 }
 
-/** Coordinates the browser-only handshake through the brand auth page (Google, Microsoft, or email) and returns IAM tokens. */
+/** Coordinates the browser-only handshake through the brand auth page (Google, Microsoft, email, or password) and returns IAM tokens. */
 export class AuthPageFlow {
   private readonly appId: string;
   private readonly apiUrl: string;
@@ -175,6 +208,7 @@ export class AuthPageFlow {
   private readonly providerLabel: string;
   private readonly redirectStorageKey: string;
   private popupPromise: Promise<AuthTokenResponse> | null = null;
+  private popupView: string | undefined;
 
   constructor(config: AuthPageFlowConfig) {
     this.appId = config.appId;
@@ -198,10 +232,27 @@ export class AuthPageFlow {
       return Promise.reject(new Error(`Unsupported ${this.providerLabel} sign-in mode: ${String(options.mode)}`));
     }
 
-    if (this.popupPromise) return this.popupPromise;
+    return this.signInWithPopup({});
+  }
 
-    this.popupPromise = this.startPopup(browserWindow).finally(() => {
+  /**
+   * Opens the auth page in a popup on the given screen. A second call while the
+   * popup is open joins it when it asks for the same screen, and is refused
+   * otherwise: both would share one browser window, and the second would
+   * navigate it away from the first.
+   */
+  signInWithPopup(request: AuthPagePopupRequest): Promise<AuthTokenResponse> {
+    const browserWindow = this.requireBrowser();
+
+    if (this.popupPromise) {
+      if (this.popupView === request.view) return this.popupPromise;
+      return Promise.reject(new Error(`Another ${this.providerLabel} popup is already open.`));
+    }
+
+    this.popupView = request.view;
+    this.popupPromise = this.startPopup(browserWindow, request).finally(() => {
       this.popupPromise = null;
+      this.popupView = undefined;
     });
     return this.popupPromise;
   }
@@ -279,7 +330,10 @@ export class AuthPageFlow {
     return this.exchangeCode(code, context.redirectUri);
   }
 
-  private async startPopup(browserWindow: MitraWindow): Promise<AuthTokenResponse> {
+  private async startPopup(
+    browserWindow: MitraWindow,
+    request: AuthPagePopupRequest
+  ): Promise<AuthTokenResponse> {
     const state = this.generateState();
     const authPageUrl = resolveAuthPageUrl(
       this.apiUrl,
@@ -297,8 +351,17 @@ export class AuthPageFlow {
         this.newRedirectContext(state, this.getRedirectUri(authPageUrl))
       );
     }
-    const popup = this.openPopup(browserWindow, this.buildStartUrl(browserWindow, authPageUrl, state));
-    const result = await this.waitForPopupResult(browserWindow, popup, authPageUrl.origin, state);
+    const popup = this.openPopup(
+      browserWindow,
+      this.buildStartUrl(browserWindow, authPageUrl, state, request.view)
+    );
+    const result = await this.waitForPopupResult(
+      browserWindow,
+      popup,
+      authPageUrl.origin,
+      state,
+      request.sessionToken
+    );
     if (completedInAnotherTab) this.clearRedirectContext(browserWindow);
 
     if (result.code) return this.exchangeCode(result.code, this.getRedirectUri(authPageUrl));
@@ -398,7 +461,8 @@ export class AuthPageFlow {
   private buildStartUrl(
     browserWindow: MitraWindow,
     authPageUrl: URL,
-    state: string
+    state: string,
+    view?: string
   ): URL {
     const startUrl = new URL(authPageUrl);
     startUrl.searchParams.set('provider', this.provider);
@@ -407,6 +471,7 @@ export class AuthPageFlow {
     startUrl.searchParams.set('apiUrl', this.apiUrl);
     startUrl.searchParams.set('origin', browserWindow.location.origin);
     startUrl.searchParams.set('responseType', 'code');
+    if (view) startUrl.searchParams.set('view', view);
     return startUrl;
   }
 
@@ -475,7 +540,8 @@ export class AuthPageFlow {
     browserWindow: MitraWindow,
     popup: Window,
     expectedOrigin: string,
-    expectedState: string
+    expectedState: string,
+    sessionToken?: () => Promise<string | null>
   ): Promise<{ code?: string; token?: unknown }> {
     return new Promise((resolve, reject) => {
       const timeout = globalThis.setTimeout(() => {
@@ -489,11 +555,29 @@ export class AuthPageFlow {
         }
       }, POPUP_CLOSED_POLL_MS);
 
+      let settled = false;
+      const handOverSession = async (readToken: () => Promise<string | null>) => {
+        const accessToken = await readToken().catch(() => null);
+        if (settled) return;
+        if (!accessToken) {
+          cleanup();
+          reject(new Error(`${this.providerLabel} popup needs a signed-in session.`));
+          return;
+        }
+        popup.postMessage({ type: SESSION_TYPE, state: expectedState, accessToken }, expectedOrigin);
+      };
+
       const onMessage = (event: MessageEvent<unknown>) => {
         if (event.origin !== expectedOrigin || event.source !== popup) return;
         if (!event.data || typeof event.data !== 'object') return;
 
         const data = event.data as Record<string, unknown>;
+        if (data.type === SESSION_REQUEST_TYPE) {
+          // Only the page this flow opened, on the screen that acts on the
+          // session, and naming this flow's state, ever receives the token.
+          if (sessionToken && data.state === expectedState) void handOverSession(sessionToken);
+          return;
+        }
         if (data.type !== RESULT_TYPE) return;
         if (data.state !== expectedState) {
           cleanup();
@@ -520,6 +604,7 @@ export class AuthPageFlow {
       };
 
       const cleanup = () => {
+        settled = true;
         globalThis.clearTimeout(timeout);
         globalThis.clearInterval(closedPoll);
         browserWindow.removeEventListener('message', onMessage);
