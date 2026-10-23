@@ -61,6 +61,9 @@ class FakeWebSocket {
   }
 }
 
+// The core gives every message a random UUID v4 as its `clientMessageId`.
+const CLIENT_MESSAGE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
 const BOX_WS_URL = 'wss://api.mitra.io/__ide/3773-box.e2b.app/api/mitra/chat/ws?grant=g&ticket=t';
 
 const auth: AuthSessionPort = {
@@ -273,9 +276,12 @@ describe('agent input outbox', () => {
       session.send('second');
       goOnline();
 
-      await vi.waitFor(() => expect(inputs).toHaveBeenCalledTimes(1));
-      expect(JSON.parse(String(vi.mocked(fetch).mock.calls.at(-1)?.[1]?.body))).toMatchObject({ content: 'first' });
-      expect(session.queue.map((item) => item.text)).toEqual(['second']);
+      await vi.waitFor(() => expect(inputs).toHaveBeenCalledTimes(2));
+      expect(inputs.mock.calls.map(([body]) => body)).toEqual([
+        { type: 'message', content: 'first', clientMessageId: expect.stringMatching(CLIENT_MESSAGE_ID) },
+        { type: 'message', content: 'second', clientMessageId: expect.stringMatching(CLIENT_MESSAGE_ID) },
+      ]);
+      expect(session.queue).toEqual([]);
       expect(errors).toEqual([]);
       session.close();
     });
@@ -307,7 +313,7 @@ describe('agent input outbox', () => {
 
       session.send('hello', { agentType: 'CLAUDE' });
       await vi.waitFor(() => expect(box().frames()).toEqual([
-        { type: 'message', content: 'hello', agentType: 'CLAUDE' },
+        { type: 'message', content: 'hello', agentType: 'CLAUDE', clientMessageId: expect.stringMatching(CLIENT_MESSAGE_ID) },
       ]));
 
       expect(box().url).toBe(BOX_WS_URL);
@@ -371,7 +377,9 @@ describe('agent input outbox', () => {
       browser.offline = false;
       vi.stubGlobal('navigator', { onLine: true });
       for (const listener of [...onlineListeners]) listener();
-      await vi.waitFor(() => expect(box().frames()).toEqual([{ type: 'message', content: 'hello' }]));
+      await vi.waitFor(() => expect(box().frames()).toEqual([
+        { type: 'message', content: 'hello', clientMessageId: expect.stringMatching(CLIENT_MESSAGE_ID) },
+      ]));
       expect(inputs).not.toHaveBeenCalled();
       expect(errors).toEqual([]);
       session.close();
@@ -426,7 +434,9 @@ describe('agent input outbox', () => {
       browser.offline = false;
       vi.stubGlobal('navigator', { onLine: true });
       for (const listener of [...onlineListeners]) listener();
-      await vi.waitFor(() => expect(box().frames()).toEqual([{ type: 'message', content: 'first' }]));
+      await vi.waitFor(() => expect(box().frames()).toEqual([
+        { type: 'message', content: 'first', clientMessageId: expect.stringMatching(CLIENT_MESSAGE_ID) },
+      ]));
 
       browser.offline = true;
       vi.stubGlobal('navigator', { onLine: false });
@@ -499,7 +509,11 @@ describe('agent input outbox', () => {
 
     session.send('hello');
 
-    await vi.waitFor(() => expect(inputs).toHaveBeenCalledExactlyOnceWith({ type: 'message', content: 'hello' }));
+    await vi.waitFor(() => expect(inputs).toHaveBeenCalledExactlyOnceWith({
+      type: 'message',
+      content: 'hello',
+      clientMessageId: expect.stringMatching(CLIENT_MESSAGE_ID),
+    }));
     expect(FakeWebSocket.instances[0].frames()).toEqual([]);
     expect(errors).toEqual([]);
     session.close();
