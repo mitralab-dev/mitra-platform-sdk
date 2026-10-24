@@ -83,6 +83,39 @@ export interface PasswordResetRequestResult {
   resendAfterSeconds: number;
 }
 
+/** The address to create a password for, and the language of the message with the code. */
+export type PasswordSignUpRequest = EmailCodeRequest;
+
+/** What IAM accepted for a password sign-up, as neutral as {@link EmailCodeRequestResult}. */
+export type PasswordSignUpRequestResult = EmailCodeRequestResult;
+
+/** The code the person read in the message, and the password they chose. */
+export interface PasswordSignUpCompletion {
+  /** From `auth.startPasswordSignUp()`. */
+  receipt: string;
+  /** The six digits sent to the address. */
+  code: string;
+  password: string;
+}
+
+/** The password to replace, and the new one. */
+export interface PasswordChange {
+  /**
+   * Required by IAM whenever the account already has a password. Only an
+   * account that never had one, such as one born from the email code, goes
+   * without it.
+   */
+  currentPassword?: string;
+  newPassword: string;
+}
+
+/** The token from the reset link, and the new password. */
+export interface PasswordResetConfirmation {
+  /** From `auth.readPasswordResetToken()`. */
+  token: string;
+  newPassword: string;
+}
+
 /** The code the person read in the message, against the request that sent it. */
 export interface EmailCodeVerification {
   receipt: string;

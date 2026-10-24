@@ -127,8 +127,13 @@ import {
   type LoginResponse,
   type MitraClient,
   type MitraConfig,
+  type PasswordChange,
+  type PasswordResetConfirmation,
   type PasswordResetOptions,
   type PasswordResetRequestResult,
+  type PasswordSignUpCompletion,
+  type PasswordSignUpRequest,
+  type PasswordSignUpRequestResult,
   type ProxyInput,
   type QueryResult,
   type User,
@@ -185,8 +190,20 @@ const passwordResetOptions: PasswordResetOptions = { language: "en" }
 const passwordResetRequested: Promise<PasswordResetRequestResult> =
   client.auth.requestPasswordReset(user.email, passwordResetOptions)
 const passwordLoginEnabled: boolean = client.passwordLoginEnabled
-// @ts-expect-error The password is typed on the Mitra auth page, never handed to the SDK.
+// @ts-expect-error The popup takes no credentials: the password is typed on the Mitra auth page.
 void client.auth.signInWithPassword({ email: user.email, password: "password" })
+const formUser: Promise<User> = client.auth.signInWithPasswordForm({ email: user.email, password: "password" })
+const passwordSignUpRequest: PasswordSignUpRequest = { email: user.email, language: "en" }
+const passwordSignUpStarted: Promise<PasswordSignUpRequestResult> =
+  client.auth.startPasswordSignUp(passwordSignUpRequest)
+const passwordSignUpCompletion: PasswordSignUpCompletion = { receipt: "receipt", code: "123456", password: "password" }
+void client.auth.completePasswordSignUp(passwordSignUpCompletion)
+const firstPassword: PasswordChange = { newPassword: "password" }
+void client.auth.changePasswordForm(firstPassword)
+void client.auth.changePasswordForm({ currentPassword: "password", newPassword: "new-password" })
+const resetToken: string | null = client.auth.readPasswordResetToken()
+const resetConfirmation: PasswordResetConfirmation = { token: "token", newPassword: "password" }
+const resetConfirmed: Promise<void> = client.auth.confirmPasswordReset(resetConfirmation)
 client.auth.signOut()
 client.auth.redirectToLogin()
 void client.init()
@@ -231,6 +248,10 @@ void emailCodeRequested
 void passwordUser
 void passwordResetRequested
 void passwordLoginEnabled
+void formUser
+void passwordSignUpStarted
+void resetToken
+void resetConfirmed
 void legacyConfig
 void interactionsConfig
 void structurallyIdenticalConfig

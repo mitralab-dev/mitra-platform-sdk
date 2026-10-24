@@ -81,36 +81,32 @@ function isMagicLinkState(value: string): value is MagicLinkState {
   return value === 'OK' || value === 'EXPIRED' || value === 'USED' || value === 'INVALID';
 }
 
-function expectEmailCodeRequestResult(value: unknown): EmailCodeRequestResult {
-  const response = expectObject<Record<string, unknown>>(
-    value,
-    'Email code request response',
-    coreErrors
-  );
+/** @internal */
+export function expectEmailCodeRequestResult(
+  value: unknown,
+  label = 'Email code request response'
+): EmailCodeRequestResult {
+  const response = expectObject<Record<string, unknown>>(value, label, coreErrors);
 
   if (typeof response.receipt !== 'string' || !response.receipt.trim()) {
-    throw coreErrors.invalidResponse('Email code request response has an invalid receipt field');
+    throw coreErrors.invalidResponse(`${label} has an invalid receipt field`);
   }
   if (typeof response.resendAfterSeconds !== 'number' || !Number.isFinite(response.resendAfterSeconds)) {
-    throw coreErrors.invalidResponse(
-      'Email code request response has an invalid resendAfterSeconds field'
-    );
+    throw coreErrors.invalidResponse(`${label} has an invalid resendAfterSeconds field`);
   }
 
   return { receipt: response.receipt, resendAfterSeconds: response.resendAfterSeconds };
 }
 
-function expectExchangeCode(value: unknown): string {
-  const response = expectObject<Record<string, unknown>>(
-    value,
-    'Email sign-in exchange code response',
-    coreErrors
-  );
+/** @internal */
+export function expectExchangeCode(
+  value: unknown,
+  label = 'Email sign-in exchange code response'
+): string {
+  const response = expectObject<Record<string, unknown>>(value, label, coreErrors);
 
   if (typeof response.exchangeCode !== 'string' || !response.exchangeCode.trim()) {
-    throw coreErrors.invalidResponse(
-      'Email sign-in exchange code response has an invalid exchangeCode field'
-    );
+    throw coreErrors.invalidResponse(`${label} has an invalid exchangeCode field`);
   }
 
   return response.exchangeCode;

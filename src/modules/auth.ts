@@ -10,6 +10,7 @@ import {
   PASSWORD_CHANGED_SIGN_IN_AGAIN,
 } from './auth-page-flow';
 import { EmailCodeFlow, resolveLanguage } from './email-code-flow';
+import { PasswordFormFlow, passwordChangedSignInAgain } from './password-form-flow';
 import type {
   User,
   SignInCredentials,
@@ -25,8 +26,13 @@ import type {
   EmailSignInOptions,
   GoogleSignInOptions,
   MicrosoftSignInOptions,
+  PasswordChange,
+  PasswordResetConfirmation,
   PasswordResetOptions,
   PasswordResetRequestResult,
+  PasswordSignUpCompletion,
+  PasswordSignUpRequest,
+  PasswordSignUpRequestResult,
 } from './auth.types';
 
 export type {
@@ -47,8 +53,13 @@ export type {
   EmailSignInOptions,
   GoogleSignInOptions,
   MicrosoftSignInOptions,
+  PasswordChange,
+  PasswordResetConfirmation,
   PasswordResetOptions,
   PasswordResetRequestResult,
+  PasswordSignUpCompletion,
+  PasswordSignUpRequest,
+  PasswordSignUpRequestResult,
 } from './auth.types';
 
 interface AuthModuleOptions {
@@ -226,6 +237,7 @@ export class AuthModule {
   private readonly emailAuth: AuthPageFlow;
   private readonly passwordAuth: AuthPageFlow;
   private readonly emailCode: EmailCodeFlow;
+  private readonly passwordForm: PasswordFormFlow;
   private brand: string | null = null;
 
   constructor(appId: string, iamBaseUrl: string, options: AuthModuleOptions = {}) {
@@ -279,6 +291,11 @@ export class AuthModule {
       client: this.publicClient,
       pendingRequest: this.emailAuth,
     });
+    this.passwordForm = new PasswordFormFlow({
+      appId,
+      client: this.publicClient,
+      exchange: this.passwordAuth,
+    });
     this.loadFromStorage();
     const readAccessToken = () => this.#accessToken;
     sessionPorts.set(this, {
@@ -329,8 +346,8 @@ export class AuthModule {
   }
 
   /**
-   * @deprecated The password never goes through the app's code. Use
-   * signInWithPassword(), which opens the Mitra auth page, signInWithEmail() or SSO.
+   * @deprecated Use signInWithPassword(), which opens the Mitra auth page,
+   * signInWithPasswordForm() in an app with the form mode on, signInWithEmail() or SSO.
    */
   signIn(_credentials: SignInCredentials): Promise<User> {
     return Promise.reject(
@@ -596,8 +613,8 @@ export class AuthModule {
   }
 
   /**
-   * @deprecated The password never goes through the app's code. Use
-   * signUpWithPassword(), which opens the Mitra auth page, signInWithEmail() or SSO.
+   * @deprecated Use signUpWithPassword(), which opens the Mitra auth page,
+   * startPasswordSignUp() in an app with the form mode on, signInWithEmail() or SSO.
    */
   signUp(_data: SignUpData): Promise<User> {
     return Promise.reject(
@@ -708,9 +725,12 @@ export class AuthModule {
   }
 
   /**
-   * Asks IAM to email a link to set a new password. Only the address goes: the
-   * link opens the Mitra auth page, where the new password is typed, so there
-   * is no method here to confirm the reset.
+   * Asks IAM to email a link to set a new password. Only the address goes.
+   * Where the link opens depends on the app's mode of the password login: with
+   * the Mitra auth page, the default, the new password is typed there; with the
+   * form in the app itself, the link opens `/reset-password` on this app's
+   * origin, which reads it with {@link readPasswordResetToken} and finishes
+   * with {@link confirmPasswordReset}.
    *
    * IAM answers the same whether or not the address has an account, so this
    * resolves without saying which.
@@ -743,6 +763,223 @@ export class AuthModule {
         language: resolveLanguage(options.language, browserWindow),
       })
     );
+  }
+
+  /**
+   * The password goes through the app's code. Do not store it, do not log it
+   * and do not send it anywhere other than this method. The safer default is
+   * signInWithPassword(), which uses the Mitra auth page.
+   *
+   * Works only when the app has the "form in the app itself" mode of the
+   * password login turned on. Otherwise IAM refuses it with
+   * `PASSWORD_FORM_NOT_ENABLED` (status `403`). Browser only.
+   *
+   * Signs in with the address and password typed into the app's own form.
+   *
+   * @returns The authenticated and hydrated user.
+   * @throws {MitraApiError} `INVALID_CREDENTIALS` (status `401`) for a wrong
+   * address or password, a locked account or one without a password, all
+   * answered alike, `SIGNUP_NOT_ALLOWED` (status `403`) when the account lost
+   * its access to an app that takes no new accounts, `RATE_LIMIT_EXCEEDED`
+   * (status `429`, with `retryAfterSeconds` when IAM sends it) when this
+   * network called the password routes too often or IAM is at its limit of
+   * passwords being hashed, so wait `retryAfterSeconds`, and
+   * `PASSWORD_FORM_NOT_ENABLED` as above.
+   *
+   * @example
+   * ```typescript
+   * const user = await mitra.auth.signInWithPasswordForm({ email, password });
+   * ```
+   */
+  async signInWithPasswordForm(credentials: SignInCredentials): Promise<User> {
+    return this.establishSession(await this.passwordForm.signIn(credentials));
+  }
+
+  /**
+   * The password goes through the app's code. Do not store it, do not log it
+   * and do not send it anywhere other than this method. The safer default is
+   * signInWithPassword(), which uses the Mitra auth page.
+   *
+   * First step of creating a password from the app's own form: IAM emails a
+   * six-digit code to the address, to prove the mailbox is the person's. No
+   * password goes in this step, which IAM takes in either mode of the app; the
+   * "form in the app itself" mode is required at {@link completePasswordSignUp},
+   * where the password goes. Browser only.
+   *
+   * IAM answers the same whether or not the address has an account, so this
+   * resolves without saying which.
+   *
+   * @param request - The address, and the language of the message.
+   * @returns The receipt that names this request, and the resend delay.
+   * @throws {MitraApiError} `RATE_LIMITED` (with `retryAfterSeconds`) when this
+   * address asked too often, and `RATE_LIMIT_EXCEEDED` (status `429`, with
+   * `retryAfterSeconds` when IAM sends it) when this network called the
+   * password routes too often.
+   *
+   * @example
+   * ```typescript
+   * const { receipt, resendAfterSeconds } = await mitra.auth.startPasswordSignUp({ email });
+   * ```
+   */
+  async startPasswordSignUp(request: PasswordSignUpRequest): Promise<PasswordSignUpRequestResult> {
+    return this.passwordForm.startSignUp(request);
+  }
+
+  /**
+   * The password goes through the app's code. Do not store it, do not log it
+   * and do not send it anywhere other than this method. The safer default is
+   * signInWithPassword(), which uses the Mitra auth page.
+   *
+   * Works only when the app has the "form in the app itself" mode of the
+   * password login turned on. Otherwise IAM refuses it with
+   * `PASSWORD_FORM_NOT_ENABLED` (status `403`). Browser only.
+   *
+   * Second step of {@link startPasswordSignUp}: the code from the message and
+   * the chosen password. The person ends signed in, as with
+   * {@link signInWithPasswordForm}.
+   *
+   * @param completion - The receipt, the code and the password.
+   * @returns The authenticated and hydrated user.
+   * @throws {MitraApiError} `INVALID_CODE` when the code does not match or the
+   * request expired, `MAGIC_LINK_USED` when it was already completed,
+   * `PASSWORD_ALREADY_SET` when the account has a password (the way to replace
+   * it is the reset), `SSO_ACCOUNT` (status `409`) when the account signs in
+   * with Google or Microsoft, `SIGNUP_NOT_ALLOWED` when the app takes no new
+   * accounts, `WEAK_PASSWORD` (status `400`) with the rule the password broke,
+   * `RATE_LIMIT_EXCEEDED` (status `429`, with `retryAfterSeconds` when IAM
+   * sends it) when this network called the password routes too often or IAM is
+   * at its limit of passwords being hashed, so wait `retryAfterSeconds`, and
+   * `PASSWORD_FORM_NOT_ENABLED` as above.
+   *
+   * @example
+   * ```typescript
+   * const user = await mitra.auth.completePasswordSignUp({ receipt, code, password });
+   * ```
+   */
+  async completePasswordSignUp(completion: PasswordSignUpCompletion): Promise<User> {
+    return this.establishSession(await this.passwordForm.completeSignUp(completion));
+  }
+
+  /**
+   * The password goes through the app's code. Do not store it, do not log it
+   * and do not send it anywhere other than this method. The safer default is
+   * signInWithPassword(), which uses the Mitra auth page.
+   *
+   * Works only when the app has the "form in the app itself" mode of the
+   * password login turned on. Otherwise IAM refuses it with
+   * `PASSWORD_FORM_NOT_ENABLED` (status `403`). Browser only.
+   *
+   * Changes the password of the signed-in person from the app's own form. IAM
+   * ends every session of the account when the password changes, this one
+   * included, so the SDK signs in again with the address of this session and
+   * the new password, and that session replaces the current one.
+   *
+   * When the change goes through but that new sign-in fails, the call rejects
+   * with `PASSWORD_CHANGED_SIGN_IN_AGAIN` and the local session is cleared,
+   * since IAM already ended it: send the person to sign in with the new password.
+   *
+   * @param change - The current password, required whenever the account
+   * already has one, and the new one.
+   * @returns The user of the new session.
+   * @throws {MitraApiError} `401` when nobody is signed in,
+   * `PASSWORD_CHANGED_SIGN_IN_AGAIN` (status `401`) as above,
+   * `INVALID_CREDENTIALS` (status `401`) for a wrong current password,
+   * `CURRENT_PASSWORD_REQUIRED` and `WEAK_PASSWORD` (status `400`),
+   * `SSO_ACCOUNT` (status `409`) when the account signs in with Google or
+   * Microsoft, `RATE_LIMIT_EXCEEDED` (status `429`, with `retryAfterSeconds`
+   * when IAM sends it) when this network called the password routes too often
+   * or IAM is at its limit of passwords being hashed, so wait
+   * `retryAfterSeconds`, and `PASSWORD_FORM_NOT_ENABLED` as above.
+   *
+   * @example
+   * ```typescript
+   * await mitra.auth.changePasswordForm({ currentPassword, newPassword });
+   * ```
+   */
+  async changePasswordForm(change: PasswordChange): Promise<User> {
+    if (!this.#accessToken) {
+      throw new MitraApiError('Sign in before changing the password.', 401);
+    }
+    // Read before the change: once IAM ends the sessions, this one may no longer be able to ask for it.
+    const email = this._currentUser?.email ?? (await this.getCurrentUser()).email;
+    await this.ensureFreshSession();
+    const accessToken = this.#accessToken;
+    if (!accessToken) {
+      throw new MitraApiError('Sign in before changing the password.', 401);
+    }
+    const generation = this.sessionGeneration;
+    await this.passwordForm.changePassword(change, accessToken);
+
+    try {
+      return await this.signInWithPasswordForm({ email, password: change.newPassword });
+    } catch (error) {
+      // A session that replaced this one meanwhile is not the one IAM ended.
+      if (generation === this.sessionGeneration) {
+        this.clearAuthState();
+      }
+      throw passwordChangedSignInAgain(error);
+    }
+  }
+
+  /**
+   * The password goes through the app's code. Do not store it, do not log it
+   * and do not send it anywhere other than this method. The safer default is
+   * signInWithPassword(), which uses the Mitra auth page.
+   *
+   * The reset token is single use and works as a credential until it is spent:
+   * do not log it either.
+   *
+   * Reads the token of a password reset link that landed on this app, and
+   * removes the fragment from the URL so the token does not stay in the
+   * history. With the form in the app itself turned on, IAM sends the link to
+   * `/reset-password#resetToken=...` on the origin the reset was asked from:
+   * call this when that route loads, then {@link confirmPasswordReset}.
+   *
+   * Nothing is sent to IAM here, and a URL without the link is left as it is.
+   * Browser only.
+   *
+   * @returns The token, or `null` when the URL carries none.
+   *
+   * @example
+   * ```typescript
+   * const token = mitra.auth.readPasswordResetToken();
+   * ```
+   */
+  readPasswordResetToken(): string | null {
+    return this.passwordForm.readResetToken();
+  }
+
+  /**
+   * The password goes through the app's code. Do not store it, do not log it
+   * and do not send it anywhere other than this method. The safer default is
+   * signInWithPassword(), which uses the Mitra auth page.
+   *
+   * Works only when the app has the "form in the app itself" mode of the
+   * password login turned on. Otherwise IAM refuses it with
+   * `PASSWORD_FORM_NOT_ENABLED` (status `403`). Browser only.
+   *
+   * Sets the new password with the token from the reset link. The link is
+   * single use, and IAM ends every session of the account, so the person signs
+   * in afterwards with the new password; this method signs nobody in.
+   *
+   * @param confirmation - The token from {@link readPasswordResetToken} and the
+   * new password.
+   * @throws {MitraApiError} `RESET_TOKEN_USED` or `RESET_TOKEN_EXPIRED` (status
+   * `409`) when the link can no longer be used; a token IAM does not know also
+   * answers `RESET_TOKEN_EXPIRED`. Also `WEAK_PASSWORD` (status `400`),
+   * `SSO_ACCOUNT` (status `409`) when the account signs in with Google or
+   * Microsoft, `RATE_LIMIT_EXCEEDED` (status `429`, with `retryAfterSeconds`
+   * when IAM sends it) when this network called the password routes too often
+   * or IAM is at its limit of passwords being hashed, so wait
+   * `retryAfterSeconds`, and `PASSWORD_FORM_NOT_ENABLED` as above.
+   *
+   * @example
+   * ```typescript
+   * await mitra.auth.confirmPasswordReset({ token, newPassword });
+   * ```
+   */
+  async confirmPasswordReset(confirmation: PasswordResetConfirmation): Promise<void> {
+    return this.passwordForm.confirmReset(confirmation);
   }
 
   /**

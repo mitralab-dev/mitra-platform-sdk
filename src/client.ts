@@ -474,8 +474,13 @@ export type {
   EmailSignInOptions,
   GoogleSignInOptions,
   MicrosoftSignInOptions,
+  PasswordChange,
+  PasswordResetConfirmation,
   PasswordResetOptions,
   PasswordResetRequestResult,
+  PasswordSignUpCompletion,
+  PasswordSignUpRequest,
+  PasswordSignUpRequestResult,
 } from './modules/auth';
 export type { EntityListOptions, EntityTable } from './modules/entities';
 export type { FunctionExecution } from './modules/functions';

@@ -2,6 +2,42 @@
 
 All notable changes to this project are documented in this file.
 
+## 1.8.0-beta.1
+
+Password login from the app's own form, for apps whose owner turns that mode on (the Mitra auth
+page stays the default and the recommended one).
+
+- `auth.signInWithPasswordForm({ email, password })` posts to `/auth/password/login` with
+  `appId` and `origin: location.origin`, redeems the exchange code at `/auth/magic-link/exchange`
+  and stores the session like the popup does. No popup is opened.
+- `auth.startPasswordSignUp({ email, language })` asks for the code at `/auth/password/signup` and
+  returns `{ receipt, resendAfterSeconds }`; `auth.completePasswordSignUp({ receipt, code, password })`
+  verifies it at `/auth/password/signup/verify` and signs the person in.
+- `auth.changePasswordForm({ currentPassword, newPassword })` sends `PUT /auth/password` with the
+  access token of this session (`currentPassword` may be left out only for an account without a
+  password). The request goes on a client that does not refresh and retry on `401`, so a wrong
+  current password is tried once. IAM ends every session of the account, so the SDK signs in again
+  with the address of this session and the new password. When that sign-in fails, the call rejects
+  with `PASSWORD_CHANGED_SIGN_IN_AGAIN` and the local session is cleared, unless another session
+  replaced it meanwhile.
+- `auth.readPasswordResetToken()` returns the `resetToken` of the reset link that lands on
+  `/reset-password` and removes the fragment from the URL; `auth.confirmPasswordReset({ token,
+  newPassword })` posts it to `/auth/password/reset/confirm`.
+- A `403 PASSWORD_FORM_NOT_ENABLED` from IAM in `signInWithPasswordForm()`,
+  `completePasswordSignUp()`, `changePasswordForm()` or `confirmPasswordReset()` keeps its status
+  and code and gets a message saying to turn on the "form in the app itself" mode in the app or to
+  use the Mitra auth page methods. `startPasswordSignUp()` carries no password and IAM takes it in
+  either mode.
+- Nothing changes in the existing methods: `signInWithPassword()`, `signUpWithPassword()`,
+  `changePassword()`, `requestPasswordReset()`, the email code, SSO, `signOut()` and the HTTP
+  client send the same requests and fail with the same messages. Only the JSDoc of
+  `requestPasswordReset()` changes: where its link opens now depends on the app's mode.
+- The JSDoc of each form method opens with the warning that the password goes through the app's
+  code, and the README documents both modes. The JSDoc of the deprecated `signIn` and `signUp` also
+  points to the form methods; their error stays the same.
+- Export `PasswordChange`, `PasswordResetConfirmation`, `PasswordSignUpCompletion`,
+  `PasswordSignUpRequest` and `PasswordSignUpRequestResult`.
+
 ## 1.8.0-beta.0
 
 Sign-in by email and password for apps whose accounts are their own (exclusive login mode).
