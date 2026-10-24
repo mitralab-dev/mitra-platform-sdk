@@ -14,6 +14,7 @@ const IAM_URL = `${API_URL}/iam`;
 const AUTH_PAGE_URL = `${API_URL}/sdk-auth.html`;
 const EXCHANGE_URL = `${IAM_URL}/api/v1/auth/magic-link/exchange`;
 const STORAGE_KEY = `mitra_auth_${APP_ID}`;
+const exclusiveRefresh = jwt({ app_id: APP_ID, login_mode: 'exclusive', sid: 'session-1' });
 
 const fakeUser = { id: 'u1', tenantId: 't1', email: 'user@test.com', name: 'Test User' };
 const currentUserResponse = {
@@ -1464,7 +1465,6 @@ describe('AuthModule', () => {
 describe('AuthModule password methods', () => {
   const LOGOUT_URL = `${IAM_URL}/api/v1/auth/logout`;
   const RESET_URL = `${IAM_URL}/api/v1/auth/password/reset`;
-  const exclusiveRefresh = jwt({ app_id: APP_ID, login_mode: 'exclusive', sid: 'session-1' });
   const sharedRefresh = jwt({ app_id: APP_ID });
 
   afterEach(() => {
@@ -1743,6 +1743,382 @@ describe('AuthModule password methods', () => {
     });
   });
 
+  describe('password form', () => {
+    const PASSWORD_URL = `${IAM_URL}/api/v1/auth/password`;
+    const LOGIN_URL = `${PASSWORD_URL}/login`;
+    const SIGNUP_URL = `${PASSWORD_URL}/signup`;
+    const SIGNUP_VERIFY_URL = `${PASSWORD_URL}/signup/verify`;
+    const RESET_CONFIRM_URL = `${PASSWORD_URL}/reset/confirm`;
+    const formNotEnabled = {
+      status: 403,
+      body: { message: 'Forbidden', error_code: 'PASSWORD_FORM_NOT_ENABLED' },
+    };
+    const newSession = { accessToken: 'access-new', refreshToken: 'refresh-new', tokenType: 'Bearer' };
+
+    function requestBody(fetchMock: ReturnType<typeof vi.fn>, call: number): unknown {
+      return JSON.parse(fetchMock.mock.calls[call][1].body);
+    }
+
+    describe('signInWithPasswordForm', () => {
+      it('should send the password with this origin, without a session, and redeem the exchange code', async () => {
+        const browser = mockBrowser();
+        const fetchMock = mockFetchSequence([
+          { body: { exchangeCode: 'exchange-code', expiresInSeconds: 60 } },
+          { body: fakeTokenResponse },
+          { body: currentUserResponse },
+        ]);
+        const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+        await expect(auth.signInWithPasswordForm({ email: 'person@example.com', password: 'secret' }))
+          .resolves.toEqual(apiUser);
+
+        expect(fetchMock.mock.calls[0][0]).toBe(LOGIN_URL);
+        expect(requestBody(fetchMock, 0)).toEqual({
+          email: 'person@example.com',
+          password: 'secret',
+          appId: APP_ID,
+          origin: 'https://app.example.com',
+        });
+        expect(fetchMock.mock.calls[0][1].headers).not.toHaveProperty('Authorization');
+        expect(fetchMock.mock.calls[1][0]).toBe(EXCHANGE_URL);
+        expect(requestBody(fetchMock, 1)).toEqual({ appId: APP_ID, code: 'exchange-code' });
+        expect(auth.accessToken).toBe('access-123');
+        expect(JSON.parse(browser.localStorage._store[STORAGE_KEY]).refreshToken).toBe('refresh-456');
+        expect(browser.window.open).not.toHaveBeenCalled();
+      });
+
+      it('should surface the IAM refusal as it came', async () => {
+        mockBrowser();
+        mockFetchSequence([{ status: 401, body: { message: 'Invalid credentials', error_code: 'INVALID_CREDENTIALS' } }]);
+        const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+        await expect(auth.signInWithPasswordForm({ email: 'person@example.com', password: 'wrong' }))
+          .rejects.toMatchObject({ status: 401, code: 'INVALID_CREDENTIALS', message: 'Invalid credentials' });
+        expect(auth.accessToken).toBeNull();
+      });
+
+      it('should store nothing when the exchange code is refused', async () => {
+        const browser = mockBrowser();
+        storedSession(browser.localStorage, 'access-123', exclusiveRefresh);
+        const stored = browser.localStorage._store[STORAGE_KEY];
+        const fetchMock = mockFetchSequence([
+          { body: { exchangeCode: 'exchange-code', expiresInSeconds: 60 } },
+          { status: 401, body: { message: 'Invalid exchange code', error_code: 'INVALID_EXCHANGE_CODE' } },
+        ]);
+        const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+        await expect(auth.signInWithPasswordForm({ email: 'person@example.com', password: 'secret' }))
+          .rejects.toMatchObject({ status: 401, code: 'INVALID_EXCHANGE_CODE' });
+
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(auth.accessToken).toBe('access-123');
+        expect(browser.localStorage._store[STORAGE_KEY]).toBe(stored);
+      });
+    });
+
+    describe('startPasswordSignUp and completePasswordSignUp', () => {
+      it('should ask for the code with this origin and the language, and return the receipt', async () => {
+        mockBrowser();
+        const fetchMock = mockFetchSequence([
+          { status: 202, body: { receipt: 'receipt-1', resendAfterSeconds: 60 } },
+          { status: 202, body: { receipt: 'receipt-2', resendAfterSeconds: 60 } },
+        ]);
+        const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+        await expect(auth.startPasswordSignUp({ email: 'person@example.com', language: 'en' }))
+          .resolves.toEqual({ receipt: 'receipt-1', resendAfterSeconds: 60 });
+        await auth.startPasswordSignUp({ email: 'person@example.com' });
+
+        expect(fetchMock.mock.calls[0][0]).toBe(SIGNUP_URL);
+        expect(requestBody(fetchMock, 0)).toEqual({
+          email: 'person@example.com',
+          appId: APP_ID,
+          origin: 'https://app.example.com',
+          language: 'en',
+        });
+        expect(requestBody(fetchMock, 1)).toMatchObject({ language: 'pt-BR' });
+      });
+
+      it('should verify the code with the password and establish the session', async () => {
+        const browser = mockBrowser();
+        const fetchMock = mockFetchSequence([
+          { body: { exchangeCode: 'exchange-code', expiresInSeconds: 60 } },
+          { body: fakeTokenResponse },
+          { body: currentUserResponse },
+        ]);
+        const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+        await expect(auth.completePasswordSignUp({ receipt: 'receipt-1', code: '123456', password: 'secret' }))
+          .resolves.toEqual(apiUser);
+
+        expect(fetchMock.mock.calls[0][0]).toBe(SIGNUP_VERIFY_URL);
+        expect(requestBody(fetchMock, 0)).toEqual({ receipt: 'receipt-1', code: '123456', password: 'secret' });
+        expect(fetchMock.mock.calls[1][0]).toBe(EXCHANGE_URL);
+        expect(JSON.parse(browser.localStorage._store[STORAGE_KEY]).token).toBe('access-123');
+      });
+    });
+
+    describe('changePasswordForm', () => {
+      it('should change the password with this session and sign in again with its address and the new password', async () => {
+        const browser = mockBrowser();
+        storedSession(browser.localStorage, 'access-123', exclusiveRefresh);
+        const fetchMock = mockFetchSequence([
+          { status: 204, body: undefined },
+          { body: { exchangeCode: 'exchange-code', expiresInSeconds: 60 } },
+          { body: newSession },
+          { body: currentUserResponse },
+        ]);
+        const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+        await expect(auth.changePasswordForm({ currentPassword: 'old-secret', newPassword: 'new-secret' }))
+          .resolves.toEqual(apiUser);
+
+        const [url, init] = fetchMock.mock.calls[0];
+        expect(url).toBe(PASSWORD_URL);
+        expect(init.method).toBe('PUT');
+        expect(init.headers.Authorization).toBe('Bearer access-123');
+        expect(JSON.parse(init.body)).toEqual({ currentPassword: 'old-secret', newPassword: 'new-secret' });
+        expect(fetchMock.mock.calls[1][0]).toBe(LOGIN_URL);
+        expect(requestBody(fetchMock, 1)).toMatchObject({ email: fakeUser.email, password: 'new-secret' });
+        expect(fetchMock.mock.calls[1][1].headers).not.toHaveProperty('Authorization');
+        expect(auth.accessToken).toBe('access-new');
+        expect(JSON.parse(browser.localStorage._store[STORAGE_KEY]).refreshToken).toBe('refresh-new');
+      });
+
+      it('should leave the current password out for a first password', async () => {
+        const browser = mockBrowser();
+        storedSession(browser.localStorage, 'access-123', exclusiveRefresh);
+        const fetchMock = mockFetchSequence([
+          { status: 204, body: undefined },
+          { body: { exchangeCode: 'exchange-code', expiresInSeconds: 60 } },
+          { body: newSession },
+          { body: currentUserResponse },
+        ]);
+        const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+        await auth.changePasswordForm({ newPassword: 'new-secret' });
+
+        expect(requestBody(fetchMock, 0)).toEqual({ newPassword: 'new-secret' });
+      });
+
+      it('should read the address first when the session was adopted without a user', async () => {
+        mockBrowser();
+        const fetchMock = mockFetchSequence([
+          { body: currentUserResponse },
+          { status: 204, body: undefined },
+          { body: { exchangeCode: 'exchange-code', expiresInSeconds: 60 } },
+          { body: newSession },
+          { body: currentUserResponse },
+        ]);
+        const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+        auth.setSession({ accessToken: 'access-123', refreshToken: exclusiveRefresh });
+
+        await auth.changePasswordForm({ currentPassword: 'old-secret', newPassword: 'new-secret' });
+
+        expect(fetchMock.mock.calls[0][0]).toBe(`${IAM_URL}/api/v1/auth/me`);
+        expect(fetchMock.mock.calls[1][0]).toBe(PASSWORD_URL);
+        expect(requestBody(fetchMock, 2)).toMatchObject({ email: 'user@test.com' });
+      });
+
+      it('should not send the change when the address of an adopted session cannot be read', async () => {
+        mockBrowser();
+        const fetchMock = mockFetchSequence([{ status: 500, body: { message: 'Boom' } }]);
+        const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+        auth.setSession({ accessToken: 'access-123', refreshToken: exclusiveRefresh });
+
+        await expect(auth.changePasswordForm({ currentPassword: 'old-secret', newPassword: 'new-secret' }))
+          .rejects.toMatchObject({ status: 500 });
+
+        expect(fetchMock).toHaveBeenCalledExactlyOnceWith(`${IAM_URL}/api/v1/auth/me`, expect.anything());
+        expect(auth.accessToken).toBe('access-123');
+      });
+
+      it('should spend a wrong current password once, without refreshing or retrying, and keep the session', async () => {
+        const browser = mockBrowser();
+        storedSession(browser.localStorage, 'access-123', exclusiveRefresh);
+        const fetchMock = mockFetchSequence([
+          { status: 401, body: { message: 'Invalid credentials', error_code: 'INVALID_CREDENTIALS' } },
+        ]);
+        const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+        await expect(auth.changePasswordForm({ currentPassword: 'wrong', newPassword: 'new-secret' }))
+          .rejects.toMatchObject({ status: 401, code: 'INVALID_CREDENTIALS' });
+
+        expect(fetchMock).toHaveBeenCalledOnce();
+        expect(auth.accessToken).toBe('access-123');
+      });
+
+      it('should clear the session when the password changed but signing in again failed', async () => {
+        const browser = mockBrowser();
+        storedSession(browser.localStorage, 'access-123', exclusiveRefresh);
+        mockFetchSequence([
+          { status: 204, body: undefined },
+          { status: 401, body: { message: 'Invalid credentials', error_code: 'INVALID_CREDENTIALS' } },
+        ]);
+        const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+        const listener = vi.fn();
+        auth.onAuthStateChange(listener);
+
+        const failure = await auth.changePasswordForm({ currentPassword: 'old-secret', newPassword: 'new-secret' })
+          .catch((error: unknown) => error);
+
+        expect(failure).toMatchObject({
+          name: 'MitraApiError',
+          status: 401,
+          code: 'PASSWORD_CHANGED_SIGN_IN_AGAIN',
+          message: 'The password was changed, but signing in again failed. Sign in with the new password.',
+          cause: { status: 401, code: 'INVALID_CREDENTIALS' },
+        });
+        expect(auth.accessToken).toBeNull();
+        expect(browser.localStorage._store[STORAGE_KEY]).toBeUndefined();
+        expect(listener).toHaveBeenLastCalledWith(null);
+      });
+
+      it('should not clear a session that replaced this one while the password was changing', async () => {
+        const browser = mockBrowser();
+        storedSession(browser.localStorage, 'access-123', exclusiveRefresh);
+        const change = deferred<Response>();
+        const fetchMock = vi.fn()
+          .mockReturnValueOnce(change.promise)
+          .mockResolvedValueOnce(jsonResponse({ message: 'Invalid credentials', error_code: 'INVALID_CREDENTIALS' }, 401));
+        vi.stubGlobal('fetch', fetchMock);
+        const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+        const changing = auth.changePasswordForm({ currentPassword: 'old-secret', newPassword: 'new-secret' });
+        await flushMicrotasks();
+        auth.setSession({ accessToken: 'access-other', refreshToken: 'refresh-other' });
+        change.resolve(new Response(null, { status: 204 }));
+
+        await expect(changing).rejects.toMatchObject({ code: 'PASSWORD_CHANGED_SIGN_IN_AGAIN' });
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(auth.accessToken).toBe('access-other');
+        expect(JSON.parse(browser.localStorage._store[STORAGE_KEY]).token).toBe('access-other');
+      });
+
+      it('should refuse without sending the password when the session ends while it is renewed', async () => {
+        const browser = mockBrowser();
+        const expiring = jwt({ app_id: APP_ID, exp: Math.floor(Date.now() / 1_000) + 10 });
+        storedSession(browser.localStorage, expiring, exclusiveRefresh);
+        const fetchMock = mockFetchSequence([{ status: 401, body: { error_code: 'INVALID_TOKEN' } }]);
+        const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+        await expect(auth.changePasswordForm({ currentPassword: 'old-secret', newPassword: 'new-secret' }))
+          .rejects.toMatchObject({ name: 'MitraApiError', status: 401, message: 'Sign in before changing the password.' });
+        expect(fetchMock).toHaveBeenCalledExactlyOnceWith(`${IAM_URL}/api/v1/auth/refresh-token`, expect.anything());
+      });
+
+      it('should refuse without a session before any request', async () => {
+        mockBrowser();
+        const fetchMock = mockFetchSequence([]);
+        const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+        await expect(auth.changePasswordForm({ newPassword: 'new-secret' }))
+          .rejects.toMatchObject({ name: 'MitraApiError', status: 401 });
+        expect(fetchMock).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('readPasswordResetToken and confirmPasswordReset', () => {
+      it('should return the token of the link and take the fragment out of the URL', () => {
+        const browser = mockBrowser();
+        (browser.window.location as { hash: string }).hash = '#resetToken=reset-token-1&lang=en';
+        const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+        expect(auth.readPasswordResetToken()).toBe('reset-token-1');
+        expect(browser.window.history.replaceState).toHaveBeenCalledExactlyOnceWith({}, '', '/orders?status=open');
+      });
+
+      it.each([
+        ['no fragment', '', false],
+        ['a fragment the app routes on', '#/orders/1', false],
+        ['an empty token', '#resetToken=', true],
+      ])('should return null for %s', (_case, hash, cleared) => {
+        const browser = mockBrowser();
+        (browser.window.location as { hash: string }).hash = hash;
+        const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+        expect(auth.readPasswordResetToken()).toBeNull();
+        expect(vi.mocked(browser.window.history.replaceState).mock.calls.length).toBe(cleared ? 1 : 0);
+      });
+
+      it('should send the token and the new password, without a session', async () => {
+        const browser = mockBrowser();
+        storedSession(browser.localStorage, 'access-123', exclusiveRefresh);
+        const fetchMock = mockFetchSequence([{ status: 204, body: undefined }]);
+        const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+        await expect(auth.confirmPasswordReset({ token: 'reset-token-1', newPassword: 'new-secret' }))
+          .resolves.toBeUndefined();
+
+        expect(fetchMock.mock.calls[0][0]).toBe(RESET_CONFIRM_URL);
+        expect(requestBody(fetchMock, 0)).toEqual({ token: 'reset-token-1', newPassword: 'new-secret' });
+        expect(fetchMock.mock.calls[0][1].headers).not.toHaveProperty('Authorization');
+      });
+    });
+
+    it.each([
+      ['signInWithPasswordForm', (auth: AuthModule) => auth.signInWithPasswordForm({ email: 'a@b.c', password: 'p' })],
+      ['completePasswordSignUp', (auth: AuthModule) => auth.completePasswordSignUp({ receipt: 'r', code: '123456', password: 'p' })],
+      ['changePasswordForm', (auth: AuthModule) => auth.changePasswordForm({ newPassword: 'p' })],
+      ['confirmPasswordReset', (auth: AuthModule) => auth.confirmPasswordReset({ token: 't', newPassword: 'p' })],
+    ])('%s should explain how to turn the form mode on when IAM refuses it', async (_method, call) => {
+      const browser = mockBrowser();
+      storedSession(browser.localStorage, 'access-123', exclusiveRefresh);
+      const fetchMock = mockFetchSequence([formNotEnabled]);
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+      await expect(call(auth)).rejects.toMatchObject({
+        name: 'MitraApiError',
+        status: 403,
+        code: 'PASSWORD_FORM_NOT_ENABLED',
+        message: expect.stringContaining('signInWithPassword(), signUpWithPassword() and changePassword()'),
+      });
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(auth.accessToken).toBe('access-123');
+      expect(JSON.parse(browser.localStorage._store[STORAGE_KEY]).token).toBe('access-123');
+    });
+
+    it.each([
+      ['startPasswordSignUp', (auth: AuthModule) => auth.startPasswordSignUp({ email: 'a@b.c' })],
+      ['requestPasswordReset', (auth: AuthModule) => auth.requestPasswordReset('a@b.c')],
+    ])('%s should hand an IAM refusal over as it came, being free in either mode', async (_method, call) => {
+      mockBrowser();
+      mockFetchSequence([formNotEnabled]);
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+      await expect(call(auth)).rejects.toMatchObject({ status: 403, code: 'PASSWORD_FORM_NOT_ENABLED', message: 'Forbidden' });
+    });
+
+    it.each([
+      ['a login without the exchange code', LOGIN_URL, (auth: AuthModule) => auth.signInWithPasswordForm({ email: 'a@b.c', password: 'p' })],
+      ['a sign-up request without the receipt', SIGNUP_URL, (auth: AuthModule) => auth.startPasswordSignUp({ email: 'a@b.c' })],
+      ['a sign-up verification without the exchange code', SIGNUP_VERIFY_URL, (auth: AuthModule) => auth.completePasswordSignUp({ receipt: 'r', code: '123456', password: 'p' })],
+    ])('should refuse %s', async (_case, url, call) => {
+      mockBrowser();
+      const fetchMock = mockFetchSequence([{ body: { resendAfterSeconds: 60 } }]);
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+      await expect(call(auth)).rejects.toMatchObject({ code: 'INVALID_RESPONSE' });
+      expect(fetchMock).toHaveBeenCalledExactlyOnceWith(url, expect.anything());
+      expect(auth.accessToken).toBeNull();
+    });
+
+    it.each([
+      ['signInWithPasswordForm', (auth: AuthModule) => auth.signInWithPasswordForm({ email: 'a@b.c', password: 'p' })],
+      ['startPasswordSignUp', (auth: AuthModule) => auth.startPasswordSignUp({ email: 'a@b.c' })],
+      ['completePasswordSignUp', (auth: AuthModule) => auth.completePasswordSignUp({ receipt: 'r', code: '123456', password: 'p' })],
+      ['confirmPasswordReset', (auth: AuthModule) => auth.confirmPasswordReset({ token: 't', newPassword: 'p' })],
+      ['readPasswordResetToken', async (auth: AuthModule) => auth.readPasswordResetToken()],
+    ])('%s should require a browser', async (_method, call) => {
+      vi.stubGlobal('window', undefined);
+      const fetchMock = mockFetchSequence([]);
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+      await expect(call(auth)).rejects.toThrow(new Error('Password login is only available in a browser.'));
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
+
   describe('signOut', () => {
     it('should end an exclusive app session on the server, with keepalive and no access token', () => {
       const storage = mockLocalStorage();
@@ -1806,6 +2182,174 @@ describe('AuthModule password methods', () => {
       auth.signOut();
 
       expect(fetchMock).toHaveBeenCalledOnce();
+    });
+  });
+});
+
+describe('AuthModule calls that predate the password form', () => {
+  const RESET_URL = `${IAM_URL}/api/v1/auth/password/reset`;
+  const MAGIC_LINK_URL = `${IAM_URL}/api/v1/auth/magic-link`;
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /** The whole `fetch` init of a public JSON POST: no credentials, no keepalive, no extra header. */
+  function expectPublicJsonPost(init: RequestInit, body: unknown): void {
+    expect(init).toEqual({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      redirect: 'manual',
+    });
+  }
+
+  describe('requestPasswordReset', () => {
+    it('should send the same request', async () => {
+      mockBrowser();
+      const fetchMock = mockFetchSequence([{ status: 202, body: { resendAfterSeconds: 60 } }]);
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+      await auth.requestPasswordReset('person@example.com', { language: 'en' });
+
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(fetchMock.mock.calls[0][0]).toBe(RESET_URL);
+      expectPublicJsonPost(fetchMock.mock.calls[0][1], {
+        email: 'person@example.com',
+        appId: APP_ID,
+        origin: 'https://app.example.com',
+        language: 'en',
+      });
+    });
+
+    it('should fail with the same messages', async () => {
+      mockBrowser();
+      mockFetchSequence([{ status: 202, body: {} }]);
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+      await expect(auth.requestPasswordReset('person@example.com')).rejects.toMatchObject({
+        code: 'INVALID_RESPONSE',
+        message: 'Password reset request response has an invalid resendAfterSeconds field',
+      });
+      vi.stubGlobal('window', undefined);
+      await expect(auth.requestPasswordReset('person@example.com'))
+        .rejects.toThrow(new Error('Password reset is only available in a browser.'));
+    });
+  });
+
+  describe('email code', () => {
+    it('should send the same requests to ask for the code, verify it and redeem the exchange code', async () => {
+      mockBrowser();
+      const fetchMock = mockFetchSequence([
+        { status: 202, body: { receipt: 'receipt-1', resendAfterSeconds: 60 } },
+        { body: { exchangeCode: 'exchange-code', expiresInSeconds: 60 } },
+        { body: fakeTokenResponse },
+        { body: currentUserResponse },
+      ]);
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+      auth.setBrand('mitra');
+
+      await auth.requestEmailCode({ email: 'person@example.com', language: 'en' });
+      await auth.verifyEmailCode({ receipt: 'receipt-1', code: '123456' });
+
+      const requested = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(fetchMock.mock.calls[0][0]).toBe(MAGIC_LINK_URL);
+      expectPublicJsonPost(fetchMock.mock.calls[0][1], {
+        email: 'person@example.com',
+        brand: 'mitra',
+        language: 'en',
+        appId: APP_ID,
+        origin: 'https://app.example.com',
+        state: requested.state,
+      });
+      expect(requested.state).toEqual(expect.stringMatching(/^email\./));
+      expect(fetchMock.mock.calls[1][0]).toBe(`${MAGIC_LINK_URL}/verify`);
+      expectPublicJsonPost(fetchMock.mock.calls[1][1], { receipt: 'receipt-1', code: '123456' });
+      expect(fetchMock.mock.calls[2][0]).toBe(EXCHANGE_URL);
+      expectPublicJsonPost(fetchMock.mock.calls[2][1], { appId: APP_ID, code: 'exchange-code' });
+    });
+
+    it('should fail with the same messages on a malformed answer', async () => {
+      mockBrowser();
+      mockFetchSequence([
+        { status: 202, body: { resendAfterSeconds: 60 } },
+        { status: 202, body: { receipt: 'receipt-1' } },
+        { body: {} },
+      ]);
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+      auth.setBrand('mitra');
+
+      await expect(auth.requestEmailCode({ email: 'person@example.com' })).rejects.toMatchObject({
+        code: 'INVALID_RESPONSE',
+        message: 'Email code request response has an invalid receipt field',
+      });
+      await expect(auth.requestEmailCode({ email: 'person@example.com' })).rejects.toMatchObject({
+        code: 'INVALID_RESPONSE',
+        message: 'Email code request response has an invalid resendAfterSeconds field',
+      });
+      await expect(auth.verifyEmailCode({ receipt: 'receipt-1', code: '123456' })).rejects.toMatchObject({
+        code: 'INVALID_RESPONSE',
+        message: 'Email sign-in exchange code response has an invalid exchangeCode field',
+      });
+      vi.stubGlobal('window', undefined);
+      await expect(auth.verifyEmailCode({ receipt: 'receipt-1', code: '123456' }))
+        .rejects.toThrow(new Error('Email sign-in is only available in a browser.'));
+    });
+  });
+
+  describe('password popup', () => {
+    it.each([
+      ['signInWithPassword', 'login'],
+      ['signUpWithPassword', 'signup'],
+    ] as const)('%s should open the same URL and redeem the code with the same request', async (method, view) => {
+      const browser = mockBrowser();
+      const fetchMock = mockFetchSequence([{ body: fakeTokenResponse }, { body: currentUserResponse }]);
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+      const signIn = auth[method]();
+      const startUrl = browser.getStartUrl();
+      const state = startUrl.searchParams.get('state')!;
+      browser.dispatchMessage(authPageResult(state, { code: 'exchange-code' }));
+      await signIn;
+
+      expect(startUrl.origin + startUrl.pathname).toBe(AUTH_PAGE_URL);
+      expect([...startUrl.searchParams.entries()]).toEqual([
+        ['provider', 'password'],
+        ['state', state],
+        ['appId', APP_ID],
+        ['apiUrl', API_URL],
+        ['origin', 'https://app.example.com'],
+        ['responseType', 'code'],
+        ['view', view],
+      ]);
+      expect(fetchMock.mock.calls[0][0]).toBe(EXCHANGE_URL);
+      expectPublicJsonPost(fetchMock.mock.calls[0][1], { appId: APP_ID, code: 'exchange-code' });
+    });
+
+    it('changePassword should open the change view and fail with the same messages', async () => {
+      const browser = mockBrowser();
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+      await expect(auth.changePassword()).rejects.toMatchObject({
+        status: 401,
+        message: 'Sign in before changing the password.',
+      });
+
+      storedSession(browser.localStorage, 'access-123', exclusiveRefresh);
+      const signedIn = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+      const change = signedIn.changePassword();
+      const startUrl = browser.getStartUrl();
+      const state = startUrl.searchParams.get('state')!;
+      browser.dispatchMessage({ type: 'mitra-oauth-result', success: false, passwordChanged: true, state });
+
+      await expect(change).rejects.toMatchObject({
+        status: 401,
+        code: 'PASSWORD_CHANGED_SIGN_IN_AGAIN',
+        message: 'The password was changed, but signing in again failed. Sign in with the new password.',
+      });
+      expect(startUrl.searchParams.get('view')).toBe('change');
+      expect([...startUrl.searchParams.keys()]).toEqual(
+        ['provider', 'state', 'appId', 'apiUrl', 'origin', 'responseType', 'view']
+      );
     });
   });
 });

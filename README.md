@@ -36,7 +36,7 @@ No app gerado pelo Code Studio, `VITE_MITRA_APP_ID` e `VITE_MITRA_API_URL` já v
 
 ## O que dá para fazer
 
-- `auth`: login com Google (`signInWithGoogle`), Microsoft (`signInWithMicrosoft`), código por e-mail ou e-mail e senha (`signInWithPassword`), mais `currentUser`, `onAuthStateChange` e `signOut`.
+- `auth`: login com Google (`signInWithGoogle`), Microsoft (`signInWithMicrosoft`), código por e-mail ou e-mail e senha (`signInWithPassword` no popup da Mitra, ou `signInWithPasswordForm` no formulário do próprio app), mais `currentUser`, `onAuthStateChange` e `signOut`.
 - `entities.<Tabela>`: `list`, `filter`, `get`, `create`, `bulkCreate`, `update`, `delete` e `deleteMany` nas tabelas do app.
 - `queries.execute(id, params)`: roda uma query salva no app.
 - `functions`: `execute` espera o resultado da Server Function; `executeAsync` devolve a execução para acompanhar com `getExecution` ou parar com `cancelExecution`. `publicFunctions` chama as Functions publicadas como públicas, sem login.
@@ -52,13 +52,45 @@ const { receipt } = await mitra.auth.requestEmailCode({ email })
 const user = await mitra.auth.verifyEmailCode({ receipt, code })
 ```
 
-Login por e-mail e senha, só em app com contas próprias (modo exclusivo) e quando `mitra.passwordLoginEnabled` for `true`. A senha é digitada no popup da Mitra e nunca passa pelo código do app; chame direto do clique, antes de qualquer `await`, para o browser não bloquear o popup:
+### Login por e-mail e senha
+
+Só em app com contas próprias (modo exclusivo) e quando `mitra.passwordLoginEnabled` for `true`. O dono do app escolhe um de dois modos, app a app.
+
+**Tela da Mitra (recomendado).** A senha é digitada no popup da Mitra e não passa pelo código do app. Chame direto do clique, antes de qualquer `await`, para o browser não bloquear o popup:
 
 ```typescript
 const user = await mitra.auth.signInWithPassword()   // ou signUpWithPassword()
 await mitra.auth.changePassword()                     // com a pessoa logada
 const { resendAfterSeconds } = await mitra.auth.requestPasswordReset(email)  // o link do e-mail abre a página da Mitra
 ```
+
+**Formulário no próprio app.** O app desenha a própria tela e o SDK chama o IAM direto, sem popup. Só funciona com esse modo ligado no app: desligado, o IAM recusa com `PASSWORD_FORM_NOT_ENABLED` o login, a confirmação do cadastro, a troca e a confirmação do reset. O pedido do código de cadastro e o pedido do link de reset não levam senha e passam nos dois modos.
+
+> A senha passa pelo código do app. Não guarde, não registre em log e não envie a senha a nenhum outro lugar além do método do SDK. O padrão mais seguro é `signInWithPassword()`, que usa a tela da Mitra.
+
+```typescript
+// login
+const user = await mitra.auth.signInWithPasswordForm({ email, password })
+
+// cadastro em dois passos: o código vai por e-mail, a senha vai junto do código
+const { receipt } = await mitra.auth.startPasswordSignUp({ email })
+const newUser = await mitra.auth.completePasswordSignUp({ receipt, code, password })
+
+// troca, com a pessoa logada; o SDK entra de novo com a senha nova
+await mitra.auth.changePasswordForm({ currentPassword, newPassword })
+```
+
+No reset, o link do e-mail abre `/reset-password` na origem do app, com o token no fragmento da URL. Crie essa rota no app, leia o token e confirme:
+
+```typescript
+await mitra.auth.requestPasswordReset(email)
+
+// na rota /reset-password
+const token = mitra.auth.readPasswordResetToken()   // tira o token da URL
+if (token) await mitra.auth.confirmPasswordReset({ token, newPassword })
+```
+
+A troca e o reset encerram todas as sessões da conta. Depois do reset, a pessoa entra de novo com a senha nova.
 
 Chat com agente:
 
@@ -91,9 +123,16 @@ Falhas de API lançam `MitraApiError`, com `status`, `code`, `details` e `retryA
 | `403` | a pessoa não tem acesso ao recurso | confira as permissões dela no app |
 | `429`, `5xx` | limite de requisições ou falha no servidor | espere `retryAfterSeconds`, quando vier, e repita se a operação puder ser repetida |
 | `INVALID_CONFIGURATION` | argumento inválido, ou `requestEmailCode()` antes de `init()` | corrija o argumento ou chame `init()` no startup |
-| `UNSUPPORTED_AUTH_METHOD` | `signIn` ou `signUp` antigos, com senha no código do app | use `signInWithPassword()` ou `signUpWithPassword()` |
-| `PASSWORD_CHANGED_SIGN_IN_AGAIN` | `changePassword()` trocou a senha, mas o novo login falhou; a sessão local já foi limpa | leve a pessoa ao login com a senha nova |
-| `RATE_LIMITED`, `RATE_LIMIT_EXCEEDED` | `requestPasswordReset()` pedido vezes demais para o mesmo endereço (`RATE_LIMITED`) ou da mesma rede (`RATE_LIMIT_EXCEEDED`) | espere `retryAfterSeconds`, quando vier |
+| `UNSUPPORTED_AUTH_METHOD` | `signIn` ou `signUp` antigos | use `signInWithPassword()` ou `signUpWithPassword()`; no formulário próprio, `signInWithPasswordForm()` ou `startPasswordSignUp()` |
+| `PASSWORD_FORM_NOT_ENABLED` | `403` em `signInWithPasswordForm()`, `completePasswordSignUp()`, `changePasswordForm()` ou `confirmPasswordReset()`, com o app no modo da tela da Mitra | ligue o modo "Formulário no próprio app" no login por senha do app, ou use os métodos da tela da Mitra (`signInWithPassword()`, `signUpWithPassword()`, `changePassword()`) |
+| `INVALID_CREDENTIALS` | `401` de e-mail ou senha errados, conta bloqueada ou sem senha, todos com a mesma resposta; na troca, a senha atual errada | mostre uma mensagem só, sem dizer qual dado errou |
+| `WEAK_PASSWORD` | a senha nova não passa na política; a mensagem diz a regra | mostre a mensagem e peça outra senha |
+| `CURRENT_PASSWORD_REQUIRED` | `changePasswordForm()` sem a senha atual, numa conta que já tem senha | peça a senha atual |
+| `PASSWORD_ALREADY_SET` | `completePasswordSignUp()` numa conta que já tem senha | leve a pessoa ao login ou ao reset |
+| `SSO_ACCOUNT` | `changePasswordForm()`, `completePasswordSignUp()` ou `confirmPasswordReset()` numa conta que entra com Google ou Microsoft | leve a pessoa ao login pelo provedor dela |
+| `RESET_TOKEN_USED`, `RESET_TOKEN_EXPIRED` | o link de reset já foi usado ou venceu; token desconhecido também chega como `RESET_TOKEN_EXPIRED` | peça um link novo com `requestPasswordReset()` |
+| `PASSWORD_CHANGED_SIGN_IN_AGAIN` | `changePassword()` ou `changePasswordForm()` trocou a senha, mas o novo login falhou; a sessão local já foi limpa | leve a pessoa ao login com a senha nova |
+| `RATE_LIMITED`, `RATE_LIMIT_EXCEEDED` | `requestPasswordReset()` ou `startPasswordSignUp()` pedido vezes demais para o mesmo endereço (`RATE_LIMITED`), ou rotas de senha chamadas vezes demais da mesma rede, nos métodos do formulário próprio também (`RATE_LIMIT_EXCEEDED`); no login, na confirmação do cadastro, na troca e na confirmação do reset do formulário próprio, `RATE_LIMIT_EXCEEDED` também sai quando o IAM está no limite de senhas em processamento | espere `retryAfterSeconds`, quando vier |
 | `INVALID_CODE` | o código digitado não confere | peça para a pessoa conferir o código |
 | `MAGIC_LINK_EXPIRED`, `MAGIC_LINK_USED`, `MAGIC_LINK_INVALID` | o link do e-mail venceu, já foi usado ou não vale | peça um código novo |
 | `REDIRECT_NOT_ALLOWED` | o servidor respondeu com redirect | confira o `apiUrl` |
