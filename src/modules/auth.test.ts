@@ -2038,7 +2038,7 @@ describe('AuthModule password methods', () => {
         const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
 
         expect(auth.readPasswordResetToken()).toBeNull();
-        expect(vi.mocked(browser.window.history.replaceState).mock.calls.length).toBe(cleared ? 1 : 0);
+        expect(vi.mocked(browser.window.history.replaceState).mock.calls).toHaveLength(cleared ? 1 : 0);
       });
 
       it('should send the token and the new password, without a session', async () => {
