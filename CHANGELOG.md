@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file.
 
+## 1.8.1
+
+- Depend on `@mitralab.io/sdk-core@0.3.2`: a message still pending when the agent session closes
+  is handed to the Copilot by REST with its `mode` instead of being dropped, and `sendAndWait`
+  rejects instead of hanging; `providerUsage` readings carry `provider` when the box sends it.
+
 ## 1.8.0
 
 Stable release of the 1.8.0-beta line, with `@mitralab.io/sdk-core@0.3.1`.
