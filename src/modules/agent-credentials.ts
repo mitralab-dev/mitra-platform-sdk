@@ -5,6 +5,7 @@ import {
   type AgentCredentialOptions,
   type AgentCredentialsModule as CoreAgentCredentialsModule,
   type AgentModel,
+  type AgentReadyProvider,
   type AuthenticationResult,
   type CredentialStatus,
   type CredentialUsage,
@@ -22,6 +23,11 @@ export type AgentDeviceProvider = 'OPENAI';
 export interface AgentCredentialsModule {
   list(options?: AgentCredentialOptions): Promise<CredentialStatus[]>;
   listModels(agentId?: string, options?: AgentCredentialOptions): Promise<AgentModel[]>;
+  /**
+   * The providers the next turn can run on, in one call to the Copilot: each with its models and,
+   * for the built-in ones, the reading `usage(provider)` answers, or null when there is none.
+   */
+  providers(agentId?: string, options?: AgentCredentialOptions): Promise<AgentReadyProvider[]>;
   /**
    * The last subscription window a chat on this credential reported, readable with no chat open.
    * `null` until a turn on the provider's subscription login has reported one.
@@ -80,6 +86,7 @@ export function createBrowserAgentCredentialsModule(
   return {
     list: (options) => core.list(options),
     listModels: (agentId, options) => core.listModels(agentId, options),
+    providers: (agentId, options) => core.providers(agentId, options),
     usage: (provider, options) => {
       requireProvider(provider, ['ANTHROPIC', 'OPENAI'] as const, 'Subscription usage');
       return core.usage(provider, options);

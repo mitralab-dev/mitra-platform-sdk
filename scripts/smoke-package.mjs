@@ -115,6 +115,7 @@ import {
   MitraApiError,
   executeServerFunctionMitra,
   loginWithGoogleMitra,
+  type AgentReadyProvider,
   type AllTokens,
   type BackofficeToken,
   type EmailCodeRequest,
@@ -124,6 +125,7 @@ import {
   type FunctionExecution,
   type GoogleSignInOptions,
   type NativeAgentTaskSession,
+  type NativeAgentTimelineItem,
   type LoginResponse,
   type MitraClient,
   type MitraConfig,
@@ -227,6 +229,9 @@ void client.auth.signInFromPreview()
 void client.agentCredentials.startOAuth("OPENAI")
 const agentSession: NativeAgentTaskSession = client.agentTasks.session({ create: true, agentType: "CLAUDE" })
 agentSession.send("hello")
+const readyProviders: Promise<AgentReadyProvider[]> = client.agentCredentials.providers("agent-id", { scope: "ACCOUNT" })
+const hasOlder: boolean = agentSession.hasOlder
+const olderItems: Promise<readonly NativeAgentTimelineItem[]> = agentSession.loadOlder()
 agentSession.close()
 const legacyConfig: MitraConfig = { baseURL: "https://api.example.com", projectId: "app" }
 const interactionsConfig: InteractionsMitraConfig = legacyConfig
@@ -252,6 +257,9 @@ void formUser
 void passwordSignUpStarted
 void resetToken
 void resetConfirmed
+void readyProviders
+void hasOlder
+void olderItems
 void legacyConfig
 void interactionsConfig
 void structurallyIdenticalConfig
@@ -279,7 +287,13 @@ void client.auth.ensureFreshSession()
 void client.publicFunctions.execute("public-function-id")
 void client.integration.list()
 const agentSession: sdk.NativeAgentTaskSession = client.agentTasks.session({ taskId: "task-id" })
+const readyProviders: Promise<sdk.AgentReadyProvider[]> = client.agentCredentials.providers()
+const hasOlder: boolean = agentSession.hasOlder
+const olderItems: Promise<readonly sdk.NativeAgentTimelineItem[]> = agentSession.loadOlder()
 agentSession.close()
+void readyProviders
+void hasOlder
+void olderItems
 void client
 void user
 void query

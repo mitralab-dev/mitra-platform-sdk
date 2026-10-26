@@ -2,6 +2,26 @@
 
 All notable changes to this project are documented in this file.
 
+## 1.8.0
+
+Stable release of the 1.8.0-beta line, with `@mitralab.io/sdk-core@0.3.1`.
+
+- Includes the password sign-in of 1.8.0-beta.0 (#171/#172) and 1.8.0-beta.1 (#173/#174), both
+  detailed below: `signInWithPassword()`, `signUpWithPassword()`, `changePassword()` and
+  `requestPasswordReset()` on the Mitra auth page, `signOut()` ending an exclusive app session on
+  the server, `mitra.passwordLoginEnabled`, and the app's own form with
+  `signInWithPasswordForm()`, `startPasswordSignUp()`, `completePasswordSignUp()`,
+  `changePasswordForm()`, `readPasswordResetToken()` and `confirmPasswordReset()`.
+- Depend on `@mitralab.io/sdk-core@0.3.1`. Both additions need the Copilot with
+  mitra-copilot#549.
+- `agentCredentials.providers(agentId?, options?)`: the providers the next turn can run on, in one
+  call to the Copilot's `GET /api/v1/models/providers`, each with `provider`, `providerName`,
+  `models` and `usage` (null on an API key, a custom provider, before a turn reported a window and
+  when the Copilot could not read it). Export `AgentReadyProvider`.
+- `agentTasks.session(...).loadOlder()` reads the page before the oldest row `history` holds and
+  puts it before `history`; `hasOlder` says whether the last page read had more. Both come from the
+  core session, which the offline gate passes through.
+
 ## 1.8.0-beta.1
 
 Password login from the app's own form, for apps whose owner turns that mode on (the Mitra auth

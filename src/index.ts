@@ -67,6 +67,7 @@ export type {
   AgentCredentialsModule,
   NativeAgentMessage,
   NativeAgentModel,
+  AgentReadyProvider,
   AgentProviderUsage,
   AgentQueueItem,
   AgentSendOptions,
