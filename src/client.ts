@@ -519,6 +519,7 @@ export type {
 } from './modules/agent-tasks';
 export type {
   AgentModel as NativeAgentModel,
+  AgentReadyProvider,
   AuthenticationResult,
   CredentialStatus,
   CredentialUsage,

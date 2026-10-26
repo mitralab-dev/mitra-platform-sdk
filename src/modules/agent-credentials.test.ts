@@ -21,6 +21,7 @@ describe('createBrowserAgentCredentialsModule', () => {
   it.each<[string, unknown, number, (options?: AgentCredentialOptions) => Promise<unknown>]>([
     ['list', [], 200, (options) => credentials().list(options)],
     ['listModels', [], 200, (options) => credentials().listModels(undefined, options)],
+    ['providers', [], 200, (options) => credentials().providers(undefined, options)],
     ['saveApiKey', undefined, 204, (options) => credentials().saveApiKey('ANTHROPIC', 'secret', options)],
     ['remove', undefined, 204, (options) => credentials().remove('OPENAI', options)],
     ['startOAuth', { authUrl: 'https://auth', state: 's' }, 200, (options) => credentials().startOAuth('ANTHROPIC', options)],

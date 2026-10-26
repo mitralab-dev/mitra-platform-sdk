@@ -43,7 +43,8 @@ No app gerado pelo Code Studio, `VITE_MITRA_APP_ID` e `VITE_MITRA_API_URL` já v
 - `integration.executeByAlias(alias, request)`: chama uma API externa configurada no app. A credencial do provedor fica na Mitra e não passa pelo browser.
 - `agentTasks.session(...)`: chat com agente, com `send`, `sendAndWait`, `cancel` e eventos como `delta`, `turnEnd` e `error`.
   `send` devolve o id da mensagem; com o browser offline a mensagem espera a rede e `send` devolve `undefined`.
-- `agentCredentials`: credenciais de provedor de IA e modelos disponíveis.
+  `loadOlder()` traz a página anterior do histórico e põe antes de `history`; `hasOlder` diz se ainda há mais antiga.
+- `agentCredentials`: credenciais de provedor de IA e modelos disponíveis. `providers(agentId?)` devolve numa chamada só os provedores em que o próximo turno pode rodar, cada um com os modelos e a última leitura da assinatura.
 
 Login por código no e-mail, para quem monta a própria tela:
 
