@@ -126,6 +126,7 @@ import {
   type GoogleSignInOptions,
   type NativeAgentTaskSession,
   type NativeAgentTimelineItem,
+  type NativeAgentToolEvent,
   type LoginResponse,
   type MitraClient,
   type MitraConfig,
@@ -232,6 +233,11 @@ agentSession.send("hello")
 const readyProviders: Promise<AgentReadyProvider[]> = client.agentCredentials.providers("agent-id", { scope: "ACCOUNT" })
 const hasOlder: boolean = agentSession.hasOlder
 const olderItems: Promise<readonly NativeAgentTimelineItem[]> = agentSession.loadOlder()
+agentSession.on("notification", (notification) => { const outcome: string = notification.outcome; void outcome })
+const notificationOf = (item: NativeAgentTimelineItem): Record<string, unknown> | undefined => (item.kind === "notification" ? item.payload : undefined)
+const toolTitle = (tool: NativeAgentToolEvent): string | undefined => tool.title
+void notificationOf
+void toolTitle
 agentSession.close()
 const legacyConfig: MitraConfig = { baseURL: "https://api.example.com", projectId: "app" }
 const interactionsConfig: InteractionsMitraConfig = legacyConfig
@@ -290,6 +296,11 @@ const agentSession: sdk.NativeAgentTaskSession = client.agentTasks.session({ tas
 const readyProviders: Promise<sdk.AgentReadyProvider[]> = client.agentCredentials.providers()
 const hasOlder: boolean = agentSession.hasOlder
 const olderItems: Promise<readonly sdk.NativeAgentTimelineItem[]> = agentSession.loadOlder()
+agentSession.on("notification", (notification) => { const outcome: string = notification.outcome; void outcome })
+const notificationOf = (item: sdk.NativeAgentTimelineItem): Record<string, unknown> | undefined => (item.kind === "notification" ? item.payload : undefined)
+const toolTitle = (tool: sdk.NativeAgentToolEvent): string | undefined => tool.title
+void notificationOf
+void toolTitle
 agentSession.close()
 void readyProviders
 void hasOlder
