@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented in this file.
 
+## 1.8.2
+
+- Depend on `@mitralab.io/sdk-core@0.3.3`: background work that ended reaches the agent session as
+  a `notification` event and a `notification` history item (`AgentTimelineItem` gains that member,
+  with `payload` and no `text`), tool events and items carry the tool's `title`, and the README
+  says a `send` without `mode` goes into the running turn.
+
 ## 1.8.1
 
 - Depend on `@mitralab.io/sdk-core@0.3.2`: a message still pending when the agent session closes
