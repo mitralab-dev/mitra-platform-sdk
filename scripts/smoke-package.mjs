@@ -235,6 +235,8 @@ const hasOlder: boolean = agentSession.hasOlder
 const olderItems: Promise<readonly NativeAgentTimelineItem[]> = agentSession.loadOlder()
 agentSession.on("notification", (notification) => { const outcome: string = notification.outcome; void outcome })
 const notificationOf = (item: NativeAgentTimelineItem): Record<string, unknown> | undefined => (item.kind === "notification" ? item.payload : undefined)
+const notificationSummaryOf = (item: NativeAgentTimelineItem): string | undefined => (item.kind === "notification" ? item.summary : undefined)
+void notificationSummaryOf
 const toolTitle = (tool: NativeAgentToolEvent): string | undefined => tool.title
 void notificationOf
 void toolTitle
@@ -298,6 +300,8 @@ const hasOlder: boolean = agentSession.hasOlder
 const olderItems: Promise<readonly sdk.NativeAgentTimelineItem[]> = agentSession.loadOlder()
 agentSession.on("notification", (notification) => { const outcome: string = notification.outcome; void outcome })
 const notificationOf = (item: sdk.NativeAgentTimelineItem): Record<string, unknown> | undefined => (item.kind === "notification" ? item.payload : undefined)
+const notificationSummaryOf = (item: sdk.NativeAgentTimelineItem): string | undefined => (item.kind === "notification" ? item.summary : undefined)
+void notificationSummaryOf
 const toolTitle = (tool: sdk.NativeAgentToolEvent): string | undefined => tool.title
 void notificationOf
 void toolTitle

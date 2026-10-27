@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented in this file.
 
+## 1.8.3
+
+- Depend on `@mitralab.io/sdk-core@0.3.4`: the `notification` history item carries `source`,
+  `outcome`, `summary` and `detail` on top, as the live `notification` event does, with `payload`
+  kept; and a redial the box opens with its state no longer leaves the session `streaming` with no
+  `delta` and no `turnEnd`.
+
 ## 1.8.2
 
 - Depend on `@mitralab.io/sdk-core@0.3.3`: background work that ended reaches the agent session as
