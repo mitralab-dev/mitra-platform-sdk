@@ -8,6 +8,11 @@ All notable changes to this project are documented in this file.
   a `notification` event and a `notification` history item (`AgentTimelineItem` gains that member,
   with `payload` and no `text`), tool events and items carry the tool's `title`, and the README
   says a `send` without `mode` goes into the running turn.
+- `NativeAgentTimelineItem` gains `kind: "notification"`, whose `payload` replaces `text`: code that
+  handles the known kinds and reads `item.text` in a catch-all branch has to handle it (TypeScript
+  says where). A patch release, as the 0.3.x core is: the runtime changes nothing for an app that
+  does not receive the item, and the item only comes once the box and the Copilot that send it are
+  live, after this release (mitra-core-sdk 0.3.3 CHANGELOG).
 
 ## 1.8.1
 
