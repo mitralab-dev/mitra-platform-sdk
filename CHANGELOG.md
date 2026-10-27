@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file.
 
+## 1.8.4
+
+- Depend on `@mitralab.io/sdk-core@0.3.5`: a second tab that sends a message to the queue of a chat
+  whose turn runs now sees that turn end, and the `sendAndWait` of the queued message resolves only
+  with its own turn; `FunctionVersion.code` accepts `null` when the Functions API redacts source.
+
 ## 1.8.3
 
 - Depend on `@mitralab.io/sdk-core@0.3.4`: the `notification` history item carries `source`,
