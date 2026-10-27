@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file.
 
+## 1.8.5
+
+- Depend on `@mitralab.io/sdk-core@0.3.6`: a session that loads the history while a turn runs, with
+  a page that starts after that turn's question, no longer shows the question again at the end of
+  `history`, nor twice after `loadOlder`.
+
 ## 1.8.4
 
 - Depend on `@mitralab.io/sdk-core@0.3.5`: a second tab that sends a message to the queue of a chat
