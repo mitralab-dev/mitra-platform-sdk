@@ -8,6 +8,8 @@ All notable changes to this project are documented in this file.
   Codex plan) arrives live as the `plan` event and stays in `history` as a `plan` item, in the
   same position after a reload. Older copilots and boxes without the list keep working, the item
   just does not show.
+  The new `plan` item has `steps` and no `text`: code that switches over every item kind, or
+  assumes every item has `text`, needs a `plan` branch.
 
 ## 1.8.5
 
