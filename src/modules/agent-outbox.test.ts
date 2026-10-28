@@ -72,6 +72,7 @@ const auth: AuthSessionPort = {
   ensureFreshSession: vi.fn().mockResolvedValue(true),
   handleUnauthorized: vi.fn().mockResolvedValue(false),
   readSessionTokens: vi.fn().mockReturnValue({ token: 'access', refreshToken: 'refresh' }),
+  isTabScoped: vi.fn().mockReturnValue(false),
   onSessionChange: vi.fn().mockReturnValue(() => undefined),
   adoptSession: vi.fn(),
   rotateSession: vi.fn(),

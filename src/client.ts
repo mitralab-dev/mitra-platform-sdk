@@ -155,7 +155,13 @@ export interface MitraClient {
    * passwordLoginEnabled, and the brand `requestEmailCode()` sends with, from
    * the public app info endpoint.
    *
-   * Safe to call multiple times. Subsequent calls are no-ops.
+   * In a browser it also finishes a sign-in through an identity connection
+   * (see `auth.completeIdentityConnectionSignInRedirect()`) when the URL
+   * carries one, and rejects when that sign-in fails. Without such a fragment
+   * it makes no extra request.
+   *
+   * Safe to call multiple times. A call made while another runs waits for it;
+   * once the app info is read, later calls are no-ops.
    *
    * @example
    * ```typescript
@@ -403,13 +409,24 @@ export function createClient(config: MitraClientConfig): MitraClient {
   legacyBridge.connect();
 
   let initialized = false;
+  let initFlight: Promise<void> | null = null;
   let allowSignup = true;
   let emailLoginEnabled = false;
   let passwordLoginEnabled = false;
 
-  async function init(): Promise<void> {
-    if (initialized) return;
+  // A second call while the first runs (React StrictMode mounts twice) joins
+  // it: the code in the fragment is single-use, and a second boot returning
+  // before the first one stored the session would render the app signed out.
+  function init(): Promise<void> {
+    if (initFlight) return initFlight;
+    if (initialized) return Promise.resolve();
+    initFlight = runInit().finally(() => {
+      initFlight = null;
+    });
+    return initFlight;
+  }
 
+  async function runInit(): Promise<void> {
     const publicClient = new HttpClient({
       baseUrl: codeStudioUrl,
       getToken: () => null,
@@ -432,6 +449,13 @@ export function createClient(config: MitraClientConfig): MitraClient {
     passwordLoginEnabled = appInfo.passwordLoginEnabled;
 
     initialized = true;
+
+    // The app info is in place first, as an app reads it right after init().
+    // A failed redemption rejects init(); the fragment is already gone, so a
+    // reload starts clean instead of failing the same way.
+    if (globalThis.window !== undefined) {
+      await authModule.completeIdentityConnectionSignInRedirect();
+    }
   }
 
   return {

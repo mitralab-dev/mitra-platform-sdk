@@ -186,6 +186,7 @@ void client.auth.completeGoogleSignInRedirect()
 void client.auth.signInWithEmail({ mode: "popup" })
 void client.auth.verifyEmailCode(emailCodeVerification)
 void client.auth.completeEmailSignInRedirect()
+const connectionUser: Promise<User | null> = client.auth.completeIdentityConnectionSignInRedirect()
 const passwordUser: Promise<User> = client.auth.signInWithPassword()
 void client.auth.signUpWithPassword()
 void client.auth.changePassword()
@@ -262,6 +263,7 @@ void passwordUser
 void passwordResetRequested
 void passwordLoginEnabled
 void formUser
+void connectionUser
 void passwordSignUpStarted
 void resetToken
 void resetConfirmed

@@ -1460,6 +1460,197 @@ describe('AuthModule', () => {
       );
     });
   });
+
+  describe('identity connection sign-in', () => {
+    const CONNECTION_FRAGMENT =
+      '#codeMitra=code-1&stateMitra=connection.0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a&connectionMitra=sankhya-pass';
+
+    function framedBrowser(fragment = CONNECTION_FRAGMENT) {
+      const browser = mockBrowser(undefined, { framed: true });
+      browser.window.location.hash = fragment;
+      const tabStorage = browser.window.sessionStorage as unknown as ReturnType<typeof mockLocalStorage>;
+      return { browser, tabStorage };
+    }
+
+    it('should return null without a request when the URL is not from an identity connection', async () => {
+      framedBrowser('#codeMitra=code-1&stateMitra=google.abc');
+      const fetchMock = mockFetchSequence([]);
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+      await expect(auth.completeIdentityConnectionSignInRedirect()).resolves.toBeNull();
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(auth.isAuthenticated).toBe(false);
+    });
+
+    it('should keep the session with allTokens in this tab and leave the shared one alone', async () => {
+      const { browser, tabStorage } = framedBrowser();
+      storedSession(browser.localStorage, 'shared-access', 'shared-refresh');
+      const sharedSession = browser.localStorage._store[STORAGE_KEY];
+      mockFetchSequence([
+        { body: { ...fakeTokenResponse, allTokens: fakeAllTokens } },
+        { body: currentUserResponse },
+      ]);
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+      await expect(auth.completeIdentityConnectionSignInRedirect()).resolves.toEqual(apiUser);
+
+      expect(auth.allTokens).toEqual(fakeAllTokens);
+      expect(JSON.parse(tabStorage._store[STORAGE_KEY])).toEqual({
+        user: apiUser,
+        token: 'access-123',
+        refreshToken: 'refresh-456',
+        allTokens: fakeAllTokens,
+      });
+      expect(browser.localStorage._store[STORAGE_KEY]).toBe(sharedSession);
+    });
+
+    it('should restore the tab session before the shared one and keep it in the tab when refreshed', async () => {
+      const { browser, tabStorage } = framedBrowser('');
+      storedSession(browser.localStorage, 'shared-access', 'shared-refresh');
+      const sharedSession = browser.localStorage._store[STORAGE_KEY];
+      tabStorage._store[STORAGE_KEY] = JSON.stringify({
+        user: fakeUser,
+        token: 'tab-access',
+        refreshToken: 'tab-refresh',
+        allTokens: fakeAllTokens,
+      });
+      const fetchMock = mockFetchSequence([
+        { body: { accessToken: 'new-access', refreshToken: 'new-refresh', tokenType: 'Bearer' } },
+      ]);
+
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+      expect(auth.accessToken).toBe('tab-access');
+      expect(auth.allTokens).toEqual(fakeAllTokens);
+
+      await expect(auth.refreshSession()).resolves.toBe(true);
+      expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ refreshToken: 'tab-refresh' });
+      expect(JSON.parse(tabStorage._store[STORAGE_KEY])).toMatchObject({
+        token: 'new-access',
+        refreshToken: 'new-refresh',
+      });
+      expect(browser.localStorage._store[STORAGE_KEY]).toBe(sharedSession);
+    });
+
+    it('should drop only a broken tab session and restore the shared one', () => {
+      const { browser, tabStorage } = framedBrowser('');
+      storedSession(browser.localStorage, 'shared-access', 'shared-refresh');
+      const sharedSession = browser.localStorage._store[STORAGE_KEY];
+      tabStorage._store[STORAGE_KEY] = JSON.stringify({
+        user: fakeUser,
+        token: jwt({ app_id: 'another-app' }),
+        refreshToken: 'tab-refresh',
+      });
+
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+      expect(auth.accessToken).toBe('shared-access');
+      expect(tabStorage._store[STORAGE_KEY]).toBeUndefined();
+      expect(browser.localStorage._store[STORAGE_KEY]).toBe(sharedSession);
+    });
+
+    it('should move the next sign-in of another method back to the shared storage', async () => {
+      const { browser, tabStorage } = framedBrowser('');
+      tabStorage._store[STORAGE_KEY] = JSON.stringify({
+        user: fakeUser,
+        token: 'tab-access',
+        refreshToken: 'tab-refresh',
+      });
+      mockFetchSequence([{ body: fakeTokenResponse }, { body: currentUserResponse }]);
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+      const signIn = auth.signInWithEmail({ mode: 'popup' });
+      const state = browser.getStartUrl().searchParams.get('state')!;
+      browser.dispatchMessage(authPageResult(state, { code: 'exchange-code' }));
+      await signIn;
+
+      expect(JSON.parse(browser.localStorage._store[STORAGE_KEY])).toMatchObject({ token: 'access-123' });
+      expect(tabStorage._store[STORAGE_KEY]).toBeUndefined();
+    });
+
+    it.each([
+      ['setSession', (auth: AuthModule) => auth.setSession({ accessToken: 'adopted-access', refreshToken: 'adopted-refresh' })],
+      ['setToken', (auth: AuthModule) => auth.setToken('adopted-access')],
+    ])('should keep a session replaced by %s in the shared storage', (_method, replace) => {
+      const { browser, tabStorage } = framedBrowser('');
+      tabStorage._store[STORAGE_KEY] = JSON.stringify({
+        user: fakeUser,
+        token: 'tab-access',
+        refreshToken: 'tab-refresh',
+      });
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+      replace(auth);
+
+      expect(JSON.parse(browser.localStorage._store[STORAGE_KEY])).toMatchObject({ token: 'adopted-access' });
+      expect(tabStorage._store[STORAGE_KEY]).toBeUndefined();
+    });
+
+    it('should stop using the restored session, keeping it stored, when the bridge reports an error', async () => {
+      const { browser } = framedBrowser(
+        '#errorMitra=access_denied&stateMitra=connection.0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a&connectionMitra=sankhya-pass'
+      );
+      storedSession(browser.localStorage, 'shared-access', 'shared-refresh');
+      const sharedSession = browser.localStorage._store[STORAGE_KEY];
+      const fetchMock = mockFetchSequence([]);
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+      expect(auth.isAuthenticated).toBe(true);
+
+      await expect(auth.completeIdentityConnectionSignInRedirect()).rejects.toThrow('access_denied');
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(auth.isAuthenticated).toBe(false);
+      expect(browser.localStorage._store[STORAGE_KEY]).toBe(sharedSession);
+    });
+
+    it('should drop the tab copy when a token set by hand is not saved', () => {
+      const { browser, tabStorage } = framedBrowser('');
+      tabStorage._store[STORAGE_KEY] = JSON.stringify({
+        user: fakeUser,
+        token: 'tab-access',
+        refreshToken: 'tab-refresh',
+      });
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+      auth.setToken('manual-access', false);
+
+      expect(tabStorage._store[STORAGE_KEY]).toBeUndefined();
+      expect(browser.localStorage._store[STORAGE_KEY]).toBeUndefined();
+      expect(getAuthSessionPort(auth).isTabScoped()).toBe(false);
+    });
+
+    it('should keep a rotated tab session in the tab', () => {
+      const { browser, tabStorage } = framedBrowser('');
+      tabStorage._store[STORAGE_KEY] = JSON.stringify({
+        user: fakeUser,
+        token: 'tab-access',
+        refreshToken: 'tab-refresh',
+      });
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+      getAuthSessionPort(auth).rotateSession({ token: 'rotated-access', refreshToken: 'rotated-refresh' });
+
+      expect(JSON.parse(tabStorage._store[STORAGE_KEY])).toMatchObject({ token: 'rotated-access' });
+      expect(browser.localStorage._store[STORAGE_KEY]).toBeUndefined();
+      expect(getAuthSessionPort(auth).isTabScoped()).toBe(true);
+    });
+
+    it('should end only the tab session on sign-out', () => {
+      const { browser, tabStorage } = framedBrowser('');
+      storedSession(browser.localStorage, 'shared-access', 'shared-refresh');
+      const sharedSession = browser.localStorage._store[STORAGE_KEY];
+      tabStorage._store[STORAGE_KEY] = JSON.stringify({
+        user: fakeUser,
+        token: 'tab-access',
+        refreshToken: 'tab-refresh',
+      });
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+      auth.signOut();
+
+      expect(tabStorage._store[STORAGE_KEY]).toBeUndefined();
+      expect(browser.localStorage._store[STORAGE_KEY]).toBe(sharedSession);
+    });
+  });
 });
 
 describe('AuthModule password methods', () => {

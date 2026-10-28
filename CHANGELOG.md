@@ -2,6 +2,49 @@
 
 All notable changes to this project are documented in this file.
 
+## 1.9.0-beta.0
+
+Sign-in through an identity connection, starting with Sankhya Pass, for an app opened inside the
+host system's iframe.
+
+- `auth.completeIdentityConnectionSignInRedirect()` reads `codeMitra`, `stateMitra` and
+  `connectionMitra` from the fragment the platform bridge page (`sankhya-auth.html`) leaves on the
+  app's origin, and redeems the single-use code at
+  `POST /api/v1/auth/identity-connections/{slug}/exchange` with `{ appId, code }`. The response is
+  read like every other exchange, `allTokens` included. Tokens never travel in the URL or by
+  `postMessage`.
+- It returns `null`, without a request and without touching the URL, when the fragment has no
+  `connectionMitra` or its `stateMitra` does not start with `connection.`, so the other completions
+  still read their own fragment. From there on the fragment belongs to this flow and is removed
+  before anything can fail. It rejects in a top-level tab (the bridge only runs in an iframe), for
+  a connection slug outside `[a-z0-9-]{1,64}`, for an `errorMitra`, for a missing code and when IAM
+  refuses the code (`401 INVALID_EXCHANGE_CODE`).
+- `init()` calls it in a browser after reading the app info, so an app that already calls
+  `await mitra.init()` opens signed in with no change. A refused code rejects `init()`; the
+  fragment is already gone, so a reload does not repeat the failure. Without the fragment `init()`
+  makes no extra request. A call to `init()` while another one runs now waits for it instead of
+  reading the app info a second time, so a double boot (React `StrictMode`) redeems the code once.
+- A session from an identity connection is kept in `sessionStorage` under `mitra_auth_{appId}`
+  instead of `localStorage`, and lives only as long as its tab: two accounts of the host system
+  (two Sankhya demo bases) open in one browser no longer hand each other's session to the next
+  reload. On startup the tab's session wins over the shared one, which is left in place for the
+  other tabs of the app; a broken tab session is dropped alone and the shared one is restored.
+  `signOut()` in that tab ends only the tab session. Another sign-in or `setSession()` in the same
+  tab goes back to `localStorage` and removes the tab copy; after `setToken()` the session always
+  goes to `localStorage`, and the tab copy is removed even with `setToken(token, false)`. A renewal
+  keeps the session where it is.
+- When the identity connection sign-in fails, the session the client restored at startup is
+  dropped from memory and stays stored where it was (`localStorage`, or `sessionStorage` for a tab
+  session), so the iframe does not stay signed in as someone else after a refused Sankhya Pass
+  login. `init()` still rejects.
+- The deprecated `mitra-interactions-sdk` exports get only the access token of a tab session.
+  Its refresh token is not handed over, because the legacy SDK writes every refresh token it
+  receives to `localStorage` (`mitra-session`), where it would outlive the tab. So in a tab session
+  the legacy exports do not renew on their own, and this SDK renews only before one of its own
+  requests, in `ensureFreshSession()` or in `refreshSession()`, with no timer. An app that uses only the legacy exports gets
+  `401` once the access token expires, unless it makes a call through this SDK or calls
+  `refreshSession()`; the renewed token then reaches the legacy SDK at once.
+
 ## 1.8.6
 
 - Depend on `@mitralab.io/sdk-core@0.3.7`: the turn's step list from T3 (Claude tasks and todos,

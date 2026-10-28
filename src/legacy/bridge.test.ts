@@ -148,6 +148,38 @@ describe('LegacySessionBridge', () => {
     expect(getConfig().refreshToken).toBe(appScopedRefreshToken);
   });
 
+  it('should hand a tab session to the legacy SDK without its refresh token, and keep handing the renewed access token', async () => {
+    const otherRefreshToken = fakeJwt({ app_id: APP_ID, sub: 'u2' });
+    storage._store['mitra-session'] = JSON.stringify({ refreshToken: otherRefreshToken });
+    const tabStorage = mockSessionStorage();
+    tabStorage._store[STORAGE_KEY] = JSON.stringify({
+      user: { id: 'u1', tenantId: 't1', email: 'user@test.com', name: null },
+      token: 'tab-access-token',
+      refreshToken: appScopedRefreshToken,
+    });
+
+    const mitra = createClient({ appId: APP_ID, apiUrl: API_URL });
+
+    expect(getConfig().token).toBe('tab-access-token');
+    expect(getConfig().refreshToken).toBeUndefined();
+    expect(JSON.parse(storage._store['mitra-session'])).toEqual({ refreshToken: otherRefreshToken });
+
+    mockFetchSequence([
+      {
+        body: {
+          accessToken: 'new-access-token',
+          refreshToken: appScopedRefreshToken,
+          tokenType: 'Bearer',
+        },
+      },
+    ]);
+    await expect(mitra.auth.refreshSession()).resolves.toBe(true);
+
+    expect(getConfig().token).toBe('new-access-token');
+    expect(getConfig().refreshToken).toBeUndefined();
+    expect(storage._store['mitra-session']).not.toContain(appScopedRefreshToken);
+  });
+
   it('should leave the legacy session empty when nothing is persisted', () => {
     createClient({ appId: APP_ID, apiUrl: API_URL });
 
