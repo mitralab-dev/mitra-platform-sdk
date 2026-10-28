@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createClient } from './client';
-import { mockFetch, mockFetchSequence, mockLocalStorage } from './test-utils';
+import { mockBrowser, mockFetch, mockFetchSequence, mockLocalStorage } from './test-utils';
 
 function jwt(payload: Record<string, unknown>): string {
   const encode = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url');
@@ -371,5 +371,132 @@ describe('createClient', () => {
       'https://api.mitra.io/iam/api/v1/auth/refresh-token',
       'https://api.mitra.io/integration/api/v1/proxy/resources/resource-1/execute',
     ]);
+  });
+});
+
+describe('createClient init with an identity connection fragment', () => {
+  const APP_ID = 'app-1';
+  const APP_INFO_URL = `https://api.mitra.io/code-studio/api/v1/apps/${APP_ID}/info`;
+  const EXCHANGE_URL = 'https://api.mitra.io/iam/api/v1/auth/identity-connections/sankhya-pass/exchange';
+  const FRAGMENT =
+    '#codeMitra=code-1&stateMitra=connection.0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a&connectionMitra=sankhya-pass';
+  const appInfo = { dataSourceId: 'ds-1', allowSignup: false };
+  const allTokens = {
+    platform: { accessToken: 'session-access', refreshToken: 'session-refresh', tokenType: 'Bearer' },
+    mitraSpace: { token: 'space-token', tokenType: 'Bearer' },
+    b2bToken: null,
+    backoffice: null,
+  };
+  const currentUser = {
+    id: 'u1',
+    tenant: {
+      id: 't1',
+      shortId: 'AAAAAAAAAAAAAAAAAAAAEA',
+      legacyId: null,
+      slug: 'test-tenant',
+      clusterType: 'SHARED',
+      name: 'Test Tenant',
+      description: null,
+      hexColor: null,
+      icon: null,
+      infraStatus: 'ACTIVE',
+      active: true,
+    },
+    email: 'user@test.com',
+    name: 'Test User',
+    imageUrl: null,
+    planId: 'plan-1',
+    onboardingCompleted: false,
+    language: 'pt-BR',
+  };
+
+  function framedAt(fragment: string) {
+    const browser = mockBrowser(undefined, { framed: true });
+    browser.window.location.hash = fragment;
+    return browser;
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('should make no request beyond the app info when the URL carries no fragment', async () => {
+    framedAt('');
+    const fetchMock = mockFetchSequence([{ body: appInfo }]);
+    const mitra = createClient({ appId: APP_ID, apiUrl: 'https://api.mitra.io' });
+
+    await mitra.init();
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([APP_INFO_URL]);
+    expect(mitra.auth.isAuthenticated).toBe(false);
+  });
+
+  it('should finish the sign-in after reading the app info, once for concurrent calls', async () => {
+    const browser = framedAt(FRAGMENT);
+    const fetchMock = mockFetchSequence([
+      { body: appInfo },
+      {
+        body: {
+          accessToken: jwt({ app_id: APP_ID }),
+          refreshToken: jwt({ app_id: APP_ID }),
+          tokenType: 'Bearer',
+          allTokens,
+        },
+      },
+      { body: currentUser },
+    ]);
+    const mitra = createClient({ appId: APP_ID, apiUrl: 'https://api.mitra.io' });
+
+    await Promise.all([mitra.init(), mitra.init()]);
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      APP_INFO_URL,
+      EXCHANGE_URL,
+      'https://api.mitra.io/iam/api/v1/auth/me',
+    ]);
+    expect(mitra.allowSignup).toBe(false);
+    expect(mitra.auth.currentUser).toMatchObject({ id: 'u1' });
+    expect(mitra.auth.allTokens).toEqual(allTokens);
+    expect(browser.window.history.replaceState).toHaveBeenCalledTimes(1);
+  });
+
+  it('should reject init when the exchange is refused, and not repeat it', async () => {
+    const browser = framedAt(FRAGMENT);
+    const fetchMock = mockFetchSequence([
+      { body: appInfo },
+      { body: { message: 'Invalid code', error_code: 'INVALID_EXCHANGE_CODE' }, status: 401 },
+    ]);
+    const mitra = createClient({ appId: APP_ID, apiUrl: 'https://api.mitra.io' });
+
+    await expect(mitra.init()).rejects.toMatchObject({ status: 401 });
+    browser.window.location.hash = '';
+    await expect(mitra.init()).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(mitra.allowSignup).toBe(false);
+    expect(mitra.auth.isAuthenticated).toBe(false);
+  });
+
+  it('should stop using the restored shared session when the exchange is refused, keeping it stored', async () => {
+    framedAt(FRAGMENT);
+    const sharedSession = JSON.stringify({
+      user: { id: 'u2', tenantId: 't1', email: 'other@test.com', name: null },
+      token: jwt({ app_id: APP_ID, sub: 'u2' }),
+      refreshToken: jwt({ app_id: APP_ID, sub: 'u2' }),
+    });
+    (localStorage as unknown as { _store: Record<string, string> })._store[`mitra_auth_${APP_ID}`] = sharedSession;
+    mockFetchSequence([
+      { body: appInfo },
+      { body: { message: 'Invalid code', error_code: 'INVALID_EXCHANGE_CODE' }, status: 401 },
+    ]);
+    const mitra = createClient({ appId: APP_ID, apiUrl: 'https://api.mitra.io' });
+    expect(mitra.auth.isAuthenticated).toBe(true);
+
+    await expect(mitra.init()).rejects.toMatchObject({ status: 401 });
+
+    expect(mitra.auth.isAuthenticated).toBe(false);
+    expect(mitra.auth.accessToken).toBeNull();
+    expect(mitra.auth.currentUser).toBeNull();
+    expect(localStorage.getItem(`mitra_auth_${APP_ID}`)).toBe(sharedSession);
   });
 });

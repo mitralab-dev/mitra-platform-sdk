@@ -93,6 +93,22 @@ if (token) await mitra.auth.confirmPasswordReset({ token, newPassword })
 
 A troca e o reset encerram todas as sessões da conta. Depois do reset, a pessoa entra de novo com a senha nova.
 
+### Login por conexão de identidade (Sankhya Pass)
+
+Para app aberto dentro do iframe de outro sistema, como o SKW da Sankhya. O sistema hospedeiro abre a página de ponte da Mitra (`sankhya-auth.html`), que faz o login no IAM com o token dele e manda o iframe para a origem do app com um código de uso único no fragmento (`#codeMitra=...&stateMitra=connection.*&connectionMitra=sankhya-pass`). Nenhum token passa pela URL ou por `postMessage`.
+
+O `await mitra.init()` troca esse código pela sessão sozinho, então o app abre logado sem código novo. Se a troca falhar, o `init()` rejeita; o fragmento já saiu da URL, e um reload não repete o erro. Fora desse fluxo, o `init()` não faz requisição a mais. Quem não chama `init()` usa `completeIdentityConnectionSignInRedirect()` no startup, que devolve `null` quando a URL não é dele.
+
+O código só é aceito dentro de iframe: aberto numa aba de topo, a troca é recusada.
+
+A sessão desse login fica no `sessionStorage`, na mesma chave `mitra_auth_{appId}`, e dura só enquanto a aba existe. É assim porque o sistema hospedeiro abre o app com a conta de cada base, e duas bases demo da Sankhya abertas no mesmo browser, dividindo o `localStorage`, trocavam a sessão e o alias uma da outra no reload, como já acontecia no legado.
+
+- No startup, a sessão da aba vale antes da sessão compartilhada do `localStorage`. A sessão compartilhada não é apagada: ela é das outras abas do app, logadas do jeito normal. Se a aba não tem sessão própria, ela usa a compartilhada.
+- `signOut()` numa aba assim encerra só a sessão da aba.
+- Um login por outro método ou `setSession()` na mesma aba volta a gravar no `localStorage` e apaga a cópia da aba. Depois de `setToken()` o destino é sempre o `localStorage`, e a cópia da aba é apagada mesmo com `setToken(token, false)`.
+- Se o login pela conexão for recusado, o `init()` rejeita e a sessão que o app tinha restaurado no startup deixa de valer naquela página, para o iframe não seguir logado com outra pessoa. Ela continua guardada onde estava: no `localStorage`, ou no `sessionStorage` se era uma sessão por aba.
+- Os exports legados do `mitra-interactions-sdk` recebem dessa sessão só o access token. O refresh token não vai para eles, porque o SDK legado grava o refresh token no `localStorage` (`mitra-session`), onde ele sobreviveria à aba. Por isso, numa sessão por aba, os exports legados não renovam sozinhos, e o SDK novo também não renova em segundo plano: ele renova antes de uma requisição dele mesmo, em `ensureFreshSession()` ou em `refreshSession()`. Um app que só usa os exports legados recebe `401` quando o access token vence, a menos que faça uma chamada pelo SDK novo ou chame `refreshSession()`; o token renovado chega ao legado na hora.
+
 Chat com agente:
 
 ```typescript
@@ -144,9 +160,9 @@ Falha de rede chega como o erro do próprio `fetch` (`TypeError`), sem passar po
 ## Boas práticas
 
 - Chame `await mitra.init()` no startup, antes de montar a tela de login: `allowSignup`, `emailLoginEnabled`, `passwordLoginEnabled` e o login por e-mail dependem dele.
-- Com `mode: "redirect"`, chame no startup o `completeGoogleSignInRedirect()`, `completeMicrosoftSignInRedirect()` ou `completeEmailSignInRedirect()` do método que você usa. Cada um devolve `null` quando a URL não é dele. O link do e-mail completa o login no mesmo browser que pediu o código; em outro aparelho, a pessoa digita o código.
-- A sessão fica no `localStorage` do domínio do app, na chave `mitra_auth_{appId}`, e é renovada sozinha antes de vencer. `signOut()` limpa e, em app com contas próprias, encerra a sessão no servidor: o refresh token deixa de renovar, e o access token já emitido vale até vencer.
-- Alguns apps recebem tokens extras junto da sessão, em `auth.allTokens`, liberados app por app pela Mitra. O de backoffice é o mais sensível: ele carrega os acessos que a pessoa tem no backoffice da Mitra, vale uma hora e fica no mesmo `localStorage` da sessão, onde qualquer script do domínio do app consegue ler. Leia ele por `auth.ensureFreshBackofficeToken()`, que renova o token quando está perto de vencer e devolve `null` quando o app ou a pessoa não têm esse acesso. Use só contra o backoffice e não repasse para outro serviço.
+- Com `mode: "redirect"`, chame no startup o `completeGoogleSignInRedirect()`, `completeMicrosoftSignInRedirect()` ou `completeEmailSignInRedirect()` do método que você usa. Cada um devolve `null` quando a URL não é dele. O link do e-mail completa o login no mesmo browser que pediu o código; em outro aparelho, a pessoa digita o código. O login por conexão de identidade (Sankhya Pass) dispensa essa chamada: o `init()` já completa.
+- A sessão fica no `localStorage` do domínio do app, na chave `mitra_auth_{appId}`, e é renovada sozinha antes de vencer. A do login por conexão de identidade fica no `sessionStorage` da aba, na mesma chave. `signOut()` limpa a sessão e, em app com contas próprias, encerra a sessão no servidor: o refresh token deixa de renovar, e o access token já emitido vale até vencer.
+- Alguns apps recebem tokens extras junto da sessão, em `auth.allTokens`, liberados app por app pela Mitra. O de backoffice é o mais sensível: ele carrega os acessos que a pessoa tem no backoffice da Mitra, vale uma hora e fica no mesmo storage da sessão, onde qualquer script do domínio do app consegue ler. Leia ele por `auth.ensureFreshBackofficeToken()`, que renova o token quando está perto de vencer e devolve `null` quando o app ou a pessoa não têm esse acesso. Use só contra o backoffice e não repasse para outro serviço.
 - O SDK só repete uma requisição depois de renovar o token num `401`. Fora isso, quem decide repetir é o app.
 - Nunca coloque API key em código que vai para o browser, nem passe uma em `createClient({ apiKey })` num app de browser: o bundle entrega a chave a quem abrir o app. O `signInWithApiKey()` recusa rodar no browser, mas isso não tira do bundle uma chave escrita nele. Para processo sem pessoa, como cron ou coletor, use `@mitralab.io/functions-sdk` com `createClientFromApiKey`.
 
