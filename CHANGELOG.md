@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented in this file.
 
+## 1.8.6
+
+- Depend on `@mitralab.io/sdk-core@0.3.7`: the turn's step list from T3 (Claude tasks and todos,
+  Codex plan) arrives live as the `plan` event and stays in `history` as a `plan` item, in the
+  same position after a reload. Older copilots and boxes without the list keep working, the item
+  just does not show.
+
 ## 1.8.5
 
 - Depend on `@mitralab.io/sdk-core@0.3.6`: a session that loads the history while a turn runs, with
