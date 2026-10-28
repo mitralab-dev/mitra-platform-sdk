@@ -10,6 +10,7 @@ import {
   PASSWORD_CHANGED_SIGN_IN_AGAIN,
 } from './auth-page-flow';
 import { EmailCodeFlow, resolveLanguage } from './email-code-flow';
+import { IdentityConnectionFlow } from './identity-connection-flow';
 import { PasswordFormFlow, passwordChangedSignInAgain } from './password-form-flow';
 import type {
   User,
@@ -98,6 +99,8 @@ export interface AuthSessionPort {
   ensureFreshSession(minValidityMs?: number): Promise<boolean>;
   handleUnauthorized(requestToken: string | null): Promise<boolean>;
   readSessionTokens(): AuthSessionTokens;
+  /** Whether the current session is kept for its tab only (`sessionStorage`). */
+  isTabScoped(): boolean;
   onSessionChange(callback: AuthSessionChangeCallback): () => void;
   adoptSession(session: { token: string; refreshToken?: string | null }): boolean;
   rotateSession(session: { token: string; refreshToken?: string | null }): boolean;
@@ -208,7 +211,8 @@ function isDefinitiveRefreshFailure(error: unknown): boolean {
  * Handles Google and Microsoft SSO, email and password sign-in, trusted session adoption, sign-out,
  * and automatic token refresh.
  * Auth state is persisted to localStorage with key `mitra_auth_{appId}`
- * and restored on page reload.
+ * and restored on page reload; a session from an identity connection is kept
+ * in sessionStorage under the same key instead, so it lives in its tab only.
  *
  * @example
  * ```typescript
@@ -238,7 +242,16 @@ export class AuthModule {
   private readonly passwordAuth: AuthPageFlow;
   private readonly emailCode: EmailCodeFlow;
   private readonly passwordForm: PasswordFormFlow;
+  private readonly identityConnection: IdentityConnectionFlow;
   private brand: string | null = null;
+  /**
+   * Whether the session lives in `sessionStorage`, scoped to its tab, rather
+   * than in `localStorage`. Set for a session from an identity connection: the
+   * host system opens one app per account it signed in, and two of them in one
+   * browser (two Sankhya demo bases, for instance) sharing `localStorage` would
+   * hand each other's session, and identity attributes, to the next reload.
+   */
+  private sessionScoped = false;
 
   constructor(appId: string, iamBaseUrl: string, options: AuthModuleOptions = {}) {
     this.appId = appId;
@@ -296,6 +309,7 @@ export class AuthModule {
       client: this.publicClient,
       exchange: this.passwordAuth,
     });
+    this.identityConnection = new IdentityConnectionFlow({ appId, client: this.publicClient });
     this.loadFromStorage();
     const readAccessToken = () => this.#accessToken;
     sessionPorts.set(this, {
@@ -305,6 +319,7 @@ export class AuthModule {
       ensureFreshSession: (minValidityMs) => this.ensureFreshSession(minValidityMs),
       handleUnauthorized: (requestToken) => this.handleUnauthorized(requestToken),
       readSessionTokens: () => this.readSessionTokens(),
+      isTabScoped: () => this.sessionScoped,
       onSessionChange: (callback) => this.onSessionChange(callback),
       adoptSession: (session) => this.adoptSession(session),
       rotateSession: (session) => this.rotateSession(session),
@@ -610,6 +625,39 @@ export class AuthModule {
 
     const tokenResponse = await this.emailAuth.completeRedirect();
     return tokenResponse ? this.establishSession(tokenResponse) : null;
+  }
+
+  /**
+   * Completes a sign-in made through an identity connection, such as Sankhya
+   * Pass, from the single-use code the platform bridge page leaves in the
+   * fragment (`#codeMitra`, `#stateMitra=connection.*`, `#connectionMitra`).
+   *
+   * `init()` already calls it, so an application only calls it itself when it
+   * does not call `init()`. The session is kept in `sessionStorage`, not
+   * `localStorage`, and so lives only as long as its tab.
+   *
+   * @returns The authenticated user, or `null` when the URL carries no
+   * identity connection result. A fragment of another sign-in method is left
+   * untouched.
+   * @throws When the fragment belongs to an identity connection but cannot be
+   * redeemed: outside an iframe, with an invalid connection, an error from the
+   * bridge, no code, or a code IAM refuses. The fragment is removed first, and
+   * the session this page held is dropped from memory, though not from storage.
+   */
+  async completeIdentityConnectionSignInRedirect(): Promise<User | null> {
+    let tokenResponse: AuthTokenResponse | null;
+    try {
+      tokenResponse = await this.identityConnection.completeRedirect();
+    } catch (error) {
+      // The host system signed someone in here and it was refused. The session
+      // restored at startup may be another person's, so it stops being used in
+      // this page; it stays stored for the tabs it belongs to. This covers every
+      // failure of a fragment of this flow on purpose, a forged one in a
+      // top-level tab included, not only a code IAM refused.
+      this.clearAuthState({ keepStorage: true });
+      throw error;
+    }
+    return tokenResponse ? this.establishSession(tokenResponse, true) : null;
   }
 
   /**
@@ -983,7 +1031,7 @@ export class AuthModule {
   }
 
   /**
-   * Signs out the current user, clearing all auth state and localStorage.
+   * Signs out the current user, clearing all auth state and the stored session.
    *
    * In an app whose accounts are its own, the session also ends on the server:
    * the refresh token is sent to IAM's logout, so it can no longer be renewed.
@@ -1133,6 +1181,9 @@ export class AuthModule {
    *
    * Call `me()` afterwards to fetch the associated user data. {@link allTokens}
    * goes back to `null`, because it belongs to the session being replaced.
+   * The token starts a session of its own, so it is kept in `localStorage`
+   * even when the one it replaces lived in its tab, and that tab copy is
+   * removed in any case.
    *
    * @param token - JWT access token.
    * @param saveToStorage - Whether to persist to localStorage (default: true).
@@ -1151,6 +1202,10 @@ export class AuthModule {
     this.invalidatePendingRefreshes();
     this.#accessToken = token;
     this.#allTokens = null;
+    // A token set by hand is a new session, not the identity connection's one,
+    // and the tab copy of that one would come back on the next reload.
+    this.sessionScoped = false;
+    removeItem(sessionStorageOrNull(), this.storageKey);
     if (saveToStorage) {
       this.saveToStorage();
     }
@@ -1289,7 +1344,7 @@ export class AuthModule {
    * @internal
    */
   private adoptSession(session: { token: string; refreshToken?: string | null }): boolean {
-    return this.applySession(session, false);
+    return this.applySession(session, { keepAllTokens: false, replacesSession: true });
   }
 
   /**
@@ -1302,7 +1357,10 @@ export class AuthModule {
   private rotateSession(session: { token: string; refreshToken?: string | null }): boolean {
     // A legacy refresh started for one person can land after another person
     // signed in to the same app; keeping allTokens then would mix the two.
-    return this.applySession(session, this.isSamePerson(session.token));
+    return this.applySession(session, {
+      keepAllTokens: this.isSamePerson(session.token),
+      replacesSession: false,
+    });
   }
 
   private isSamePerson(token: string): boolean {
@@ -1312,7 +1370,7 @@ export class AuthModule {
 
   private applySession(
     session: { token: string; refreshToken?: string | null },
-    keepAllTokens: boolean
+    { keepAllTokens, replacesSession }: { keepAllTokens: boolean; replacesSession: boolean }
   ): boolean {
     if (
       !this.belongsToConfiguredApp(session.token)
@@ -1326,6 +1384,9 @@ export class AuthModule {
     }
     this.invalidatePendingRefreshes();
     if (!keepAllTokens) this.#allTokens = null;
+    // An adopted session is not the identity connection's one, so it goes to
+    // the shared storage; a rotation renews the session in place, wherever it is.
+    if (replacesSession) this.sessionScoped = false;
     this.#accessToken = session.token;
     if (session.refreshToken !== undefined) {
       this.#refreshToken = session.refreshToken;
@@ -1424,7 +1485,10 @@ export class AuthModule {
     return true;
   }
 
-  private async establishSession(tokenResponse: AuthTokenResponse): Promise<User> {
+  private async establishSession(
+    tokenResponse: AuthTokenResponse,
+    sessionScoped: boolean = false
+  ): Promise<User> {
     if (
       !this.belongsToConfiguredApp(tokenResponse.accessToken)
       || !this.belongsToConfiguredApp(tokenResponse.refreshToken)
@@ -1437,6 +1501,7 @@ export class AuthModule {
     this.#accessToken = tokenResponse.accessToken;
     this.#refreshToken = tokenResponse.refreshToken;
     this.#allTokens = discardEmptyAllTokens(tokenResponse.allTokens);
+    this.sessionScoped = sessionScoped;
 
     try {
       const user = await this.getCurrentUser();
@@ -1467,7 +1532,7 @@ export class AuthModule {
     return { ...user, tenantId: user.tenant.id };
   }
 
-  private clearAuthState(): void {
+  private clearAuthState({ keepStorage = false }: { keepStorage?: boolean } = {}): void {
     const hadAuthState = this._currentUser !== null
       || this.#accessToken !== null
       || this.#refreshToken !== null;
@@ -1476,7 +1541,8 @@ export class AuthModule {
     this.#accessToken = null;
     this.#refreshToken = null;
     this.#allTokens = null;
-    this.removeFromStorage();
+    if (!keepStorage) this.removeFromStorage();
+    this.sessionScoped = false;
     if (hadAuthState) {
       this.notifySessionListeners();
       this.notifyListeners();
@@ -1533,10 +1599,11 @@ export class AuthModule {
   }
 
   private saveToStorage(): void {
-    if (typeof localStorage === 'undefined') return;
+    const target = this.sessionScoped ? sessionStorageOrNull() : localStorageOrNull();
+    if (!target) return;
 
     try {
-      localStorage.setItem(
+      target.setItem(
         this.storageKey,
         JSON.stringify({
           user: this._currentUser,
@@ -1550,46 +1617,91 @@ export class AuthModule {
       );
     } catch {
       // Storage might be full or disabled
+      return;
     }
+    // A tab session left behind would win over this one on the next reload.
+    // The other way round the shared copy stays: it belongs to the other tabs
+    // of this app, signed in their usual way.
+    if (!this.sessionScoped) removeItem(sessionStorageOrNull(), this.storageKey);
   }
 
   private loadFromStorage(): void {
-    if (typeof localStorage === 'undefined') return;
+    // The tab's own session wins over the one every tab shares.
+    if (this.restoreFrom(sessionStorageOrNull(), true)) return;
+    this.restoreFrom(localStorageOrNull(), false);
+  }
+
+  /**
+   * Restores the session kept in one storage, reporting whether it did. An
+   * unusable entry is removed from that storage only, so a broken tab session
+   * does not take the shared one with it.
+   */
+  private restoreFrom(storage: Storage | null, sessionScoped: boolean): boolean {
+    const stored = readItem(storage, this.storageKey);
+    if (!stored) return false;
 
     try {
-      const stored = localStorage.getItem(this.storageKey);
-      if (stored) {
-        const { user, token, refreshToken, allTokens } = JSON.parse(stored);
-        if (
-          typeof token !== 'string'
-          || (refreshToken !== null && refreshToken !== undefined && typeof refreshToken !== 'string')
-          || !this.belongsToConfiguredApp(token)
-          || (
-            typeof refreshToken === 'string'
-            && !this.belongsToConfiguredApp(refreshToken)
-          )
-        ) {
-          this.clearAuthState();
-          return;
-        }
-        this._currentUser = user;
-        this.#accessToken = token;
-        this.#refreshToken = refreshToken ?? null;
-        this.#allTokens = discardEmptyAllTokens(normalizeAllTokens(allTokens));
-        this.invalidatePendingRefreshes();
+      const { user, token, refreshToken, allTokens } = JSON.parse(stored);
+      if (
+        typeof token !== 'string'
+        || (refreshToken !== null && refreshToken !== undefined && typeof refreshToken !== 'string')
+        || !this.belongsToConfiguredApp(token)
+        || (
+          typeof refreshToken === 'string'
+          && !this.belongsToConfiguredApp(refreshToken)
+        )
+      ) {
+        removeItem(storage, this.storageKey);
+        return false;
       }
+      this._currentUser = user;
+      this.#accessToken = token;
+      this.#refreshToken = refreshToken ?? null;
+      this.#allTokens = discardEmptyAllTokens(normalizeAllTokens(allTokens));
+      this.sessionScoped = sessionScoped;
+      this.invalidatePendingRefreshes();
+      return true;
     } catch {
-      this.removeFromStorage();
+      removeItem(storage, this.storageKey);
+      return false;
     }
   }
 
   private removeFromStorage(): void {
-    if (typeof localStorage === 'undefined') return;
+    // Ending a tab session leaves the shared one to the tabs it belongs to.
+    removeItem(sessionStorageOrNull(), this.storageKey);
+    if (!this.sessionScoped) removeItem(localStorageOrNull(), this.storageKey);
+  }
+}
 
-    try {
-      localStorage.removeItem(this.storageKey);
-    } catch {
-      // Storage might be disabled
-    }
+function localStorageOrNull(): Storage | null {
+  try {
+    return typeof localStorage === 'undefined' ? null : localStorage;
+  } catch {
+    return null;
+  }
+}
+
+function sessionStorageOrNull(): Storage | null {
+  try {
+    return typeof sessionStorage === 'undefined' ? null : sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
+function readItem(storage: Storage | null, key: string): string | null {
+  try {
+    return storage?.getItem(key) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function removeItem(storage: Storage | null, key: string): void {
+  try {
+    storage?.removeItem(key);
+  } catch {
+    // Storage might be disabled
   }
 }

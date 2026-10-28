@@ -61,6 +61,11 @@ export class LegacySessionBridge {
   }
 
   private syncToLegacy(session: { token: string | null; refreshToken: string | null }): void {
+    // The legacy SDK writes every refresh token it is given to localStorage
+    // ('mitra-session'), where it would outlive a session kept for its tab
+    // only. It gets the access token alone: this SDK keeps renewing it and
+    // hands each new one over through onSessionChange.
+    const refreshToken = this.auth.isTabScoped() ? null : session.refreshToken;
     try {
       const authPageUrl = resolveAuthPageUrl(
         this.apiUrl,
@@ -73,7 +78,7 @@ export class LegacySessionBridge {
         projectId: this.appId,
         onTokenRefresh: (session) => this.rotate(session),
         ...(session.token ? { token: session.token } : {}),
-        ...(session.refreshToken ? { refreshToken: session.refreshToken } : {}),
+        ...(refreshToken ? { refreshToken } : {}),
       });
 
       // The legacy package has no public sign-out API. `getConfig()` returns its
@@ -81,7 +86,7 @@ export class LegacySessionBridge {
       // calls and refresh without coupling to its private localStorage key.
       const legacyConfig = getConfig();
       if (!session.token) delete legacyConfig.token;
-      if (!session.refreshToken) delete legacyConfig.refreshToken;
+      if (!refreshToken) delete legacyConfig.refreshToken;
     } catch {
       // The legacy SDK rejects configurations this client cannot fix, such as a
       // blank apiUrl. The new surface keeps working without the bridge.
