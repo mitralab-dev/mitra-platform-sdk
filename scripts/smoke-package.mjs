@@ -116,6 +116,12 @@ import {
   executeServerFunctionMitra,
   loginWithGoogleMitra,
   type AgentReadyProvider,
+  type AiProviders,
+  type AiProvidersModule,
+  type IncludedAiQuota,
+  type IncludedAiQuotaWindow,
+  type ManagedAiProfile,
+  type OpencodeAiProvider,
   type AllTokens,
   type BackofficeToken,
   type EmailCodeRequest,
@@ -143,6 +149,21 @@ import {
 } from "@mitralab.io/platform-sdk"
 
 const client: MitraClient = createClient({ appId: "app", apiUrl: "https://api.example.com" })
+const aiProviders: AiProvidersModule = client.aiProviders
+const providers: Promise<AiProviders> = aiProviders.get()
+void providers.then((response) => {
+  const profile: ManagedAiProfile | null | undefined = response.managedAiProfile
+  const quota: IncludedAiQuota | null = response.includedAiQuota
+  const day: IncludedAiQuotaWindow | undefined = quota?.windows.day
+  const opencode: OpencodeAiProvider = response.opencode
+  void [profile, day, opencode]
+})
+// @ts-expect-error Provider discovery cannot replace the client module.
+client.aiProviders = aiProviders
+// @ts-expect-error Provider discovery has no preference write operation.
+void client.aiProviders.setActiveEngine("IMMERSION")
+// @ts-expect-error App identity comes from client configuration, not the read request.
+void client.aiProviders.get({ appId: "another-app" })
 const user: User = { id: "user", tenantId: "tenant", email: "user@example.com", name: null }
 const query: QueryResult = { rows: [], affectedRows: null, durationMs: 0 }
 const proxy: ProxyInput = { method: "GET", endpoint: "/", queryParams: { limit: "10" } }
@@ -279,6 +300,17 @@ void executeServerFunctionMitra
     join(consumerDirectory, 'consumer.cts'),
     `import sdk = require("@mitralab.io/platform-sdk")
 const client: sdk.MitraClient = sdk.createClient({ appId: "app", apiUrl: "https://api.example.com" })
+const aiProviders: sdk.AiProvidersModule = client.aiProviders
+const providers: Promise<sdk.AiProviders> = aiProviders.get()
+void providers.then((response) => {
+  const profile: sdk.ManagedAiProfile | null | undefined = response.managedAiProfile
+  const quota: sdk.IncludedAiQuota | null = response.includedAiQuota
+  const day: sdk.IncludedAiQuotaWindow | undefined = quota?.windows.day
+  const opencode: sdk.OpencodeAiProvider = response.opencode
+  void [profile, day, opencode]
+})
+// @ts-expect-error Provider discovery has no preference write operation.
+void client.aiProviders.setActiveEngine("IMMERSION")
 const user: sdk.User = { id: "user", tenantId: "tenant", email: "user@example.com", name: null }
 const query: sdk.QueryResult = { rows: [], affectedRows: null, durationMs: 0 }
 const proxy: sdk.ProxyInput = { method: "GET", endpoint: "/", queryParams: { limit: "10" } }
@@ -343,7 +375,11 @@ void sdk.executeServerFunctionMitra
     [
       '--input-type=module',
       '--eval',
-      `import * as sdk from "@mitralab.io/platform-sdk"; const keys = Object.keys(sdk).sort(); if (JSON.stringify(keys) !== ${JSON.stringify(expectedExports)}) process.exit(1)`,
+      `import * as sdk from "@mitralab.io/platform-sdk"; const keys = Object.keys(sdk).sort(); if (JSON.stringify(keys) !== ${JSON.stringify(expectedExports)}) process.exit(1)
+globalThis.fetch = () => { throw new Error("Unexpected request") }
+const client = sdk.createClient({ appId: "app", apiUrl: "https://api.example.com" })
+if (typeof client.aiProviders?.get !== "function") throw new Error("aiProviders.get is missing from the installed package")
+`,
     ],
     { cwd: consumerDirectory, stdio: 'inherit' }
   );
@@ -351,7 +387,11 @@ void sdk.executeServerFunctionMitra
     process.execPath,
     [
       '--eval',
-      `const sdk = require("@mitralab.io/platform-sdk"); const keys = Object.keys(sdk).sort(); if (JSON.stringify(keys) !== ${JSON.stringify(expectedExports)}) process.exit(1)`,
+      `const sdk = require("@mitralab.io/platform-sdk"); const keys = Object.keys(sdk).sort(); if (JSON.stringify(keys) !== ${JSON.stringify(expectedExports)}) process.exit(1)
+globalThis.fetch = () => { throw new Error("Unexpected request") }
+const client = sdk.createClient({ appId: "app", apiUrl: "https://api.example.com" })
+if (typeof client.aiProviders?.get !== "function") throw new Error("aiProviders.get is missing from the installed package")
+`,
     ],
     { cwd: consumerDirectory, stdio: 'inherit' }
   );
