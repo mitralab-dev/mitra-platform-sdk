@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented in this file.
 
+## Unreleased
+
+- Pin `@mitralab.io/sdk-core` to `0.3.8` for typed `aiProviders.get()` and its public response types.
+  The Core release removes administrative app email methods and app login fields from its own
+  contracts. Platform does not expose those administrative contracts; its browser authentication,
+  `emailLoginEnabled` and `passwordLoginEnabled` keep their existing Platform contracts.
+
 ## 1.8.6
 
 - Depend on `@mitralab.io/sdk-core@0.3.7`: the turn's step list from T3 (Claude tasks and todos,
