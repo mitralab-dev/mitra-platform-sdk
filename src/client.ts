@@ -1,9 +1,11 @@
 import { stripTrailingSlashes } from './utils/url';
 import {
+  createAiProvidersModule,
   createPublicFunctionsModule,
   encodePathSegment,
   expectObject,
   type AgentTasksWithSessions,
+  type AiProvidersModule,
   type PublicFunctionsModule,
 } from '@mitralab.io/sdk-core';
 import { coreErrors } from './core-errors';
@@ -215,6 +217,8 @@ export interface MitraClient {
   /** Browser-safe credential status, model discovery, and provider auth flows. */
   agentCredentials: AgentCredentialsModule;
 
+  readonly aiProviders: AiProvidersModule;
+
   /**
    * Integration module for proxying HTTP requests to external APIs.
    *
@@ -383,6 +387,7 @@ export function createClient(config: MitraClientConfig): MitraClient {
     })
   );
   const agentCredentialsModule = createBrowserAgentCredentialsModule(copilotHttpClient);
+  const aiProvidersModule = createAiProvidersModule(copilotHttpClient, coreErrors);
 
   const integrationHttpClient = new HttpClient({
     baseUrl: integrationUrl,
@@ -442,6 +447,7 @@ export function createClient(config: MitraClientConfig): MitraClient {
     publicFunctions: publicFunctionsModule,
     agentTasks: agentTasksModule,
     agentCredentials: agentCredentialsModule,
+    aiProviders: aiProvidersModule,
     integration: integrationModule,
     queries: queriesModule,
     get allowSignup() {
@@ -520,13 +526,19 @@ export type {
 export type {
   AgentModel as NativeAgentModel,
   AgentReadyProvider,
+  AiProviders,
+  AiProvidersModule,
   AuthenticationResult,
   CredentialStatus,
   CredentialUsage,
   CredentialUsageWindow,
   DeviceAuthorization,
+  IncludedAiQuota,
+  IncludedAiQuotaWindow,
+  ManagedAiProfile,
   OAuthExchangeInput,
   OAuthStartResult,
+  OpencodeAiProvider,
   PublicFunctionAsyncResult,
   PublicFunctionResult,
   PublicFunctionsModule,

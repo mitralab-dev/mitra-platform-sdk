@@ -45,6 +45,11 @@ No app gerado pelo Code Studio, `VITE_MITRA_APP_ID` e `VITE_MITRA_API_URL` já v
   `send` devolve o id da mensagem; com o browser offline a mensagem espera a rede e `send` devolve `undefined`.
   `loadOlder()` traz a página anterior do histórico e põe antes de `history`; `hasOlder` diz se ainda há mais antiga.
 - `agentCredentials`: credenciais de provedor de IA e modelos disponíveis. `providers(agentId?)` devolve numa chamada só os provedores em que o próximo turno pode rodar, cada um com os modelos e a última leitura da assinatura.
+- `aiProviders.get()`: consulta tipada de `GET /copilot/api/v1/ai-providers`, com o token da sessão e o `X-App-Id` do cliente. Retorna engine ativa, quota pessoal, provedores personalizados, conexão OpenCode e `managedAiProfile`. O módulo oferece somente leitura: não altera preferências, cria tarefas ou conecta provedores.
+
+`managedAiProfile` é `null` quando inelegível e pode estar ausente em backends anteriores. Quando o Copilot oferece Immersion, o perfil traz `profile: "IMMERSION"`, `agentType: "IMMERSION"`, `selectionMode: "FORCED"`, `model: "immersion"` e `requiredScope: "ACCOUNT"`. A leitura preserva a engine ativa e a quota pessoal; não calcula elegibilidade com base nelas. Falhas, inclusive `404` de backend sem a rota, chegam como `MitraApiError`.
+
+Os tipos `AiProviders`, `AiProvidersModule`, `ManagedAiProfile`, `IncludedAiQuota`, `IncludedAiQuotaWindow` e `OpencodeAiProvider` são exportados pelo pacote.
 
 Login por código no e-mail, para quem monta a própria tela:
 
@@ -110,7 +115,7 @@ chat.close()
 |---|---|---|
 | `appId` | sim | ID do app no Code Studio |
 | `apiUrl` | sim | URL do API gateway da Mitra |
-| `onError` | não | callback com o `MitraApiError` das falhas de `entities`, `queries`, `functions`, `integration`, `agentTasks` e `agentCredentials`; `init()`, login, `publicFunctions` e falha de rede não passam por ele e são tratados no `catch` de cada chamada |
+| `onError` | não | callback com o `MitraApiError` das falhas de `entities`, `queries`, `functions`, `integration`, `agentTasks`, `agentCredentials` e `aiProviders`; `init()`, login, `publicFunctions` e falha de rede não passam por ele e são tratados no `catch` de cada chamada |
 | `authPageUrl` | não | URL da página de login da Mitra; sem ela, o SDK descobre sozinho |
 | `apiKey` | não | chave padrão de `auth.signInWithApiKey()`; só em código de servidor, nunca no bundle do browser |
 
