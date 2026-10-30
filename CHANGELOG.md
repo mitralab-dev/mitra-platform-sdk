@@ -2,8 +2,13 @@
 
 All notable changes to this project are documented in this file.
 
-## Unreleased
+## 1.8.7
 
+- Depend on `@mitralab.io/sdk-core@0.3.9`: a history reread while a turn runs no longer drops the
+  older pages already read nor brings a live piece back to an older version, and a send the server
+  refuses with its own sentence emits `error` with that sentence alone on both paths
+  (mitra-core-sdk#145). Calling `loadHistory` again now merges into `history` when the new page
+  reaches it, instead of resetting it.
 - Pin `@mitralab.io/sdk-core` to `0.3.8` for typed `aiProviders.get()` and its public response types.
   The Core release removes administrative app email methods and app login fields from its own
   contracts. Platform does not expose those administrative contracts; its browser authentication,
