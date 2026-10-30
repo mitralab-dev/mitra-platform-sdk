@@ -263,10 +263,30 @@ export class BrowserAgentTaskEventSource implements AgentTaskEventSource {
     };
     signal?.addEventListener('abort', onAbort, { once: true });
 
-    let response = await request(requestToken);
-    if (response.status === 401 && await this.auth.handleUnauthorized(requestToken)) {
-      const currentToken = this.auth.accessToken;
-      if (currentToken) response = await request(currentToken);
+    // The same bound as the WebSocket handshake. An open that never settles holds every message
+    // of the session in Core, which sends only once the channel is open. Raced rather than
+    // left to the abort, because not every fetch fails the moment its signal fires.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const handshake = new Promise<never>((_, reject) => {
+      timer = globalThis.setTimeout(() => {
+        abort.abort();
+        reject(new Error('Timed out connecting to the Agent SSE stream.'));
+      }, CONNECT_TIMEOUT_MS);
+    });
+    // The bound can fire while auth refreshes, with no race left to hear it.
+    handshake.catch(() => undefined);
+    let response: Response;
+    try {
+      response = await Promise.race([request(requestToken), handshake]);
+      if (response.status === 401 && await this.auth.handleUnauthorized(requestToken)) {
+        const currentToken = this.auth.accessToken;
+        if (currentToken) response = await Promise.race([request(currentToken), handshake]);
+      }
+    } catch (error) {
+      signal?.removeEventListener('abort', onAbort);
+      throw error;
+    } finally {
+      globalThis.clearTimeout(timer);
     }
     if (!response.ok || !response.body) {
       signal?.removeEventListener('abort', onAbort);

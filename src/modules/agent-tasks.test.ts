@@ -41,7 +41,10 @@ const auth: AuthSessionPort = {
 };
 
 describe('createBrowserAgentTasksModule', () => {
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
 
   it('composes the complete Core REST module with its Core-owned session manager', async () => {
     const fetchMock = mockFetchSequence([
@@ -133,6 +136,52 @@ describe('createBrowserAgentTasksModule', () => {
     const urls = fetchMock.mock.calls.map(([input]) => String(input));
     expect(urls.some((url) => url.endsWith('/channel'))).toBe(asks);
     expect(urls).toContain('https://api.mitra.io/copilot/api/v1/tasks/task-1/events');
+    session.close();
+  });
+
+  it('a message whose Copilot stream never opens fails with a reason, and the next one opens again', async () => {
+    // Alpha, 2026-10-28: the box did not answer, the Copilot SSE that took over never sent
+    // headers, and this message and every later one of the session stayed in the browser.
+    vi.useFakeTimers();
+    let ended!: () => void;
+    const events: unknown[] = [];
+    const fetchMock = vi.fn((input: unknown) => {
+      const url = String(input);
+      if (url.endsWith('/channel')) return Promise.resolve({ ok: false, status: 404, json: async () => ({}) });
+      if (url.endsWith('/events')) {
+        events.push(url);
+        if (events.length > 1) return new Promise(() => undefined);
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          body: new ReadableStream<Uint8Array>({ start(controller) { ended = () => controller.close(); } }),
+        });
+      }
+      if (url.includes('/messages')) return Promise.resolve({ ok: true, status: 200, json: async () => page([]) });
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ ...task, agentId: 'agent-1' }) });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const http = new HttpClient({ baseUrl: 'https://api.mitra.io/copilot' });
+    const session = createBrowserAgentTasksModule(http, auth, 'https://api.mitra.io')
+      .session({ taskId: 'task-1', transport: 'http' });
+    const errors: string[] = [];
+    session.on('error', ({ error }) => errors.push(error));
+    await vi.waitFor(() => expect(session.status).toBe('idle'));
+    // The stream ends while the chat is idle: the next message opens it again.
+    ended();
+    await vi.advanceTimersByTimeAsync(0);
+
+    session.send('first');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(events).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(errors).toEqual([
+      'Failed to send Agent prompt: Timed out connecting to the Agent SSE stream.',
+    ]);
+
+    session.send('second');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(events).toHaveLength(3);
     session.close();
   });
 });

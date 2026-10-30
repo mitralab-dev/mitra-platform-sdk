@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented in this file.
 
+## Unreleased
+
+- The Copilot SSE stream a chat falls back to now gives up on headers after 15 s, as the
+  WebSocket handshake already did. An open that never answered held the message in Core and every
+  later message of the session with it, with no error; now the send emits `error` and the next
+  message opens the stream again (#195).
+
 ## 1.8.7
 
 - Depend on `@mitralab.io/sdk-core@0.3.9`: a history reread while a turn runs no longer drops the
