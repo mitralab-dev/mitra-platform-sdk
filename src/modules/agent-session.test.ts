@@ -172,6 +172,27 @@ describe('BrowserAgentTaskEventSource', () => {
     connection.close();
   });
 
+  it('gives up on SSE headers that never come, as the WebSocket handshake does', async () => {
+    // Alpha, 2026-10-28: the copilot SSE never answered with headers, the core waited on
+    // this open, and every message of the session stayed in the browser. This fetch ignores its
+    // signal, the worst a runtime does, so the open must not rely on the abort to fail it.
+    vi.useFakeTimers();
+    const fetchMock = vi.fn((_url: string, _init: RequestInit) => new Promise<Response>(() => undefined));
+    vi.stubGlobal('fetch', fetchMock);
+    const source = new BrowserAgentTaskEventSource(auth(), 'https://api.mitra.io');
+
+    const opening = source.open('task-1', observer(), undefined, 'http');
+    const failure = expect(opening).rejects.toThrow('Timed out connecting to the Agent SSE stream.');
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0][1].signal?.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await failure;
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0][1].signal?.aborted).toBe(true);
+  });
+
   it('falls back from auto WebSocket to SSE and preserves explicit websocket errors', async () => {
     FakeWebSocket.autoOpen = false;
     const fetchMock = streaming();
