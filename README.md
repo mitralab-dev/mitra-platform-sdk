@@ -104,7 +104,7 @@ Para app aberto dentro do iframe de outro sistema, como o SKW da Sankhya. O sist
 
 O `await mitra.init()` troca esse código pela sessão sozinho, então o app abre logado sem código novo. Se a troca falhar, o `init()` rejeita; o fragmento já saiu da URL, e um reload não repete o erro. Fora desse fluxo, o `init()` não faz requisição a mais. Quem não chama `init()` usa `completeIdentityConnectionSignInRedirect()` no startup, que devolve `null` quando a URL não é dele.
 
-O código só é aceito dentro de iframe e sob um sistema hospedeiro permitido: o SDK lê `location.ancestorOrigins` e confere a página que embute o app contra os `allowedOrigins` da conexão (`GET /api/v1/auth/identity-connections/{slug}`). Aba de topo, origem fora da lista ou browser que não expõe quem embute o frame (Firefox) recusam o código sem trocá-lo. Logo, o login pelo Sankhya Pass dentro do SKW exige Chromium ou WebKit.
+O código só é aceito dentro de iframe e sob um sistema hospedeiro permitido: o SDK lê `location.ancestorOrigins` e confere a página que embute o app contra os `allowedOrigins` da conexão (`GET /api/v1/auth/identity-connections/{slug}`). Aba de topo, origem fora da lista ou browser que não expõe `ancestorOrigins` recusam o código sem trocá-lo. O requisito é a API, não a família do browser: Chromium e WebKit a expõem há anos, e o Firefox a partir da versão 148.
 
 A sessão desse login fica no `sessionStorage`, na mesma chave `mitra_auth_{appId}`, e dura só enquanto a aba existe. É assim porque o sistema hospedeiro abre o app com a conta de cada base, e duas bases demo da Sankhya abertas no mesmo browser, dividindo o `localStorage`, trocavam a sessão e o alias uma da outra no reload, como já acontecia no legado.
 

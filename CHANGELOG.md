@@ -22,8 +22,8 @@ host system's iframe.
   (`GET /api/v1/auth/identity-connections/{slug}`) and rejects, without redeeming the code, when
   the page embedding the app (`location.ancestorOrigins`) is not one of its `allowedOrigins`; a
   page of someone else could otherwise embed the app with a code of another account and sign the
-  visitor in as it. A browser that does not expose the embedding page (Firefox) is refused the
-  same way, so this sign-in needs Chromium or WebKit.
+  visitor in as it. A browser that does not expose `ancestorOrigins` is refused the same way: the
+  requirement is the API, which Chromium and WebKit expose and Firefox exposes from version 148.
 - `init()` calls it in a browser after reading the app info, so an app that already calls
   `await mitra.init()` opens signed in with no change. A refused code rejects `init()`; the
   fragment is already gone, so a reload does not repeat the failure. Without the fragment `init()`

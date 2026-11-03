@@ -107,9 +107,8 @@ export class IdentityConnectionFlow {
    * would otherwise sign this browser in as that account. The check mirrors
    * the one the bridge made on the message that carried the token.
    *
-   * Only browsers that expose `location.ancestorOrigins` (Chromium and WebKit)
-   * can tell who embeds the frame. Without it the host cannot be verified and
-   * the code is refused: Firefox is rare in the host systems this serves, and
+   * Only a browser that exposes `location.ancestorOrigins` can tell who embeds
+   * the frame. Without it the host cannot be verified and the code is refused:
    * an unverifiable host is the exact case the check exists for.
    */
   private async requireAllowedHost(browserWindow: Window, slug: string): Promise<void> {
