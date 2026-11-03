@@ -113,7 +113,7 @@ export class IdentityConnectionFlow {
    */
   private async requireAllowedHost(browserWindow: Window, slug: string): Promise<void> {
     const hostOrigin = browserWindow.location.ancestorOrigins?.[0];
-    if (typeof hostOrigin !== 'string') {
+    if (!hostOrigin) {
       throw new Error('Identity connection sign-in needs a browser that exposes the host system origin.');
     }
     const connection = await this.client.get<unknown>(`/api/v1/auth/identity-connections/${slug}`);
