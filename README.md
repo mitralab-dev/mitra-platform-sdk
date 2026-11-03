@@ -114,6 +114,21 @@ A sessão desse login fica no `sessionStorage`, na mesma chave `mitra_auth_{appI
 - Se o login pela conexão for recusado, o `init()` rejeita e a sessão que o app tinha restaurado no startup deixa de valer naquela página, para o iframe não seguir logado com outra pessoa. Ela continua guardada onde estava: no `localStorage`, ou no `sessionStorage` se era uma sessão por aba.
 - Os exports legados do `mitra-interactions-sdk` recebem dessa sessão só o access token. O refresh token não vai para eles, porque o SDK legado grava o refresh token no `localStorage` (`mitra-session`), onde ele sobreviveria à aba. Por isso, numa sessão por aba, os exports legados não renovam sozinhos, e o SDK novo também não renova em segundo plano: ele renova antes de uma requisição dele mesmo, em `ensureFreshSession()` ou em `refreshSession()`. Um app que só usa os exports legados recebe `401` quando o access token vence, a menos que faça uma chamada pelo SDK novo ou chame `refreshSession()`; o token renovado chega ao legado na hora.
 
+#### Modo redirect, fora do iframe
+
+Para um botão "Entrar com Sankhya Pass" num app aberto direto no browser, sem sistema hospedeiro. O SDK manda a página para o provedor de identidade da conexão (o Keycloak do Sankhya Pass), com Authorization Code e PKCE (Proof Key for Code Exchange, a prova que amarra o código a quem pediu), e o provedor devolve a pessoa ao app com um código na query.
+
+```typescript
+await mitra.auth.signInWithIdentityConnection("sankhya-pass", { mode: "redirect" })
+```
+
+- No retorno, o `await mitra.init()` completa o login sozinho. Quem não chama `init()` usa `completeIdentityConnectionRedirect()` no startup, que devolve `null` quando a query não é dele. Se o login falhar, o `init()` rejeita; a query já saiu da URL, e um reload não repete o erro.
+- O app volta para a origem e o caminho atuais, sem query e sem fragmento, ou para o `redirectUri` passado nas opções. Esse endereço precisa estar entre os redirect URIs aceitos pelo client da conexão no provedor; peça à Mitra para liberar a origem do app.
+- O pedido pendente (`state` e `code_verifier`) fica no `sessionStorage` da aba e vale uma vez. Retorno sem pedido pendente na aba, ou com `state` diferente, é recusado sem requisição.
+- O token do provedor serve só para o IAM validar quem é a pessoa e é descartado em seguida. O `id_token` e o `refresh_token` do provedor não são guardados.
+- A sessão fica no `sessionStorage`, como no login pelo iframe, com as mesmas regras de sessão por aba descritas acima.
+- Como não há iframe, não há requisito de `ancestorOrigins`: funciona em Chromium, WebKit e Firefox.
+
 Chat com agente:
 
 ```typescript
@@ -165,7 +180,7 @@ Falha de rede chega como o erro do próprio `fetch` (`TypeError`), sem passar po
 ## Boas práticas
 
 - Chame `await mitra.init()` no startup, antes de montar a tela de login: `allowSignup`, `emailLoginEnabled`, `passwordLoginEnabled` e o login por e-mail dependem dele.
-- Com `mode: "redirect"`, chame no startup o `completeGoogleSignInRedirect()`, `completeMicrosoftSignInRedirect()` ou `completeEmailSignInRedirect()` do método que você usa. Cada um devolve `null` quando a URL não é dele. O link do e-mail completa o login no mesmo browser que pediu o código; em outro aparelho, a pessoa digita o código. O login por conexão de identidade (Sankhya Pass) dispensa essa chamada: o `init()` já completa.
+- Com `mode: "redirect"`, chame no startup o `completeGoogleSignInRedirect()`, `completeMicrosoftSignInRedirect()` ou `completeEmailSignInRedirect()` do método que você usa. Cada um devolve `null` quando a URL não é dele. O link do e-mail completa o login no mesmo browser que pediu o código; em outro aparelho, a pessoa digita o código. O login por conexão de identidade (Sankhya Pass), pelo iframe ou por redirect, dispensa essa chamada: o `init()` já completa.
 - A sessão fica no `localStorage` do domínio do app, na chave `mitra_auth_{appId}`, e é renovada sozinha antes de vencer. A do login por conexão de identidade fica no `sessionStorage` da aba, na mesma chave. `signOut()` limpa a sessão e, em app com contas próprias, encerra a sessão no servidor: o refresh token deixa de renovar, e o access token já emitido vale até vencer.
 - Alguns apps recebem tokens extras junto da sessão, em `auth.allTokens`, liberados app por app pela Mitra. O de backoffice é o mais sensível: ele carrega os acessos que a pessoa tem no backoffice da Mitra, vale uma hora e fica no mesmo storage da sessão, onde qualquer script do domínio do app consegue ler. Leia ele por `auth.ensureFreshBackofficeToken()`, que renova o token quando está perto de vencer e devolve `null` quando o app ou a pessoa não têm esse acesso. Use só contra o backoffice e não repasse para outro serviço.
 - O SDK só repete uma requisição depois de renovar o token num `401`. Fora isso, quem decide repetir é o app.

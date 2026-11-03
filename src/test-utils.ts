@@ -1,3 +1,4 @@
+import { webcrypto } from 'node:crypto';
 import { vi } from 'vitest';
 
 export interface MockedResponse {
@@ -92,7 +93,7 @@ export interface BrowserHarness {
 /**
  * A window that can run the auth page handshake: a popup that reports itself
  * closed, a location that records where it was sent, both storages, and a
- * deterministic `crypto`.
+ * `crypto` with deterministic random values and the real `subtle` digest.
  *
  * `window.localStorage` and the global one are the same mock on purpose: the
  * pending request of an email redirect is read from the window, and the app
@@ -160,6 +161,7 @@ export function mockBrowser(
       bytes.fill(7);
       return bytes;
     },
+    subtle: webcrypto.subtle,
   });
 
   return {

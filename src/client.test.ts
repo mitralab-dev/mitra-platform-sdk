@@ -483,6 +483,64 @@ describe('createClient init with an identity connection fragment', () => {
     expect(mitra.auth.isAuthenticated).toBe(false);
   });
 
+  it('should finish a redirect from the identity provider once, leaving the bridge fragment flow alone', async () => {
+    const browser = mockBrowser();
+    const state = `connection.sankhya-pass.${'07'.repeat(16)}`;
+    const tokenEndpoint = 'https://pass.sankhya.com.br/realms/pass/protocol/openid-connect/token';
+    browser.window.location.search = `?code=kc-code&state=${state}`;
+    (browser.window.sessionStorage as unknown as { _store: Record<string, string> })._store[
+      `mitra_identity_connection_redirect_${APP_ID}`
+    ] = JSON.stringify({
+      state,
+      codeVerifier: 'verifier-1',
+      slug: 'sankhya-pass',
+      redirectUri: 'https://app.example.com/orders',
+      tokenEndpoint,
+      clientId: 'mitra-apps',
+      language: 'pt-BR',
+      createdAt: Date.now(),
+    });
+    const fetchMock = mockFetchSequence([
+      { body: appInfo },
+      { body: { access_token: 'kc-access' } },
+      { body: { exchangeCode: 'exchange-1', expiresInSeconds: 60 } },
+      {
+        body: {
+          accessToken: jwt({ app_id: APP_ID }),
+          refreshToken: jwt({ app_id: APP_ID }),
+          tokenType: 'Bearer',
+          allTokens,
+        },
+      },
+      { body: currentUser },
+    ]);
+    const mitra = createClient({ appId: APP_ID, apiUrl: 'https://api.mitra.io' });
+
+    await Promise.all([mitra.init(), mitra.init()]);
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      APP_INFO_URL,
+      tokenEndpoint,
+      `${CONNECTION_URL}/login`,
+      EXCHANGE_URL,
+      'https://api.mitra.io/iam/api/v1/auth/me',
+    ]);
+    expect(mitra.auth.currentUser).toMatchObject({ id: 'u1' });
+    expect(browser.window.history.replaceState).toHaveBeenCalledTimes(1);
+  });
+
+  it('should reject init when the redirect state matches no pending request', async () => {
+    const browser = mockBrowser();
+    browser.window.location.search = `?code=kc-code&state=connection.sankhya-pass.${'07'.repeat(16)}`;
+    const fetchMock = mockFetchSequence([{ body: appInfo }]);
+    const mitra = createClient({ appId: APP_ID, apiUrl: 'https://api.mitra.io' });
+
+    await expect(mitra.init()).rejects.toThrow('possible CSRF');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(browser.window.history.replaceState).toHaveBeenCalledWith({}, '', '/orders');
+  });
+
   it.each([
     [
       'the bridge reports an error',
