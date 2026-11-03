@@ -103,11 +103,11 @@ export interface BrowserHarness {
  * @param options.framed - Whether the window is inside an iframe, so that
  * `window.top` is another window. Defaults to a top-level tab.
  * @param options.hostOrigin - Origin of the embedding page, exposed as
- * `location.ancestorOrigins`. Omitted leaves the list out, like Firefox does.
+ * `location.ancestorOrigins`. Omitted or null leaves the list out, like Firefox does.
  */
 export function mockBrowser(
   injectedAuthPageUrl?: unknown,
-  options: { framed?: boolean; hostOrigin?: string } = {}
+  options: { framed?: boolean; hostOrigin?: string | null } = {}
 ): BrowserHarness {
   const listeners = new Set<(event: MessageEvent<unknown>) => void>();
   const popup = {
@@ -124,7 +124,7 @@ export function mockBrowser(
     search: '?status=open',
     hash: '',
     assign: vi.fn(),
-    ...(options.hostOrigin !== undefined ? { ancestorOrigins: [options.hostOrigin] } : {}),
+    ...(options.hostOrigin ? { ancestorOrigins: [options.hostOrigin] } : {}),
   };
   const localStorageMock = mockLocalStorage();
   const sessionStorageMock = mockSessionStorage();

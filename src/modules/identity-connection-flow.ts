@@ -108,11 +108,15 @@ export class IdentityConnectionFlow {
    * the one the bridge made on the message that carried the token.
    *
    * Only browsers that expose `location.ancestorOrigins` (Chromium and WebKit)
-   * can tell who embeds the frame; the others keep the iframe-only rule.
+   * can tell who embeds the frame. Without it the host cannot be verified and
+   * the code is refused: Firefox is rare in the host systems this serves, and
+   * an unverifiable host is the exact case the check exists for.
    */
   private async requireAllowedHost(browserWindow: Window, slug: string): Promise<void> {
     const hostOrigin = browserWindow.location.ancestorOrigins?.[0];
-    if (typeof hostOrigin !== 'string') return;
+    if (typeof hostOrigin !== 'string') {
+      throw new Error('Identity connection sign-in needs a browser that exposes the host system origin.');
+    }
     const connection = await this.client.get<unknown>(`/api/v1/auth/identity-connections/${slug}`);
     if (!isAllowedOrigin(hostOrigin, readAllowedOrigins(connection))) {
       throw new Error('Identity connection sign-in is not accepted under this host system.');

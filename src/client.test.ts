@@ -410,8 +410,11 @@ describe('createClient init with an identity connection fragment', () => {
     language: 'pt-BR',
   };
 
+  const CONNECTION_URL = 'https://api.mitra.io/iam/api/v1/auth/identity-connections/sankhya-pass';
+  const connection = { slug: 'sankhya-pass', name: 'Sankhya Pass', allowedOrigins: ['https://*.sankhyacloud.com.br'] };
+
   function framedAt(fragment: string) {
-    const browser = mockBrowser(undefined, { framed: true });
+    const browser = mockBrowser(undefined, { framed: true, hostOrigin: 'https://pampulha01.sankhyacloud.com.br' });
     browser.window.location.hash = fragment;
     return browser;
   }
@@ -435,6 +438,7 @@ describe('createClient init with an identity connection fragment', () => {
     const browser = framedAt(FRAGMENT);
     const fetchMock = mockFetchSequence([
       { body: appInfo },
+      { body: connection },
       {
         body: {
           accessToken: jwt({ app_id: APP_ID }),
@@ -451,6 +455,7 @@ describe('createClient init with an identity connection fragment', () => {
 
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
       APP_INFO_URL,
+      CONNECTION_URL,
       EXCHANGE_URL,
       'https://api.mitra.io/iam/api/v1/auth/me',
     ]);
@@ -464,6 +469,7 @@ describe('createClient init with an identity connection fragment', () => {
     const browser = framedAt(FRAGMENT);
     const fetchMock = mockFetchSequence([
       { body: appInfo },
+      { body: connection },
       { body: { message: 'Invalid code', error_code: 'INVALID_EXCHANGE_CODE' }, status: 401 },
     ]);
     const mitra = createClient({ appId: APP_ID, apiUrl: 'https://api.mitra.io' });
@@ -472,7 +478,7 @@ describe('createClient init with an identity connection fragment', () => {
     browser.window.location.hash = '';
     await expect(mitra.init()).resolves.toBeUndefined();
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(mitra.allowSignup).toBe(false);
     expect(mitra.auth.isAuthenticated).toBe(false);
   });
@@ -487,6 +493,7 @@ describe('createClient init with an identity connection fragment', () => {
     (localStorage as unknown as { _store: Record<string, string> })._store[`mitra_auth_${APP_ID}`] = sharedSession;
     mockFetchSequence([
       { body: appInfo },
+      { body: connection },
       { body: { message: 'Invalid code', error_code: 'INVALID_EXCHANGE_CODE' }, status: 401 },
     ]);
     const mitra = createClient({ appId: APP_ID, apiUrl: 'https://api.mitra.io' });

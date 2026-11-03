@@ -18,12 +18,12 @@ host system's iframe.
   still read their own fragment. From there on the fragment belongs to this flow and is removed
   before anything can fail. It rejects in a top-level tab (the bridge only runs in an iframe), for
   a connection slug outside `[a-z0-9-]{1,64}`, for an `errorMitra`, for a missing code and when IAM
-  refuses the code (`401 INVALID_EXCHANGE_CODE`). In a browser that exposes
-  `location.ancestorOrigins` (Chromium and WebKit) it also reads the connection
+  refuses the code (`401 INVALID_EXCHANGE_CODE`). It also reads the connection
   (`GET /api/v1/auth/identity-connections/{slug}`) and rejects, without redeeming the code, when
-  the page embedding the app is not one of its `allowedOrigins`; a page of someone else could
-  otherwise embed the app with a code of another account and sign the visitor in as it. Firefox
-  does not expose the embedding page, so there only the iframe rule applies.
+  the page embedding the app (`location.ancestorOrigins`) is not one of its `allowedOrigins`; a
+  page of someone else could otherwise embed the app with a code of another account and sign the
+  visitor in as it. A browser that does not expose the embedding page (Firefox) is refused the
+  same way, so this sign-in needs Chromium or WebKit.
 - `init()` calls it in a browser after reading the app info, so an app that already calls
   `await mitra.init()` opens signed in with no change. A refused code rejects `init()`; the
   fragment is already gone, so a reload does not repeat the failure. Without the fragment `init()`

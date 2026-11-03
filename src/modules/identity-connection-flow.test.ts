@@ -24,8 +24,10 @@ function flow(): IdentityConnectionFlow {
   });
 }
 
-function framedWithFragment(fragment: string): BrowserHarness {
-  const browser = mockBrowser(undefined, { framed: true });
+const HOST_ORIGIN = 'https://pampulha01.sankhyacloud.com.br';
+
+function framedWithFragment(fragment: string, hostOrigin: string | null = HOST_ORIGIN): BrowserHarness {
+  const browser = mockBrowser(undefined, { framed: true, hostOrigin });
   browser.window.location.hash = fragment;
   return browser;
 }
@@ -117,6 +119,7 @@ describe('IdentityConnectionFlow', () => {
       `#codeMitra=code-1&stateMitra=${STATE}&connectionMitra=sankhya-pass`
     );
     const fetchMock = mockFetchSequence([
+      { body: CONNECTION },
       {
         body: {
           accessToken: 'access-123',
@@ -129,8 +132,8 @@ describe('IdentityConnectionFlow', () => {
 
     const response = await flow().completeRedirect();
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, request] = fetchMock.mock.calls[0];
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [url, request] = fetchMock.mock.calls[1];
     expect(url).toBe(EXCHANGE_URL);
     expect(request.method).toBe('POST');
     expect(JSON.parse(request.body)).toEqual({ appId: APP_ID, code: 'code-1' });
@@ -179,14 +182,14 @@ describe('IdentityConnectionFlow', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it('should redeem without reading the connection when the browser does not expose the host system', async () => {
-    framedWithFragment(`#codeMitra=code-1&stateMitra=${STATE}&connectionMitra=sankhya-pass`);
+  it('should refuse the code without a request when the browser does not expose the host system', async () => {
+    const browser = framedWithFragment(`#codeMitra=code-1&stateMitra=${STATE}&connectionMitra=sankhya-pass`, null);
     const fetchMock = mockFetchSequence([{ body: TOKENS }]);
 
-    await expect(flow().completeRedirect()).resolves.toEqual(TOKENS);
+    await expect(flow().completeRedirect()).rejects.toThrow('exposes the host system origin');
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0][0]).toBe(EXCHANGE_URL);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expectFragmentCleared(browser);
   });
 
   it('should clear the fragment before a refused exchange fails', async () => {
@@ -194,6 +197,7 @@ describe('IdentityConnectionFlow', () => {
       `#codeMitra=code-1&stateMitra=${STATE}&connectionMitra=sankhya-pass`
     );
     mockFetchSequence([
+      { body: CONNECTION },
       { body: { message: 'Invalid code', error_code: 'INVALID_EXCHANGE_CODE' }, status: 401 },
     ]);
 

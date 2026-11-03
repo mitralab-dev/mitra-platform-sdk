@@ -1465,8 +1465,10 @@ describe('AuthModule', () => {
     const CONNECTION_FRAGMENT =
       '#codeMitra=code-1&stateMitra=connection.0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a&connectionMitra=sankhya-pass';
 
+    const connection = { slug: 'sankhya-pass', name: 'Sankhya Pass', allowedOrigins: ['https://*.sankhyacloud.com.br'] };
+
     function framedBrowser(fragment = CONNECTION_FRAGMENT) {
-      const browser = mockBrowser(undefined, { framed: true });
+      const browser = mockBrowser(undefined, { framed: true, hostOrigin: 'https://pampulha01.sankhyacloud.com.br' });
       browser.window.location.hash = fragment;
       const tabStorage = browser.window.sessionStorage as unknown as ReturnType<typeof mockLocalStorage>;
       return { browser, tabStorage };
@@ -1487,6 +1489,7 @@ describe('AuthModule', () => {
       storedSession(browser.localStorage, 'shared-access', 'shared-refresh');
       const sharedSession = browser.localStorage._store[STORAGE_KEY];
       mockFetchSequence([
+        { body: connection },
         { body: { ...fakeTokenResponse, allTokens: fakeAllTokens } },
         { body: currentUserResponse },
       ]);
