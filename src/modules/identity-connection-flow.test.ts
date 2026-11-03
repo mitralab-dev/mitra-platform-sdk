@@ -1,11 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MOCK_API_URL as API_URL, mockBrowser, mockFetchSequence, type BrowserHarness } from '../test-utils';
 import { HttpClient } from '../utils/http-client';
-import { IdentityConnectionFlow } from './identity-connection-flow';
+import { IdentityConnectionFlow, isAllowedOrigin } from './identity-connection-flow';
 
 const APP_ID = '11111111-1111-1111-1111-111111111111';
 const IAM_URL = `${API_URL}/iam`;
-const EXCHANGE_URL = `${IAM_URL}/api/v1/auth/identity-connections/sankhya-pass/exchange`;
+const CONNECTION_URL = `${IAM_URL}/api/v1/auth/identity-connections/sankhya-pass`;
+const EXCHANGE_URL = `${CONNECTION_URL}/exchange`;
+const CONNECTION = { slug: 'sankhya-pass', name: 'Sankhya Pass', allowedOrigins: ['https://*.sankhyacloud.com.br'] };
+const TOKENS = { accessToken: 'access-123', refreshToken: 'refresh-456', tokenType: 'Bearer' };
 const STATE = 'connection.0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a';
 const ALL_TOKENS = {
   platform: { accessToken: 'session-access', refreshToken: 'session-refresh', tokenType: 'Bearer' },
@@ -140,6 +143,52 @@ describe('IdentityConnectionFlow', () => {
     expectFragmentCleared(browser);
   });
 
+  it('should redeem the code under a host system the connection allows', async () => {
+    const browser = mockBrowser(undefined, { framed: true, hostOrigin: 'https://pampulha01.sankhyacloud.com.br' });
+    browser.window.location.hash = `#codeMitra=code-1&stateMitra=${STATE}&connectionMitra=sankhya-pass`;
+    const fetchMock = mockFetchSequence([{ body: CONNECTION }, { body: TOKENS }]);
+
+    await expect(flow().completeRedirect()).resolves.toEqual(TOKENS);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0][0]).toBe(CONNECTION_URL);
+    expect(fetchMock.mock.calls[0][1].method).toBe('GET');
+    expect(fetchMock.mock.calls[1][0]).toBe(EXCHANGE_URL);
+    expectFragmentCleared(browser);
+  });
+
+  it('should refuse the code under a host system the connection does not allow, without redeeming it', async () => {
+    const browser = mockBrowser(undefined, { framed: true, hostOrigin: 'https://evil.example.com' });
+    browser.window.location.hash = `#codeMitra=code-1&stateMitra=${STATE}&connectionMitra=sankhya-pass`;
+    const fetchMock = mockFetchSequence([{ body: CONNECTION }, { body: TOKENS }]);
+
+    await expect(flow().completeRedirect()).rejects.toThrow('not accepted under this host system');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe(CONNECTION_URL);
+    expectFragmentCleared(browser);
+  });
+
+  it('should refuse the code when the connection publishes no origin', async () => {
+    const browser = mockBrowser(undefined, { framed: true, hostOrigin: 'https://pampulha01.sankhyacloud.com.br' });
+    browser.window.location.hash = `#codeMitra=code-1&stateMitra=${STATE}&connectionMitra=sankhya-pass`;
+    const fetchMock = mockFetchSequence([{ body: { slug: 'sankhya-pass', name: 'Sankhya Pass' } }, { body: TOKENS }]);
+
+    await expect(flow().completeRedirect()).rejects.toThrow('not accepted under this host system');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('should redeem without reading the connection when the browser does not expose the host system', async () => {
+    framedWithFragment(`#codeMitra=code-1&stateMitra=${STATE}&connectionMitra=sankhya-pass`);
+    const fetchMock = mockFetchSequence([{ body: TOKENS }]);
+
+    await expect(flow().completeRedirect()).resolves.toEqual(TOKENS);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe(EXCHANGE_URL);
+  });
+
   it('should clear the fragment before a refused exchange fails', async () => {
     const browser = framedWithFragment(
       `#codeMitra=code-1&stateMitra=${STATE}&connectionMitra=sankhya-pass`
@@ -157,5 +206,28 @@ describe('IdentityConnectionFlow', () => {
     vi.stubGlobal('window', undefined);
 
     await expect(flow().completeRedirect()).rejects.toThrow('only available in a browser');
+  });
+});
+
+describe('isAllowedOrigin', () => {
+  const allowed = ['https://skw.example.com', 'https://*.sankhyacloud.com.br'];
+
+  it.each([
+    ['https://skw.example.com', true],
+    ['HTTPS://SKW.EXAMPLE.COM', true],
+    ['https://pampulha01.sankhyacloud.com.br', true],
+    ['https://a.b.sankhyacloud.com.br', true],
+    ['https://sankhyacloud.com.br', false],
+    ['https://pampulha01.sankhyacloud.com.br:8443', false],
+    ['http://pampulha01.sankhyacloud.com.br', false],
+    ['https://evil-sankhyacloud.com.br', false],
+    ['https://sankhyacloud.com.br.evil.com', false],
+    ['null', false],
+  ])('should decide %s as %s', (origin, expected) => {
+    expect(isAllowedOrigin(origin, allowed)).toBe(expected);
+  });
+
+  it('should allow nothing when the connection publishes no origin', () => {
+    expect(isAllowedOrigin('https://skw.example.com', [])).toBe(false);
   });
 });

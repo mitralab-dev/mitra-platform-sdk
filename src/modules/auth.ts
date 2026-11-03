@@ -1203,7 +1203,10 @@ export class AuthModule {
     this.#accessToken = token;
     this.#allTokens = null;
     // A token set by hand is a new session, not the identity connection's one,
-    // and the tab copy of that one would come back on the next reload.
+    // and the tab copy of that one would come back on the next reload. Its
+    // refresh token goes with it: kept, it would reach the shared storage and
+    // the legacy SDK, and a renewal would bring that identity back.
+    if (this.sessionScoped) this.#refreshToken = null;
     this.sessionScoped = false;
     removeItem(sessionStorageOrNull(), this.storageKey);
     if (saveToStorage) {

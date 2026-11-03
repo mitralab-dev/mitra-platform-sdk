@@ -1602,6 +1602,23 @@ describe('AuthModule', () => {
       expect(browser.localStorage._store[STORAGE_KEY]).toBe(sharedSession);
     });
 
+    it('should drop the refresh token of the tab session when a token is set by hand', () => {
+      const { browser, tabStorage } = framedBrowser('');
+      tabStorage._store[STORAGE_KEY] = JSON.stringify({
+        user: fakeUser,
+        token: 'tab-access',
+        refreshToken: 'tab-refresh',
+      });
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+      expect(getAuthSessionPort(auth).readSessionTokens().refreshToken).toBe('tab-refresh');
+
+      auth.setToken('manual-access');
+
+      expect(getAuthSessionPort(auth).readSessionTokens()).toEqual({ token: 'manual-access', refreshToken: null });
+      expect(JSON.parse(browser.localStorage._store[STORAGE_KEY]).refreshToken).toBeNull();
+      expect(tabStorage._store[STORAGE_KEY]).toBeUndefined();
+    });
+
     it('should drop the tab copy when a token set by hand is not saved', () => {
       const { browser, tabStorage } = framedBrowser('');
       tabStorage._store[STORAGE_KEY] = JSON.stringify({

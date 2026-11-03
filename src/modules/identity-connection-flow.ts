@@ -5,6 +5,27 @@ import type { AuthTokenResponse } from './auth.types';
 const STATE_PREFIX = 'connection.';
 /** Same rule IAM applies to a connection slug; anything else would only build a strange path. */
 const SLUG_PATTERN = /^[a-z0-9-]{1,64}$/;
+const WILDCARD_PREFIX = 'https://*.';
+
+/**
+ * Same rule the bridge page applies to the host system's origin: an exact
+ * origin, or `https://*.domain` for any https subdomain without a port.
+ */
+export function isAllowedOrigin(origin: string, allowed: readonly string[]): boolean {
+  const normalized = origin.toLowerCase();
+  return allowed.some((candidate) => {
+    if (!candidate.startsWith(WILDCARD_PREFIX)) return candidate === normalized;
+    if (!normalized.startsWith('https://')) return false;
+    const host = normalized.slice('https://'.length);
+    const domain = candidate.slice(WILDCARD_PREFIX.length);
+    return !host.includes(':') && !host.includes('/') && host.endsWith(`.${domain}`) && host.length > domain.length + 1;
+  });
+}
+
+function readAllowedOrigins(response: unknown): string[] {
+  const origins = (response as { allowedOrigins?: unknown } | null)?.allowedOrigins;
+  return Array.isArray(origins) ? origins.filter((origin): origin is string => typeof origin === 'string') : [];
+}
 
 interface IdentityConnectionFlowConfig {
   appId: string;
@@ -71,11 +92,30 @@ export class IdentityConnectionFlow {
     if (!code?.trim()) {
       throw new Error('Identity connection sign-in redirect is missing code.');
     }
+    await this.requireAllowedHost(browserWindow, slug);
 
     const response = await this.client.post<unknown>(
       `/api/v1/auth/identity-connections/${slug}/exchange`,
       { appId: this.appId, code }
     );
     return expectAuthTokenResponse(response);
+  }
+
+  /**
+   * A code is only redeemed under the host system the connection allows. A
+   * page of someone else embedding this app with a code of another account
+   * would otherwise sign this browser in as that account. The check mirrors
+   * the one the bridge made on the message that carried the token.
+   *
+   * Only browsers that expose `location.ancestorOrigins` (Chromium and WebKit)
+   * can tell who embeds the frame; the others keep the iframe-only rule.
+   */
+  private async requireAllowedHost(browserWindow: Window, slug: string): Promise<void> {
+    const hostOrigin = browserWindow.location.ancestorOrigins?.[0];
+    if (typeof hostOrigin !== 'string') return;
+    const connection = await this.client.get<unknown>(`/api/v1/auth/identity-connections/${slug}`);
+    if (!isAllowedOrigin(hostOrigin, readAllowedOrigins(connection))) {
+      throw new Error('Identity connection sign-in is not accepted under this host system.');
+    }
   }
 }

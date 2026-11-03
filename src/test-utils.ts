@@ -102,10 +102,12 @@ export interface BrowserHarness {
  * Omitted leaves `__mitraEnv` out of the window entirely.
  * @param options.framed - Whether the window is inside an iframe, so that
  * `window.top` is another window. Defaults to a top-level tab.
+ * @param options.hostOrigin - Origin of the embedding page, exposed as
+ * `location.ancestorOrigins`. Omitted leaves the list out, like Firefox does.
  */
 export function mockBrowser(
   injectedAuthPageUrl?: unknown,
-  options: { framed?: boolean } = {}
+  options: { framed?: boolean; hostOrigin?: string } = {}
 ): BrowserHarness {
   const listeners = new Set<(event: MessageEvent<unknown>) => void>();
   const popup = {
@@ -122,6 +124,7 @@ export function mockBrowser(
     search: '?status=open',
     hash: '',
     assign: vi.fn(),
+    ...(options.hostOrigin !== undefined ? { ancestorOrigins: [options.hostOrigin] } : {}),
   };
   const localStorageMock = mockLocalStorage();
   const sessionStorageMock = mockSessionStorage();

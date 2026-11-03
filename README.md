@@ -104,7 +104,7 @@ Para app aberto dentro do iframe de outro sistema, como o SKW da Sankhya. O sist
 
 O `await mitra.init()` troca esse código pela sessão sozinho, então o app abre logado sem código novo. Se a troca falhar, o `init()` rejeita; o fragmento já saiu da URL, e um reload não repete o erro. Fora desse fluxo, o `init()` não faz requisição a mais. Quem não chama `init()` usa `completeIdentityConnectionSignInRedirect()` no startup, que devolve `null` quando a URL não é dele.
 
-O código só é aceito dentro de iframe: aberto numa aba de topo, a troca é recusada.
+O código só é aceito dentro de iframe: aberto numa aba de topo, a troca é recusada. Em browser que expõe `location.ancestorOrigins` (Chromium e WebKit), o SDK ainda confere que a página que embute o app é uma origem permitida da conexão (`GET /api/v1/auth/identity-connections/{slug}`), e recusa o código sem trocá-lo quando não é. Firefox não expõe quem embute o frame, e nele vale só a regra do iframe.
 
 A sessão desse login fica no `sessionStorage`, na mesma chave `mitra_auth_{appId}`, e dura só enquanto a aba existe. É assim porque o sistema hospedeiro abre o app com a conta de cada base, e duas bases demo da Sankhya abertas no mesmo browser, dividindo o `localStorage`, trocavam a sessão e o alias uma da outra no reload, como já acontecia no legado.
 
