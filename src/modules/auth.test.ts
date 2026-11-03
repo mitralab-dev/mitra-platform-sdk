@@ -1656,7 +1656,6 @@ describe('AuthModule', () => {
           tokenEndpoint: TOKEN_ENDPOINT,
           clientId: 'mitra-apps',
           language: 'pt-BR',
-          createdAt: Date.now(),
         });
         return { browser, tabStorage };
       }

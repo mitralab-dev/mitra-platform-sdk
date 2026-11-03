@@ -483,11 +483,13 @@ describe('createClient init with an identity connection fragment', () => {
     expect(mitra.auth.isAuthenticated).toBe(false);
   });
 
-  it('should finish a redirect from the identity provider once, leaving the bridge fragment flow alone', async () => {
+  it('should finish a redirect from the identity provider once, leaving the fragment of another flow alone', async () => {
     const browser = mockBrowser();
     const state = `connection.sankhya-pass.${'07'.repeat(16)}`;
     const tokenEndpoint = 'https://pass.sankhya.com.br/realms/pass/protocol/openid-connect/token';
+    const googleFragment = `#codeMitra=google-code&stateMitra=google.${'0a'.repeat(16)}`;
     browser.window.location.search = `?code=kc-code&state=${state}`;
+    browser.window.location.hash = googleFragment;
     (browser.window.sessionStorage as unknown as { _store: Record<string, string> })._store[
       `mitra_identity_connection_redirect_${APP_ID}`
     ] = JSON.stringify({
@@ -498,7 +500,6 @@ describe('createClient init with an identity connection fragment', () => {
       tokenEndpoint,
       clientId: 'mitra-apps',
       language: 'pt-BR',
-      createdAt: Date.now(),
     });
     const fetchMock = mockFetchSequence([
       { body: appInfo },
@@ -527,6 +528,7 @@ describe('createClient init with an identity connection fragment', () => {
     ]);
     expect(mitra.auth.currentUser).toMatchObject({ id: 'u1' });
     expect(browser.window.history.replaceState).toHaveBeenCalledTimes(1);
+    expect(browser.window.history.replaceState).toHaveBeenCalledWith({}, '', `/orders${googleFragment}`);
   });
 
   it('should reject init when the redirect state matches no pending request', async () => {

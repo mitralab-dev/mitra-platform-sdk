@@ -42,7 +42,6 @@ function storeContext(browser: BrowserHarness, overrides: Record<string, unknown
     tokenEndpoint: TOKEN_ENDPOINT,
     clientId: 'mitra-apps',
     language: 'pt-BR',
-    createdAt: Date.now(),
     ...overrides,
   });
 }
@@ -119,6 +118,31 @@ describe('IdentityConnectionRedirectFlow', () => {
       }
     );
 
+    it.each(['https://app.example.com/callback?next=1', 'https://app.example.com/callback#top', 'callback'])(
+      'should refuse the redirect URI %s without a request or a stored request',
+      async (redirectUri) => {
+        const browser = mockBrowser();
+        const fetchMock = mockFetchSequence([]);
+
+        await expect(flow().start('sankhya-pass', { redirectUri })).rejects.toThrow('redirectUri must');
+
+        expect(fetchMock).not.toHaveBeenCalled();
+        expect(tabStorage(browser)[STORAGE_KEY]).toBeUndefined();
+      }
+    );
+
+    it('should not navigate when the pending request cannot be stored', async () => {
+      const browser = mockBrowser();
+      vi.mocked(browser.window.sessionStorage.setItem).mockImplementation(() => {
+        throw new Error('QuotaExceededError');
+      });
+      mockFetchSequence([{ body: CONNECTION }]);
+
+      await expect(flow().start('sankhya-pass')).rejects.toThrow('requires sessionStorage');
+
+      expect(browser.window.location.assign).not.toHaveBeenCalled();
+    });
+
     it('should refuse an invalid slug without a request', async () => {
       mockBrowser();
       const fetchMock = mockFetchSequence([]);
@@ -170,6 +194,89 @@ describe('IdentityConnectionRedirectFlow', () => {
       expect(tabStorage(browser)[STORAGE_KEY]).toBeUndefined();
     });
 
+    it('should leave the bridge fragment alone when there is no query', async () => {
+      const fragment = `#codeMitra=code-1&stateMitra=connection.${'0a'.repeat(16)}&connectionMitra=sankhya-pass`;
+      const browser = returnedWith('');
+      browser.window.location.hash = fragment;
+      storeContext(browser);
+      const fetchMock = mockFetchSequence([]);
+
+      await expect(flow().complete()).resolves.toBeNull();
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(browser.window.history.replaceState).not.toHaveBeenCalled();
+      expect(browser.window.location.hash).toBe(fragment);
+      expect(tabStorage(browser)[STORAGE_KEY]).toBeDefined();
+    });
+
+    it('should say the context was not found, not CSRF, when sessionStorage is unreadable', async () => {
+      const browser = returnedWith(`?code=kc-code&state=${STATE}`);
+      vi.mocked(browser.window.sessionStorage.getItem).mockImplementation(() => {
+        throw new Error('SecurityError');
+      });
+      const fetchMock = mockFetchSequence([]);
+
+      const message = await flow().complete().catch((error: Error) => error.message);
+
+      expect(message).toContain('context was not found in this tab');
+      expect(message).not.toContain('CSRF');
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(browser.window.history.replaceState).toHaveBeenCalledWith({}, '', '/orders');
+    });
+
+    it('should refuse a matching state without code, without a request, after clearing the query', async () => {
+      const browser = returnedWith(`?state=${STATE}`);
+      storeContext(browser);
+      const fetchMock = mockFetchSequence([]);
+
+      await expect(flow().complete()).rejects.toThrow('missing code');
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(browser.window.history.replaceState).toHaveBeenCalledWith({}, '', '/orders');
+    });
+
+    it('should prefer the provider error description over the error code', async () => {
+      const browser = returnedWith(`?error=access_denied&error_description=User%20cancelled&state=${STATE}`);
+      storeContext(browser);
+      mockFetchSequence([]);
+
+      await expect(flow().complete()).rejects.toThrow(/^User cancelled$/);
+    });
+
+    it('should refuse an IAM answer without an exchange code', async () => {
+      const browser = returnedWith(`?code=kc-code&state=${STATE}`);
+      storeContext(browser);
+      const fetchMock = mockFetchSequence([
+        { body: { access_token: 'kc-access' } },
+        { body: { expiresInSeconds: 60 } },
+      ]);
+
+      await expect(flow().complete()).rejects.toThrow('did not return an exchange code');
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('should give up on a provider that does not answer within 15 seconds', async () => {
+      vi.useFakeTimers();
+      try {
+        const browser = returnedWith(`?code=kc-code&state=${STATE}`);
+        storeContext(browser);
+        const fetchMock = vi.fn(() => new Promise(() => undefined));
+        vi.stubGlobal('fetch', fetchMock);
+
+        const failure = flow().complete().catch((error: Error) => error.message);
+        await vi.advanceTimersByTimeAsync(15_000);
+        const message = await failure;
+
+        expect(message).toContain('timed out redeeming the authorization code');
+        expect(message).not.toContain('kc-code');
+        expect(message).not.toContain('verifier-1');
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('should refuse a provider answer without an access token before signing in at IAM', async () => {
       const browser = returnedWith(`?code=kc-code&state=${STATE}`);
       storeContext(browser);
@@ -183,9 +290,16 @@ describe('IdentityConnectionRedirectFlow', () => {
     it('should report a code the provider refuses', async () => {
       const browser = returnedWith(`?code=kc-code&state=${STATE}`);
       storeContext(browser);
-      mockFetchSequence([{ body: { error: 'invalid_grant', error_description: 'Code not valid' }, status: 400 }]);
+      mockFetchSequence([{
+        body: { error: 'invalid_grant', error_description: 'Code kc-code for verifier verifier-1 not valid' },
+        status: 400,
+      }]);
 
-      await expect(flow().complete()).rejects.toThrow('status 400, invalid_grant: Code not valid');
+      const message = await flow().complete().catch((error: Error) => error.message);
+
+      expect(message).toContain('status 400, invalid_grant: Code [redacted] for verifier [redacted] not valid');
+      expect(message).not.toContain('kc-code');
+      expect(message).not.toContain('verifier-1');
     });
 
     it('should redeem the code at the provider, sign in at IAM and redeem the exchange code', async () => {

@@ -123,8 +123,10 @@ await mitra.auth.signInWithIdentityConnection("sankhya-pass", { mode: "redirect"
 ```
 
 - No retorno, o `await mitra.init()` completa o login sozinho. Quem não chama `init()` usa `completeIdentityConnectionRedirect()` no startup, que devolve `null` quando a query não é dele. Se o login falhar, o `init()` rejeita; a query já saiu da URL, e um reload não repete o erro.
-- O app volta para a origem e o caminho atuais, sem query e sem fragmento, ou para o `redirectUri` passado nas opções. Esse endereço precisa estar entre os redirect URIs aceitos pelo client da conexão no provedor; peça à Mitra para liberar a origem do app.
+- O app volta para a origem e o caminho atuais, sem query e sem fragmento, ou para o `redirectUri` passado nas opções, que também não pode ter query nem fragmento (o SDK recusa antes de sair da página).
+- O client público da conexão no provedor precisa de duas liberações para a origem do app: o redirect URI, para o provedor devolver a pessoa, e a origem em Web Origins (CORS, a regra que deixa o browser ler a resposta de outro domínio), porque o SDK troca o código no token endpoint direto do browser. Sem a segunda, essa troca falha com `TypeError` de rede. Peça à Mitra para liberar as duas.
 - O pedido pendente (`state` e `code_verifier`) fica no `sessionStorage` da aba e vale uma vez. Retorno sem pedido pendente na aba, ou com `state` diferente, é recusado sem requisição.
+- A troca no token endpoint espera até 15 segundos; passado isso, o login rejeita.
 - O token do provedor serve só para o IAM validar quem é a pessoa e é descartado em seguida. O `id_token` e o `refresh_token` do provedor não são guardados.
 - A sessão fica no `sessionStorage`, como no login pelo iframe, com as mesmas regras de sessão por aba descritas acima.
 - Como não há iframe, não há requisito de `ancestorOrigins`: funciona em Chromium, WebKit e Firefox.

@@ -7,6 +7,8 @@ const STATE_PREFIX = 'connection.';
 const SCOPE = 'openid email profile';
 /** Parameters the identity provider appends to the redirect URI on its way back. */
 const CALLBACK_PARAMS = ['code', 'state', 'error', 'error_description', 'error_uri', 'session_state', 'iss'];
+const TOKEN_REQUEST_TIMEOUT_MS = 15_000;
+const STORAGE_UNREADABLE = Symbol('storage-unreadable');
 
 interface ConnectionEndpoints {
   authorizationEndpoint: string;
@@ -22,7 +24,6 @@ interface RedirectContext {
   tokenEndpoint: string;
   clientId: string;
   language: string;
-  createdAt: number;
 }
 
 interface IdentityConnectionRedirectFlowConfig {
@@ -70,6 +71,20 @@ async function codeChallengeOf(codeVerifier: string): Promise<string> {
   return base64Url(new Uint8Array(digest));
 }
 
+/** RFC 6749 3.1.2: the redirection endpoint carries no fragment, and the callback query is the provider's. */
+function requireBareRedirectUri(redirectUri: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(redirectUri);
+  } catch {
+    throw new Error('Identity connection sign-in redirectUri must be an absolute URL.');
+  }
+  if (parsed.search || parsed.hash) {
+    throw new Error('Identity connection sign-in redirectUri must have no query and no fragment.');
+  }
+  return redirectUri;
+}
+
 function readContext(value: string | null): RedirectContext | null {
   if (!value) return null;
   try {
@@ -111,6 +126,9 @@ export class IdentityConnectionRedirectFlow {
     if (!SLUG_PATTERN.test(slug)) {
       throw new Error('Identity connection sign-in names an invalid connection.');
     }
+    const redirectUri = options.redirectUri === undefined
+      ? `${browserWindow.location.origin}${browserWindow.location.pathname}`
+      : requireBareRedirectUri(options.redirectUri);
     const endpoints = readEndpoints(
       await this.client.get<unknown>(`/api/v1/auth/identity-connections/${slug}`)
     );
@@ -122,8 +140,6 @@ export class IdentityConnectionRedirectFlow {
     const state = `${STATE_PREFIX}${slug}.${random}`;
     // 32 random bytes encode to a 43 character verifier, the minimum RFC 7636 allows.
     const codeVerifier = base64Url(randomBytes(32));
-    const redirectUri = options.redirectUri
-      ?? `${browserWindow.location.origin}${browserWindow.location.pathname}`;
     const context: RedirectContext = {
       state,
       codeVerifier,
@@ -132,7 +148,6 @@ export class IdentityConnectionRedirectFlow {
       tokenEndpoint: endpoints.tokenEndpoint,
       clientId: endpoints.clientId,
       language: resolveLanguage(options.language, browserWindow),
-      createdAt: Date.now(),
     };
     try {
       browserWindow.sessionStorage.setItem(this.storageKey, JSON.stringify(context));
@@ -174,6 +189,11 @@ export class IdentityConnectionRedirectFlow {
     const context = this.takeContext(browserWindow);
     this.clearCallbackQuery(browserWindow, params);
 
+    // `iss` (RFC 9207) and a `nonce` are not checked: each pending request
+    // names the one provider it was sent to, and its id token is never used.
+    if (context === STORAGE_UNREADABLE) {
+      throw new Error('Identity connection sign-in context was not found in this tab: sessionStorage is unreadable.');
+    }
     if (!context || context.state !== state) {
       throw new Error('Identity connection sign-in redirect does not match a pending request (possible CSRF).');
     }
@@ -195,13 +215,13 @@ export class IdentityConnectionRedirectFlow {
     return exchangeIdentityConnectionCode(this.client, context.slug, this.appId, login.exchangeCode);
   }
 
-  private takeContext(browserWindow: Window): RedirectContext | null {
+  private takeContext(browserWindow: Window): RedirectContext | null | typeof STORAGE_UNREADABLE {
     try {
       const context = readContext(browserWindow.sessionStorage.getItem(this.storageKey));
       browserWindow.sessionStorage.removeItem(this.storageKey);
       return context;
     } catch {
-      return null;
+      return STORAGE_UNREADABLE;
     }
   }
 
@@ -216,23 +236,44 @@ export class IdentityConnectionRedirectFlow {
   }
 
   private async redeemAuthorizationCode(context: RedirectContext, code: string): Promise<string> {
-    const response = await fetch(context.tokenEndpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
-      body: new URLSearchParams({
-        grant_type: 'authorization_code',
-        client_id: context.clientId,
-        code,
-        redirect_uri: context.redirectUri,
-        code_verifier: context.codeVerifier,
-      }).toString(),
-      credentials: 'omit',
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        reject(new Error('Identity connection sign-in timed out redeeming the authorization code at the identity provider.'));
+      }, TOKEN_REQUEST_TIMEOUT_MS);
     });
-    const body = (await response.json().catch(() => null)) as
-      | { access_token?: unknown; error?: unknown; error_description?: unknown }
-      | null;
+    let response: Response;
+    let body: { access_token?: unknown; error?: unknown; error_description?: unknown } | null;
+    try {
+      response = await Promise.race([
+        fetch(context.tokenEndpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+          body: new URLSearchParams({
+            grant_type: 'authorization_code',
+            client_id: context.clientId,
+            code,
+            redirect_uri: context.redirectUri,
+            code_verifier: context.codeVerifier,
+          }).toString(),
+          credentials: 'omit',
+          signal: controller.signal,
+        }),
+        timeout,
+      ]);
+      body = await Promise.race([response.json().catch(() => null), timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
     if (!response.ok) {
-      const reason = [body?.error, body?.error_description].filter(isNonEmptyString).join(': ');
+      // The provider's own text could echo the request, so the secrets it carried are masked.
+      const reason = [body?.error, body?.error_description]
+        .filter(isNonEmptyString)
+        .join(': ')
+        .split(code).join('[redacted]')
+        .split(context.codeVerifier).join('[redacted]');
       throw new Error(
         `Identity connection sign-in could not redeem the authorization code (status ${response.status}${reason ? `, ${reason}` : ''}).`
       );
