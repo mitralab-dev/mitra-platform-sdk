@@ -1697,6 +1697,20 @@ describe('AuthModule', () => {
         expect(browser.localStorage._store[STORAGE_KEY]).toBe(sharedSession);
       });
 
+      it('should keep the restored session when a forged callback arrives with no sign-in pending', async () => {
+        const browser = mockBrowser();
+        browser.window.location.search = `?code=forged&state=${REDIRECT_STATE}`;
+        storedSession(browser.localStorage, 'shared-access', 'shared-refresh');
+        const fetchMock = mockFetchSequence([]);
+        const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+        await expect(auth.completeIdentityConnectionRedirect()).rejects.toThrow('possible CSRF');
+
+        expect(fetchMock).not.toHaveBeenCalled();
+        expect(auth.isAuthenticated).toBe(true);
+        expect(auth.accessToken).toBe('shared-access');
+      });
+
       it('should stop using the restored session, keeping it stored, when IAM refuses the assertion', async () => {
         const { browser } = returnedFromProvider(`?code=kc-code&state=${REDIRECT_STATE}`);
         storedSession(browser.localStorage, 'shared-access', 'shared-refresh');

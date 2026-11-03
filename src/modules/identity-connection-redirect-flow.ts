@@ -10,6 +10,12 @@ const CALLBACK_PARAMS = ['code', 'state', 'error', 'error_description', 'error_u
 const TOKEN_REQUEST_TIMEOUT_MS = 15_000;
 const STORAGE_UNREADABLE = Symbol('storage-unreadable');
 
+/**
+ * A callback that arrived in a tab with no sign-in pending, such as a forged
+ * link. Nobody was being signed in, so the session already in the page stays.
+ */
+export class UnsolicitedIdentityConnectionRedirectError extends Error {}
+
 interface ConnectionEndpoints {
   authorizationEndpoint: string;
   tokenEndpoint: string;
@@ -72,12 +78,20 @@ async function codeChallengeOf(codeVerifier: string): Promise<string> {
 }
 
 /** RFC 6749 3.1.2: the redirection endpoint carries no fragment, and the callback query is the provider's. */
-function requireBareRedirectUri(redirectUri: string): string {
+function requireBareRedirectUri(redirectUri: string, browserWindow: Window): string {
   let parsed: URL;
   try {
     parsed = new URL(redirectUri);
   } catch {
     throw new Error('Identity connection sign-in redirectUri must be an absolute URL.');
+  }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+    throw new Error('Identity connection sign-in redirectUri must be an http or https URL.');
+  }
+  // The pending request lives in this origin's sessionStorage, so a return to
+  // another origin could never be completed.
+  if (parsed.origin !== browserWindow.location.origin) {
+    throw new Error('Identity connection sign-in redirectUri must be on the app origin.');
   }
   if (parsed.search || parsed.hash) {
     throw new Error('Identity connection sign-in redirectUri must have no query and no fragment.');
@@ -128,7 +142,7 @@ export class IdentityConnectionRedirectFlow {
     }
     const redirectUri = options.redirectUri === undefined
       ? `${browserWindow.location.origin}${browserWindow.location.pathname}`
-      : requireBareRedirectUri(options.redirectUri);
+      : requireBareRedirectUri(options.redirectUri, browserWindow);
     const endpoints = readEndpoints(
       await this.client.get<unknown>(`/api/v1/auth/identity-connections/${slug}`)
     );
@@ -192,9 +206,16 @@ export class IdentityConnectionRedirectFlow {
     // `iss` (RFC 9207) and a `nonce` are not checked: each pending request
     // names the one provider it was sent to, and its id token is never used.
     if (context === STORAGE_UNREADABLE) {
-      throw new Error('Identity connection sign-in context was not found in this tab: sessionStorage is unreadable.');
+      throw new UnsolicitedIdentityConnectionRedirectError(
+        'Identity connection sign-in context was not found in this tab: sessionStorage is unreadable.'
+      );
     }
-    if (!context || context.state !== state) {
+    if (!context) {
+      throw new UnsolicitedIdentityConnectionRedirectError(
+        'Identity connection sign-in redirect does not match a pending request (possible CSRF).'
+      );
+    }
+    if (context.state !== state) {
       throw new Error('Identity connection sign-in redirect does not match a pending request (possible CSRF).');
     }
     if (error !== null) {
@@ -238,10 +259,11 @@ export class IdentityConnectionRedirectFlow {
   private async redeemAuthorizationCode(context: RedirectContext, code: string): Promise<string> {
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Error('Identity connection sign-in timed out redeeming the authorization code at the identity provider.');
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
         controller.abort();
-        reject(new Error('Identity connection sign-in timed out redeeming the authorization code at the identity provider.'));
+        reject(timedOut);
       }, TOKEN_REQUEST_TIMEOUT_MS);
     });
     let response: Response;
@@ -259,11 +281,21 @@ export class IdentityConnectionRedirectFlow {
             code_verifier: context.codeVerifier,
           }).toString(),
           credentials: 'omit',
+          // The code and the verifier go to the token endpoint the connection named, never to a
+          // host a redirect would pick.
+          redirect: 'error',
           signal: controller.signal,
         }),
         timeout,
       ]);
       body = await Promise.race([response.json().catch(() => null), timeout]);
+    } catch (error) {
+      if (error === timedOut) throw error;
+      // A provider that does not list the app origin in its Web Origins (CORS)
+      // fails here as a bare network TypeError.
+      throw new Error(
+        'Identity connection sign-in could not reach the identity provider token endpoint; check that the app origin is in its Web Origins.'
+      );
     } finally {
       clearTimeout(timer);
     }

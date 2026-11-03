@@ -118,7 +118,13 @@ describe('IdentityConnectionRedirectFlow', () => {
       }
     );
 
-    it.each(['https://app.example.com/callback?next=1', 'https://app.example.com/callback#top', 'callback'])(
+    it.each([
+      'https://app.example.com/callback?next=1',
+      'https://app.example.com/callback#top',
+      'callback',
+      'https://other.example.com/callback',
+      'ftp://app.example.com/callback',
+    ])(
       'should refuse the redirect URI %s without a request or a stored request',
       async (redirectUri) => {
         const browser = mockBrowser();
@@ -154,8 +160,12 @@ describe('IdentityConnectionRedirectFlow', () => {
   });
 
   describe('complete', () => {
-    it('should return null without a request and leave the URL alone when the query is not from this flow', async () => {
-      const browser = returnedWith('?status=open&state=google.abc');
+    it.each([
+      ['a query of another flow', '?status=open&state=google.abc', ''],
+      ['the bridge fragment and no query', '', `#codeMitra=code-1&stateMitra=connection.${'0a'.repeat(16)}&connectionMitra=sankhya-pass`],
+    ])('should return null without a request and leave the URL alone for %s', async (_case, query, fragment) => {
+      const browser = returnedWith(query);
+      browser.window.location.hash = fragment;
       storeContext(browser);
       const fetchMock = mockFetchSequence([]);
 
@@ -163,6 +173,7 @@ describe('IdentityConnectionRedirectFlow', () => {
 
       expect(fetchMock).not.toHaveBeenCalled();
       expect(browser.window.history.replaceState).not.toHaveBeenCalled();
+      expect(browser.window.location.hash).toBe(fragment);
       expect(tabStorage(browser)[STORAGE_KEY]).toBeDefined();
     });
 
@@ -182,31 +193,19 @@ describe('IdentityConnectionRedirectFlow', () => {
       expect(tabStorage(browser)[STORAGE_KEY]).toBeUndefined();
     });
 
-    it('should report the provider error after clearing the query and spending the request', async () => {
-      const browser = returnedWith(`?error=access_denied&state=${STATE}`);
+    it.each([
+      ['the error code', '?error=access_denied', /^access_denied$/],
+      ['the description over the error code', '?error=access_denied&error_description=User%20cancelled', /^User cancelled$/],
+    ])('should report %s from the provider after clearing the query and spending the request', async (_case, query, expected) => {
+      const browser = returnedWith(`${query}&state=${STATE}`);
       storeContext(browser);
       const fetchMock = mockFetchSequence([]);
 
-      await expect(flow().complete()).rejects.toThrow('access_denied');
+      await expect(flow().complete()).rejects.toThrow(expected);
 
       expect(fetchMock).not.toHaveBeenCalled();
       expect(browser.window.history.replaceState).toHaveBeenCalledWith({}, '', '/orders');
       expect(tabStorage(browser)[STORAGE_KEY]).toBeUndefined();
-    });
-
-    it('should leave the bridge fragment alone when there is no query', async () => {
-      const fragment = `#codeMitra=code-1&stateMitra=connection.${'0a'.repeat(16)}&connectionMitra=sankhya-pass`;
-      const browser = returnedWith('');
-      browser.window.location.hash = fragment;
-      storeContext(browser);
-      const fetchMock = mockFetchSequence([]);
-
-      await expect(flow().complete()).resolves.toBeNull();
-
-      expect(fetchMock).not.toHaveBeenCalled();
-      expect(browser.window.history.replaceState).not.toHaveBeenCalled();
-      expect(browser.window.location.hash).toBe(fragment);
-      expect(tabStorage(browser)[STORAGE_KEY]).toBeDefined();
     });
 
     it('should say the context was not found, not CSRF, when sessionStorage is unreadable', async () => {
@@ -235,14 +234,6 @@ describe('IdentityConnectionRedirectFlow', () => {
       expect(browser.window.history.replaceState).toHaveBeenCalledWith({}, '', '/orders');
     });
 
-    it('should prefer the provider error description over the error code', async () => {
-      const browser = returnedWith(`?error=access_denied&error_description=User%20cancelled&state=${STATE}`);
-      storeContext(browser);
-      mockFetchSequence([]);
-
-      await expect(flow().complete()).rejects.toThrow(/^User cancelled$/);
-    });
-
     it('should refuse an IAM answer without an exchange code', async () => {
       const browser = returnedWith(`?code=kc-code&state=${STATE}`);
       storeContext(browser);
@@ -254,6 +245,37 @@ describe('IdentityConnectionRedirectFlow', () => {
       await expect(flow().complete()).rejects.toThrow('did not return an exchange code');
 
       expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('should report a provider it cannot reach without the code or the verifier, and clear the timer', async () => {
+      vi.useFakeTimers();
+      try {
+        const browser = returnedWith(`?code=kc-code&state=${STATE}`);
+        storeContext(browser);
+        vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
+
+        const message = await flow().complete().catch((error: Error) => error.message);
+
+        expect(message).toContain('could not reach the identity provider token endpoint');
+        expect(message).toContain('Web Origins');
+        expect(message).not.toContain('kc-code');
+        expect(message).not.toContain('verifier-1');
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('should report a provider error whose body is not JSON with the status alone', async () => {
+      const browser = returnedWith(`?code=kc-code&state=${STATE}`);
+      storeContext(browser);
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        ok: false,
+        status: 502,
+        json: vi.fn().mockRejectedValue(new SyntaxError('Unexpected token <')),
+      }));
+
+      await expect(flow().complete()).rejects.toThrow(/could not redeem the authorization code \(status 502\)\.$/);
     });
 
     it('should give up on a provider that does not answer within 15 seconds', async () => {
@@ -322,6 +344,7 @@ describe('IdentityConnectionRedirectFlow', () => {
       expect(tokenRequest).toMatchObject({
         method: 'POST',
         credentials: 'omit',
+        redirect: 'error',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       });
       expect(Object.fromEntries(new URLSearchParams(tokenRequest.body))).toEqual({

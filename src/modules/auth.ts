@@ -11,7 +11,10 @@ import {
 } from './auth-page-flow';
 import { EmailCodeFlow, resolveLanguage } from './email-code-flow';
 import { IdentityConnectionFlow } from './identity-connection-flow';
-import { IdentityConnectionRedirectFlow } from './identity-connection-redirect-flow';
+import {
+  IdentityConnectionRedirectFlow,
+  UnsolicitedIdentityConnectionRedirectError,
+} from './identity-connection-redirect-flow';
 import { PasswordFormFlow, passwordChangedSignInAgain } from './password-form-flow';
 import type {
   User,
@@ -664,7 +667,8 @@ export class AuthModule {
    * host system iframe: the page is sent to the connection's identity provider
    * (Authorization Code with PKCE) and comes back to `redirectUri` with a code.
    * `init()` finishes it on the way back, or {@link completeIdentityConnectionRedirect}
-   * when the app does not call `init()`.
+   * when the app does not call `init()`. The returned promise never resolves,
+   * because the page navigates away.
    *
    * @param slug - The connection, such as `sankhya-pass`.
    * @throws When the slug is invalid, the connection is unknown or does not
@@ -696,18 +700,22 @@ export class AuthModule {
    * identity connection redirect. Another query is left untouched.
    * @throws When the query belongs to this flow but no pending request in this
    * tab matches its state, the provider reports an error, or the provider or
-   * IAM refuses the code. The query is removed first, and the session this
-   * page held is dropped from memory, though not from storage.
+   * IAM refuses the code. The query is removed first. When a sign-in was
+   * pending in this tab, the session this page held is dropped from memory,
+   * though not from storage; a callback with no pending sign-in leaves it.
    */
   async completeIdentityConnectionRedirect(): Promise<User | null> {
     let tokenResponse: AuthTokenResponse | null;
     try {
       tokenResponse = await this.identityConnectionRedirect.complete();
     } catch (error) {
-      // Same reasoning as completeIdentityConnectionSignInRedirect: someone
-      // was being signed in here and it failed, so the restored session stops
-      // being used in this page.
-      this.clearAuthState({ keepStorage: true });
+      // With a sign-in pending in this tab, someone was being signed in and it
+      // failed, so the restored session stops being used in this page, as in
+      // completeIdentityConnectionSignInRedirect. Without one, the callback was
+      // not asked for here (a forged link, say) and the session stays.
+      if (!(error instanceof UnsolicitedIdentityConnectionRedirectError)) {
+        this.clearAuthState({ keepStorage: true });
+      }
       throw error;
     }
     return tokenResponse ? this.establishSession(tokenResponse, true) : null;

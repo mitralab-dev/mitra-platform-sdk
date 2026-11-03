@@ -14,7 +14,8 @@ outside a host system iframe (a "Sign in with Sankhya Pass" button).
   is stored. The pending request (`state` prefixed `connection.{slug}.`, `code_verifier`, redirect
   URI, token endpoint) is kept in `sessionStorage` under `mitra_identity_connection_redirect_{appId}`.
   The redirect URI defaults to the current origin and path, without query or fragment; a
-  `redirectUri` with a query or a fragment is refused before any request (RFC 6749 3.1.2).
+  `redirectUri` outside the app origin, not http(s), or with a query or a fragment is refused
+  before any request (RFC 6749 3.1.2).
 - `auth.completeIdentityConnectionRedirect()` reads `code` and `state` from the query, not the
   fragment, so it never collides with the bridge completion. It returns `null`, without a request
   and without touching the URL, when `state` does not start with `connection.`. From there on the
@@ -24,8 +25,9 @@ outside a host system iframe (a "Sign in with Sankhya Pass" button).
   `POST /api/v1/auth/identity-connections/{slug}/login` and the returned exchange code is redeemed
   at `/exchange`, as the bridge flow does. The token endpoint call gives up after 15 seconds, and
   its error message masks the code and the verifier. The provider's id token and refresh token are never kept.
-  The session is tab-scoped, like the bridge one, and a failure drops the in-memory session while
-  keeping it stored.
+  The session is tab-scoped, like the bridge one, and a failure with a sign-in pending in the tab
+  drops the in-memory session while keeping it stored; a callback with nothing pending, such as a
+  forged link, is refused and leaves the session alone.
 - `init()` calls it in a browser right after the bridge completion; a failure rejects `init()`.
 - New exported type: `IdentityConnectionSignInOptions`.
 
