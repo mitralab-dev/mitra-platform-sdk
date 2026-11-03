@@ -1588,21 +1588,22 @@ describe('AuthModule', () => {
       expect(tabStorage._store[STORAGE_KEY]).toBeUndefined();
     });
 
-    it('should stop using the restored session, keeping it stored, when the bridge reports an error', async () => {
-      const { browser } = framedBrowser(
-        '#errorMitra=access_denied&stateMitra=connection.0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a&connectionMitra=sankhya-pass'
-      );
+    it('should keep the shared session stored when the exchange returns a token of another app', async () => {
+      const { browser, tabStorage } = framedBrowser();
       storedSession(browser.localStorage, 'shared-access', 'shared-refresh');
       const sharedSession = browser.localStorage._store[STORAGE_KEY];
-      const fetchMock = mockFetchSequence([]);
+      const otherApp = jwt({ app_id: 'another-app' });
+      mockFetchSequence([
+        { body: connection },
+        { body: { accessToken: otherApp, refreshToken: otherApp, tokenType: 'Bearer' } },
+      ]);
       const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
-      expect(auth.isAuthenticated).toBe(true);
 
-      await expect(auth.completeIdentityConnectionSignInRedirect()).rejects.toThrow('access_denied');
+      await expect(auth.completeIdentityConnectionSignInRedirect()).rejects.toThrow('different app');
 
-      expect(fetchMock).not.toHaveBeenCalled();
       expect(auth.isAuthenticated).toBe(false);
       expect(browser.localStorage._store[STORAGE_KEY]).toBe(sharedSession);
+      expect(tabStorage._store[STORAGE_KEY]).toBeUndefined();
     });
 
     it('should drop the refresh token of the tab session when a token is set by hand', () => {

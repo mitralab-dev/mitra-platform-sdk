@@ -6,6 +6,8 @@ const STATE_PREFIX = 'connection.';
 /** Same rule IAM applies to a connection slug; anything else would only build a strange path. */
 const SLUG_PATTERN = /^[a-z0-9-]{1,64}$/;
 const WILDCARD_PREFIX = 'https://*.';
+/** Any page can embed the app and write `errorMitra`, so only a code shaped like the bridge's reaches the message. */
+const ERROR_CODE_PATTERN = /^[a-z_]{1,64}$/;
 
 /**
  * Same rule the bridge page applies to the host system's origin: an exact
@@ -87,7 +89,8 @@ export class IdentityConnectionFlow {
       throw new Error('Identity connection sign-in redirect names an invalid connection.');
     }
     if (error !== null) {
-      throw new Error(error.trim() || 'Identity connection sign-in failed.');
+      const reason = ERROR_CODE_PATTERN.test(error) ? `: ${error}` : '';
+      throw new Error(`Identity connection sign-in failed${reason}.`);
     }
     if (!code?.trim()) {
       throw new Error('Identity connection sign-in redirect is missing code.');
@@ -102,8 +105,9 @@ export class IdentityConnectionFlow {
   }
 
   /**
-   * A code is only redeemed under the host system the connection allows. A
-   * page of someone else embedding this app with a code of another account
+   * A code is only redeemed when every page in the chain embedding this app is
+   * a host system the connection allows. A page of someone else embedding the
+   * app, directly or around an allowed host, with a code of another account
    * would otherwise sign this browser in as that account. The check mirrors
    * the one the bridge made on the message that carried the token.
    *
@@ -112,12 +116,13 @@ export class IdentityConnectionFlow {
    * an unverifiable host is the exact case the check exists for.
    */
   private async requireAllowedHost(browserWindow: Window, slug: string): Promise<void> {
-    const hostOrigin = browserWindow.location.ancestorOrigins?.[0];
-    if (!hostOrigin) {
+    const hostOrigins = Array.from(browserWindow.location.ancestorOrigins ?? []);
+    if (hostOrigins.length === 0) {
       throw new Error('Identity connection sign-in needs a browser that exposes the host system origin.');
     }
     const connection = await this.client.get<unknown>(`/api/v1/auth/identity-connections/${slug}`);
-    if (!isAllowedOrigin(hostOrigin, readAllowedOrigins(connection))) {
+    const allowedOrigins = readAllowedOrigins(connection);
+    if (!hostOrigins.every((origin) => isAllowedOrigin(origin, allowedOrigins))) {
       throw new Error('Identity connection sign-in is not accepted under this host system.');
     }
   }

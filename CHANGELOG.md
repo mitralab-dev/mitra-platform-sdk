@@ -17,13 +17,15 @@ host system's iframe.
   `connectionMitra` or its `stateMitra` does not start with `connection.`, so the other completions
   still read their own fragment. From there on the fragment belongs to this flow and is removed
   before anything can fail. It rejects in a top-level tab (the bridge only runs in an iframe), for
-  a connection slug outside `[a-z0-9-]{1,64}`, for an `errorMitra`, for a missing code and when IAM
-  refuses the code (`401 INVALID_EXCHANGE_CODE`). It also reads the connection
-  (`GET /api/v1/auth/identity-connections/{slug}`) and rejects, without redeeming the code, when
-  the page embedding the app (`location.ancestorOrigins`) is not one of its `allowedOrigins`; a
-  page of someone else could otherwise embed the app with a code of another account and sign the
-  visitor in as it. A browser that does not expose `ancestorOrigins` is refused the same way: the
-  requirement is the API, which Chromium and WebKit expose and Firefox exposes from version 148.
+  a connection slug outside `[a-z0-9-]{1,64}`, for an `errorMitra` (with a fixed message that names
+  the error only when it matches `[a-z_]{1,64}`, since any embedding page can write it), for a
+  missing code and when IAM refuses the code (`401 INVALID_EXCHANGE_CODE`). It also reads the
+  connection (`GET /api/v1/auth/identity-connections/{slug}`) and rejects, without redeeming the
+  code, unless every page in the chain embedding the app (`location.ancestorOrigins`) is one of its
+  `allowedOrigins`; a page of someone else could otherwise embed the app, directly or around an
+  allowed host, with a code of another account and sign the visitor in as it. A browser that does
+  not expose `ancestorOrigins` is refused the same way: the requirement is the API, which Chromium
+  and WebKit expose and Firefox exposes from version 148.
 - `init()` calls it in a browser after reading the app info, so an app that already calls
   `await mitra.init()` opens signed in with no change. A refused code rejects `init()`; the
   fragment is already gone, so a reload does not repeat the failure. Without the fragment `init()`
@@ -38,19 +40,21 @@ host system's iframe.
   tab goes back to `localStorage` and removes the tab copy; after `setToken()` the session always
   goes to `localStorage`, and the tab copy is removed even with `setToken(token, false)`. The
   refresh token of the tab session is dropped by `setToken()` as well, so it never reaches the
-  shared storage or the legacy SDK with the hand-set token. A renewal
-  keeps the session where it is.
+  shared storage or the legacy SDK with the hand-set token. A renewal keeps the session where it
+  is.
 - When the identity connection sign-in fails, the session the client restored at startup is
   dropped from memory and stays stored where it was (`localStorage`, or `sessionStorage` for a tab
   session), so the iframe does not stay signed in as someone else after a refused Sankhya Pass
-  login. `init()` still rejects.
+  login. `init()` still rejects. An exchange that returns a token of another app leaves the shared
+  session stored as well.
 - The deprecated `mitra-interactions-sdk` exports get only the access token of a tab session.
   Its refresh token is not handed over, because the legacy SDK writes every refresh token it
   receives to `localStorage` (`mitra-session`), where it would outlive the tab. So in a tab session
   the legacy exports do not renew on their own, and this SDK renews only before one of its own
-  requests, in `ensureFreshSession()` or in `refreshSession()`, with no timer. An app that uses only the legacy exports gets
-  `401` once the access token expires, unless it makes a call through this SDK or calls
-  `refreshSession()`; the renewed token then reaches the legacy SDK at once.
+  requests, in `ensureFreshSession()` or in `refreshSession()`, with no timer. An app that uses
+  only the legacy exports gets `401` once the access token expires, unless it makes a call through
+  this SDK or calls `refreshSession()`; the renewed token then reaches the legacy SDK at once.
+
 ## 1.8.7
 
 - Depend on `@mitralab.io/sdk-core@0.3.9`: a history reread while a turn runs no longer drops the

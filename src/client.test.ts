@@ -483,24 +483,38 @@ describe('createClient init with an identity connection fragment', () => {
     expect(mitra.auth.isAuthenticated).toBe(false);
   });
 
-  it('should stop using the restored shared session when the exchange is refused, keeping it stored', async () => {
-    framedAt(FRAGMENT);
+  it.each([
+    [
+      'the bridge reports an error',
+      FRAGMENT.replace('codeMitra=code-1', 'errorMitra=access_denied'),
+      [{ body: appInfo }],
+      { message: 'Identity connection sign-in failed: access_denied.' },
+    ],
+    [
+      'the exchange is refused',
+      FRAGMENT,
+      [
+        { body: appInfo },
+        { body: connection },
+        { body: { message: 'Invalid code', error_code: 'INVALID_EXCHANGE_CODE' }, status: 401 },
+      ],
+      { status: 401 },
+    ],
+  ])('should stop using the restored shared session when %s, keeping it stored', async (_case, fragment, responses, failure) => {
+    framedAt(fragment);
     const sharedSession = JSON.stringify({
       user: { id: 'u2', tenantId: 't1', email: 'other@test.com', name: null },
       token: jwt({ app_id: APP_ID, sub: 'u2' }),
       refreshToken: jwt({ app_id: APP_ID, sub: 'u2' }),
     });
     (localStorage as unknown as { _store: Record<string, string> })._store[`mitra_auth_${APP_ID}`] = sharedSession;
-    mockFetchSequence([
-      { body: appInfo },
-      { body: connection },
-      { body: { message: 'Invalid code', error_code: 'INVALID_EXCHANGE_CODE' }, status: 401 },
-    ]);
+    const fetchMock = mockFetchSequence(responses);
     const mitra = createClient({ appId: APP_ID, apiUrl: 'https://api.mitra.io' });
     expect(mitra.auth.isAuthenticated).toBe(true);
 
-    await expect(mitra.init()).rejects.toMatchObject({ status: 401 });
+    await expect(mitra.init()).rejects.toMatchObject(failure);
 
+    expect(fetchMock).toHaveBeenCalledTimes(responses.length);
     expect(mitra.auth.isAuthenticated).toBe(false);
     expect(mitra.auth.accessToken).toBeNull();
     expect(mitra.auth.currentUser).toBeNull();

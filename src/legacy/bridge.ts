@@ -61,10 +61,7 @@ export class LegacySessionBridge {
   }
 
   private syncToLegacy(session: { token: string | null; refreshToken: string | null }): void {
-    // The legacy SDK writes every refresh token it is given to localStorage
-    // ('mitra-session'), where it would outlive a session kept for its tab
-    // only. It gets the access token alone: this SDK keeps renewing it and
-    // hands each new one over through onSessionChange.
+    // The legacy SDK persists any refresh token it gets to localStorage ('mitra-session'), where it would outlive a tab session. It gets the access token alone; renewals made by this SDK reach it through onSessionChange.
     const refreshToken = this.auth.isTabScoped() ? null : session.refreshToken;
     try {
       const authPageUrl = resolveAuthPageUrl(

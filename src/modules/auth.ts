@@ -244,13 +244,7 @@ export class AuthModule {
   private readonly passwordForm: PasswordFormFlow;
   private readonly identityConnection: IdentityConnectionFlow;
   private brand: string | null = null;
-  /**
-   * Whether the session lives in `sessionStorage`, scoped to its tab, rather
-   * than in `localStorage`. Set for a session from an identity connection: the
-   * host system opens one app per account it signed in, and two of them in one
-   * browser (two Sankhya demo bases, for instance) sharing `localStorage` would
-   * hand each other's session, and identity attributes, to the next reload.
-   */
+  /** Session kept in sessionStorage: an identity connection opens one app per host account, and sharing localStorage would hand one account's session to another tab's reload. */
   private sessionScoped = false;
 
   constructor(appId: string, iamBaseUrl: string, options: AuthModuleOptions = {}) {
@@ -649,11 +643,7 @@ export class AuthModule {
     try {
       tokenResponse = await this.identityConnection.completeRedirect();
     } catch (error) {
-      // The host system signed someone in here and it was refused. The session
-      // restored at startup may be another person's, so it stops being used in
-      // this page; it stays stored for the tabs it belongs to. This covers every
-      // failure of a fragment of this flow on purpose, a forged one in a
-      // top-level tab included, not only a code IAM refused.
+      // A refused host sign-in means the session restored at startup may be someone else's: stop using it here, keep it stored for its own tabs. Applies to every failure of this flow on purpose.
       this.clearAuthState({ keepStorage: true });
       throw error;
     }
@@ -1496,7 +1486,8 @@ export class AuthModule {
       !this.belongsToConfiguredApp(tokenResponse.accessToken)
       || !this.belongsToConfiguredApp(tokenResponse.refreshToken)
     ) {
-      this.clearAuthState();
+      // A connection sign-in must not erase the shared session, which belongs to the app's other tabs.
+      this.clearAuthState({ keepStorage: sessionScoped });
       throw coreErrors.invalidResponse('Authentication returned a token for a different app');
     }
     this.invalidatePendingRefreshes();
@@ -1629,16 +1620,11 @@ export class AuthModule {
   }
 
   private loadFromStorage(): void {
-    // The tab's own session wins over the one every tab shares.
     if (this.restoreFrom(sessionStorageOrNull(), true)) return;
     this.restoreFrom(localStorageOrNull(), false);
   }
 
-  /**
-   * Restores the session kept in one storage, reporting whether it did. An
-   * unusable entry is removed from that storage only, so a broken tab session
-   * does not take the shared one with it.
-   */
+  /** An unusable entry is removed from this storage only, so a broken tab session does not take the shared one with it. */
   private restoreFrom(storage: Storage | null, sessionScoped: boolean): boolean {
     const stored = readItem(storage, this.storageKey);
     if (!stored) return false;

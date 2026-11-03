@@ -26,7 +26,10 @@ function flow(): IdentityConnectionFlow {
 
 const HOST_ORIGIN = 'https://pampulha01.sankhyacloud.com.br';
 
-function framedWithFragment(fragment: string, hostOrigin: string | null = HOST_ORIGIN): BrowserHarness {
+function framedWithFragment(
+  fragment: string,
+  hostOrigin: string | readonly string[] | null = HOST_ORIGIN
+): BrowserHarness {
   const browser = mockBrowser(undefined, { framed: true, hostOrigin });
   browser.window.location.hash = fragment;
   return browser;
@@ -92,13 +95,14 @@ describe('IdentityConnectionFlow', () => {
     }
   );
 
-  it('should report the error the bridge sent instead of redeeming', async () => {
-    const browser = framedWithFragment(
-      `#errorMitra=access_denied&stateMitra=${STATE}&connectionMitra=sankhya-pass`
-    );
+  it.each([
+    ['access_denied', 'Identity connection sign-in failed: access_denied.'],
+    [encodeURIComponent('Your session expired, sign in at evil.example.com'), 'Identity connection sign-in failed.'],
+  ])('should report the bridge error %s without redeeming', async (error, message) => {
+    const browser = framedWithFragment(`#errorMitra=${error}&stateMitra=${STATE}&connectionMitra=sankhya-pass`);
     const fetchMock = mockFetchSequence([]);
 
-    await expect(flow().completeRedirect()).rejects.toThrow('access_denied');
+    await expect(flow().completeRedirect()).rejects.toThrow(new Error(message));
 
     expectFragmentCleared(browser);
     expect(fetchMock).not.toHaveBeenCalled();
@@ -114,49 +118,19 @@ describe('IdentityConnectionFlow', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('should redeem the code at the connection exchange with the app id', async () => {
-    const browser = framedWithFragment(
-      `#codeMitra=code-1&stateMitra=${STATE}&connectionMitra=sankhya-pass`
-    );
-    const fetchMock = mockFetchSequence([
-      { body: CONNECTION },
-      {
-        body: {
-          accessToken: 'access-123',
-          refreshToken: 'refresh-456',
-          tokenType: 'Bearer',
-          allTokens: ALL_TOKENS,
-        },
-      },
-    ]);
+  it('should read the connection and redeem the code with the app id under an allowed host', async () => {
+    const browser = framedWithFragment(`#codeMitra=code-1&stateMitra=${STATE}&connectionMitra=sankhya-pass`);
+    const fetchMock = mockFetchSequence([{ body: CONNECTION }, { body: { ...TOKENS, allTokens: ALL_TOKENS } }]);
 
-    const response = await flow().completeRedirect();
-
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    const [url, request] = fetchMock.mock.calls[1];
-    expect(url).toBe(EXCHANGE_URL);
-    expect(request.method).toBe('POST');
-    expect(JSON.parse(request.body)).toEqual({ appId: APP_ID, code: 'code-1' });
-    expect(response).toEqual({
-      accessToken: 'access-123',
-      refreshToken: 'refresh-456',
-      tokenType: 'Bearer',
-      allTokens: ALL_TOKENS,
-    });
-    expectFragmentCleared(browser);
-  });
-
-  it('should redeem the code under a host system the connection allows', async () => {
-    const browser = mockBrowser(undefined, { framed: true, hostOrigin: 'https://pampulha01.sankhyacloud.com.br' });
-    browser.window.location.hash = `#codeMitra=code-1&stateMitra=${STATE}&connectionMitra=sankhya-pass`;
-    const fetchMock = mockFetchSequence([{ body: CONNECTION }, { body: TOKENS }]);
-
-    await expect(flow().completeRedirect()).resolves.toEqual(TOKENS);
+    await expect(flow().completeRedirect()).resolves.toEqual({ ...TOKENS, allTokens: ALL_TOKENS });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[0][0]).toBe(CONNECTION_URL);
     expect(fetchMock.mock.calls[0][1].method).toBe('GET');
-    expect(fetchMock.mock.calls[1][0]).toBe(EXCHANGE_URL);
+    const [url, request] = fetchMock.mock.calls[1];
+    expect(url).toBe(EXCHANGE_URL);
+    expect(request.method).toBe('POST');
+    expect(JSON.parse(request.body)).toEqual({ appId: APP_ID, code: 'code-1' });
     expectFragmentCleared(browser);
   });
 
@@ -166,6 +140,31 @@ describe('IdentityConnectionFlow', () => {
     const fetchMock = mockFetchSequence([{ body: CONNECTION }, { body: TOKENS }]);
 
     await expect(flow().completeRedirect()).rejects.toThrow('not accepted under this host system');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe(CONNECTION_URL);
+    expectFragmentCleared(browser);
+  });
+
+  it('should refuse the code when a page around the allowed host is not allowed, without redeeming it', async () => {
+    const browser = framedWithFragment(`#codeMitra=code-1&stateMitra=${STATE}&connectionMitra=sankhya-pass`, [
+      'https://x.sankhyacloud.com.br',
+      'https://evil.example.com',
+    ]);
+    const fetchMock = mockFetchSequence([{ body: CONNECTION }, { body: TOKENS }]);
+
+    await expect(flow().completeRedirect()).rejects.toThrow('not accepted under this host system');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][1].method).toBe('GET');
+    expectFragmentCleared(browser);
+  });
+
+  it('should not redeem the code when the connection cannot be read', async () => {
+    const browser = framedWithFragment(`#codeMitra=code-1&stateMitra=${STATE}&connectionMitra=sankhya-pass`);
+    const fetchMock = mockFetchSequence([{ body: { message: 'Not found' }, status: 404 }, { body: TOKENS }]);
+
+    await expect(flow().completeRedirect()).rejects.toMatchObject({ status: 404 });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0][0]).toBe(CONNECTION_URL);
@@ -216,7 +215,7 @@ describe('IdentityConnectionFlow', () => {
 describe('isAllowedOrigin', () => {
   const allowed = ['https://skw.example.com', 'https://*.sankhyacloud.com.br'];
 
-  it.each([
+  it.each<[string, boolean, (readonly string[])?]>([
     ['https://skw.example.com', true],
     ['HTTPS://SKW.EXAMPLE.COM', true],
     ['https://pampulha01.sankhyacloud.com.br', true],
@@ -227,11 +226,8 @@ describe('isAllowedOrigin', () => {
     ['https://evil-sankhyacloud.com.br', false],
     ['https://sankhyacloud.com.br.evil.com', false],
     ['null', false],
-  ])('should decide %s as %s', (origin, expected) => {
-    expect(isAllowedOrigin(origin, allowed)).toBe(expected);
-  });
-
-  it('should allow nothing when the connection publishes no origin', () => {
-    expect(isAllowedOrigin('https://skw.example.com', [])).toBe(false);
+    ['https://skw.example.com', false, []],
+  ])('should decide %s as %s', (origin, expected, origins = allowed) => {
+    expect(isAllowedOrigin(origin, origins)).toBe(expected);
   });
 });
