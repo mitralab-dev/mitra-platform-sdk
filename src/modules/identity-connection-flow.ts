@@ -4,7 +4,7 @@ import type { AuthTokenResponse } from './auth.types';
 
 const STATE_PREFIX = 'connection.';
 /** Same rule IAM applies to a connection slug; anything else would only build a strange path. */
-const SLUG_PATTERN = /^[a-z0-9-]{1,64}$/;
+export const SLUG_PATTERN = /^[a-z0-9-]{1,64}$/;
 const WILDCARD_PREFIX = 'https://*.';
 /** Any page can embed the app and write `errorMitra`, so only a code shaped like the bridge's reaches the message. */
 const ERROR_CODE_PATTERN = /^[a-z_]{1,64}$/;
@@ -27,6 +27,20 @@ export function isAllowedOrigin(origin: string, allowed: readonly string[]): boo
 function readAllowedOrigins(response: unknown): string[] {
   const origins = (response as { allowedOrigins?: unknown } | null)?.allowedOrigins;
   return Array.isArray(origins) ? origins.filter((origin): origin is string => typeof origin === 'string') : [];
+}
+
+/** Redeems the single-use code IAM issued for an identity connection sign-in. */
+export async function exchangeIdentityConnectionCode(
+  client: HttpClient,
+  slug: string,
+  appId: string,
+  code: string
+): Promise<AuthTokenResponse> {
+  const response = await client.post<unknown>(
+    `/api/v1/auth/identity-connections/${slug}/exchange`,
+    { appId, code }
+  );
+  return expectAuthTokenResponse(response);
 }
 
 interface IdentityConnectionFlowConfig {
@@ -97,11 +111,7 @@ export class IdentityConnectionFlow {
     }
     await this.requireAllowedHost(browserWindow, slug);
 
-    const response = await this.client.post<unknown>(
-      `/api/v1/auth/identity-connections/${slug}/exchange`,
-      { appId: this.appId, code }
-    );
-    return expectAuthTokenResponse(response);
+    return exchangeIdentityConnectionCode(this.client, slug, this.appId, code);
   }
 
   /**

@@ -1639,6 +1639,99 @@ describe('AuthModule', () => {
       expect(getAuthSessionPort(auth).isTabScoped()).toBe(false);
     });
 
+    describe('by redirect', () => {
+      const REDIRECT_KEY = `mitra_identity_connection_redirect_${APP_ID}`;
+      const REDIRECT_STATE = `connection.sankhya-pass.${'07'.repeat(16)}`;
+      const TOKEN_ENDPOINT = 'https://pass.sankhya.com.br/realms/pass/protocol/openid-connect/token';
+
+      function returnedFromProvider(query: string) {
+        const browser = mockBrowser();
+        browser.window.location.search = query;
+        const tabStorage = browser.window.sessionStorage as unknown as ReturnType<typeof mockLocalStorage>;
+        tabStorage._store[REDIRECT_KEY] = JSON.stringify({
+          state: REDIRECT_STATE,
+          codeVerifier: 'verifier-1',
+          slug: 'sankhya-pass',
+          redirectUri: 'https://app.example.com/orders',
+          tokenEndpoint: TOKEN_ENDPOINT,
+          clientId: 'mitra-apps',
+          language: 'pt-BR',
+        });
+        return { browser, tabStorage };
+      }
+
+      it('should refuse a mode other than redirect without a request', async () => {
+        mockBrowser();
+        const fetchMock = mockFetchSequence([]);
+        const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+        await expect(
+          auth.signInWithIdentityConnection('sankhya-pass', { mode: 'popup' } as never)
+        ).rejects.toThrow('Unsupported identity connection sign-in mode: popup');
+        expect(fetchMock).not.toHaveBeenCalled();
+      });
+
+      it('should keep the session in this tab and leave the shared one alone', async () => {
+        const { browser, tabStorage } = returnedFromProvider(`?code=kc-code&state=${REDIRECT_STATE}`);
+        storedSession(browser.localStorage, 'shared-access', 'shared-refresh');
+        const sharedSession = browser.localStorage._store[STORAGE_KEY];
+        mockFetchSequence([
+          { body: { access_token: 'kc-access', id_token: 'kc-id', refresh_token: 'kc-refresh' } },
+          { body: { exchangeCode: 'exchange-1', expiresInSeconds: 60 } },
+          { body: { ...fakeTokenResponse, allTokens: fakeAllTokens } },
+          { body: currentUserResponse },
+        ]);
+        const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+        await expect(auth.completeIdentityConnectionRedirect()).resolves.toEqual(apiUser);
+
+        expect(getAuthSessionPort(auth).isTabScoped()).toBe(true);
+        expect(JSON.parse(tabStorage._store[STORAGE_KEY])).toEqual({
+          user: apiUser,
+          token: 'access-123',
+          refreshToken: 'refresh-456',
+          allTokens: fakeAllTokens,
+        });
+        expect(tabStorage._store[REDIRECT_KEY]).toBeUndefined();
+        expect(JSON.stringify({ ...tabStorage._store, ...browser.localStorage._store })).not.toContain('kc-');
+        expect(browser.localStorage._store[STORAGE_KEY]).toBe(sharedSession);
+      });
+
+      it('should keep the restored session when a forged callback arrives with no sign-in pending', async () => {
+        const browser = mockBrowser();
+        browser.window.location.search = `?code=forged&state=${REDIRECT_STATE}`;
+        storedSession(browser.localStorage, 'shared-access', 'shared-refresh');
+        const fetchMock = mockFetchSequence([]);
+        const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+        await expect(auth.completeIdentityConnectionRedirect()).rejects.toThrow('possible CSRF');
+
+        expect(fetchMock).not.toHaveBeenCalled();
+        expect(auth.isAuthenticated).toBe(true);
+        expect(auth.accessToken).toBe('shared-access');
+      });
+
+      it('should stop using the restored session, keeping it stored, when IAM refuses the assertion', async () => {
+        const { browser } = returnedFromProvider(`?code=kc-code&state=${REDIRECT_STATE}`);
+        storedSession(browser.localStorage, 'shared-access', 'shared-refresh');
+        const sharedSession = browser.localStorage._store[STORAGE_KEY];
+        mockFetchSequence([
+          { body: { access_token: 'kc-access' } },
+          { body: { message: 'Invalid assertion', error_code: 'INVALID_IDENTITY_ASSERTION' }, status: 401 },
+        ]);
+        const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+        expect(auth.isAuthenticated).toBe(true);
+
+        await expect(auth.completeIdentityConnectionRedirect()).rejects.toMatchObject({
+          status: 401,
+          code: 'INVALID_IDENTITY_ASSERTION',
+        });
+
+        expect(auth.isAuthenticated).toBe(false);
+        expect(browser.localStorage._store[STORAGE_KEY]).toBe(sharedSession);
+      });
+    });
+
     it('should keep a rotated tab session in the tab', () => {
       const { browser, tabStorage } = framedBrowser('');
       tabStorage._store[STORAGE_KEY] = JSON.stringify({

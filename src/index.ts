@@ -48,6 +48,7 @@ export type {
   EmailCodeVerification,
   EmailSignInOptions,
   GoogleSignInOptions,
+  IdentityConnectionSignInOptions,
   MicrosoftSignInOptions,
   PasswordChange,
   PasswordResetConfirmation,

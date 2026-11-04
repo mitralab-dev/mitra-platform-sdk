@@ -158,9 +158,10 @@ export interface MitraClient {
    * the public app info endpoint.
    *
    * In a browser it also finishes a sign-in through an identity connection
-   * (see `auth.completeIdentityConnectionSignInRedirect()`) when the URL
-   * carries one, and rejects when that sign-in fails. Without such a fragment
-   * it makes no extra request.
+   * (see `auth.completeIdentityConnectionSignInRedirect()` and
+   * `auth.completeIdentityConnectionRedirect()`) when the URL carries one, and
+   * rejects when that sign-in fails. Without such a fragment or query it makes
+   * no extra request.
    *
    * Safe to call multiple times. A call made while another runs waits for it;
    * once the app info is read, later calls are no-ops.
@@ -460,6 +461,7 @@ export function createClient(config: MitraClientConfig): MitraClient {
     // reload starts clean instead of failing the same way.
     if (globalThis.window !== undefined) {
       await authModule.completeIdentityConnectionSignInRedirect();
+      await authModule.completeIdentityConnectionRedirect();
     }
   }
 
@@ -503,6 +505,7 @@ export type {
   EmailCodeVerification,
   EmailSignInOptions,
   GoogleSignInOptions,
+  IdentityConnectionSignInOptions,
   MicrosoftSignInOptions,
   PasswordChange,
   PasswordResetConfirmation,

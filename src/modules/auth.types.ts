@@ -50,6 +50,20 @@ export type EmailSignInOptions = AuthPageSignInOptions;
 /** Language of the message IAM sends. The platform writes it in these two. */
 export type EmailCodeLanguage = 'pt-BR' | 'en';
 
+/** Options for `auth.signInWithIdentityConnection()`. */
+export interface IdentityConnectionSignInOptions {
+  /** Navigates the current page to the identity provider of the connection. */
+  mode: 'redirect';
+  /**
+   * Where the identity provider sends the browser back. Defaults to the
+   * current origin and path, without query or fragment. It has to be one of
+   * the redirect URIs the connection client accepts.
+   */
+  redirectUri?: string;
+  /** Defaults to the browser language, and to `pt-BR` when that is neither. */
+  language?: EmailCodeLanguage;
+}
+
 /** The address to send a one-time code to, and the language to write it in. */
 export interface EmailCodeRequest {
   email: string;

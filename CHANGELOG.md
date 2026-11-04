@@ -2,6 +2,35 @@
 
 All notable changes to this project are documented in this file.
 
+## 1.9.0-beta.1
+
+Sign-in through an identity connection by redirect, for an app opened directly in the browser,
+outside a host system iframe (a "Sign in with Sankhya Pass" button).
+
+- `auth.signInWithIdentityConnection(slug, { mode: 'redirect', redirectUri?, language? })` reads
+  the connection (`GET /api/v1/auth/identity-connections/{slug}`), which now carries
+  `authorizationEndpoint`, `tokenEndpoint` and `clientId`, and sends the page to the provider with
+  Authorization Code and PKCE (S256). A connection without those fields is refused before anything
+  is stored. The pending request (`state` prefixed `connection.{slug}.`, `code_verifier`, redirect
+  URI, token endpoint) is kept in `sessionStorage` under `mitra_identity_connection_redirect_{appId}`.
+  The redirect URI defaults to the current origin and path, without query or fragment; a
+  `redirectUri` outside the app origin, not http(s), or with a query or a fragment is refused
+  before any request (RFC 6749 3.1.2).
+- `auth.completeIdentityConnectionRedirect()` reads `code` and `state` from the query, not the
+  fragment, so it never collides with the bridge completion. It returns `null`, without a request
+  and without touching the URL, when `state` does not start with `connection.`. From there on the
+  pending request is spent, the callback parameters leave the URL before anything can fail, and a
+  state that matches no pending request in the tab is refused without a request. The code is
+  redeemed at the provider's token endpoint saved at start, the provider's access token is sent to
+  `POST /api/v1/auth/identity-connections/{slug}/login` and the returned exchange code is redeemed
+  at `/exchange`, as the bridge flow does. The token endpoint call gives up after 15 seconds, and
+  its error message masks the code and the verifier. The provider's id token and refresh token are never kept.
+  The session is tab-scoped, like the bridge one, and a failure with a sign-in pending in the tab
+  drops the in-memory session while keeping it stored; a callback with nothing pending, such as a
+  forged link, is refused and leaves the session alone.
+- `init()` calls it in a browser right after the bridge completion; a failure rejects `init()`.
+- New exported type: `IdentityConnectionSignInOptions`.
+
 ## 1.9.0-beta.0
 
 Sign-in through an identity connection, starting with Sankhya Pass, for an app opened inside the
