@@ -59,8 +59,11 @@ function readEndpoints(connection: unknown): ConnectionEndpoints | null {
 }
 
 function base64Url(bytes: Uint8Array): string {
-  const binary = Array.from(bytes, (byte) => String.fromCharCode(byte)).join('');
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const binary = Array.from(bytes, (byte) => String.fromCodePoint(byte)).join('');
+  // The padding is at most two characters, so trimming it in a loop keeps the regex linear.
+  let encoded = btoa(binary).replaceAll('+', '-').replaceAll('/', '_');
+  while (encoded.endsWith('=')) encoded = encoded.slice(0, -1);
+  return encoded;
 }
 
 function randomBytes(length: number): Uint8Array {
@@ -249,10 +252,11 @@ export class IdentityConnectionRedirectFlow {
   private clearCallbackQuery(browserWindow: Window, params: URLSearchParams): void {
     CALLBACK_PARAMS.forEach((name) => params.delete(name));
     const query = params.toString();
+    const search = query ? `?${query}` : '';
     browserWindow.history.replaceState(
       {},
       '',
-      `${browserWindow.location.pathname}${query ? `?${query}` : ''}${browserWindow.location.hash}`
+      `${browserWindow.location.pathname}${search}${browserWindow.location.hash}`
     );
   }
 
@@ -306,8 +310,9 @@ export class IdentityConnectionRedirectFlow {
         .join(': ')
         .split(code).join('[redacted]')
         .split(context.codeVerifier).join('[redacted]');
+      const detail = reason ? `, ${reason}` : '';
       throw new Error(
-        `Identity connection sign-in could not redeem the authorization code (status ${response.status}${reason ? `, ${reason}` : ''}).`
+        `Identity connection sign-in could not redeem the authorization code (status ${response.status}${detail}).`
       );
     }
     if (!isNonEmptyString(body?.access_token)) {
