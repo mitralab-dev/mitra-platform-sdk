@@ -100,8 +100,16 @@ export interface BrowserHarness {
  *
  * @param injectedAuthPageUrl - Value for `window.__mitraEnv.authPageUrl`.
  * Omitted leaves `__mitraEnv` out of the window entirely.
+ * @param options.framed - Whether the window is inside an iframe, so that
+ * `window.top` is another window. Defaults to a top-level tab.
+ * @param options.hostOrigin - Origin of the embedding page, or the whole chain
+ * from the parent outwards, exposed as `location.ancestorOrigins`. Omitted or
+ * null leaves the list out, as in a browser without the API.
  */
-export function mockBrowser(injectedAuthPageUrl?: unknown): BrowserHarness {
+export function mockBrowser(
+  injectedAuthPageUrl?: unknown,
+  options: { framed?: boolean; hostOrigin?: string | readonly string[] | null } = {}
+): BrowserHarness {
   const listeners = new Set<(event: MessageEvent<unknown>) => void>();
   const popup = {
     closed: false,
@@ -117,6 +125,7 @@ export function mockBrowser(injectedAuthPageUrl?: unknown): BrowserHarness {
     search: '?status=open',
     hash: '',
     assign: vi.fn(),
+    ...(options.hostOrigin ? { ancestorOrigins: [options.hostOrigin].flat() } : {}),
   };
   const localStorageMock = mockLocalStorage();
   const sessionStorageMock = mockSessionStorage();
@@ -141,6 +150,9 @@ export function mockBrowser(injectedAuthPageUrl?: unknown): BrowserHarness {
       ? { __mitraEnv: { authPageUrl: injectedAuthPageUrl } }
       : {}),
   } as unknown as BrowserHarness['window'];
+  const frames = browserWindow as unknown as { self: Window; top: Window };
+  frames.self = browserWindow;
+  frames.top = options.framed ? ({} as Window) : browserWindow;
 
   vi.stubGlobal('window', browserWindow);
   vi.stubGlobal('crypto', {
