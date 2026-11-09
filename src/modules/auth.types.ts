@@ -52,7 +52,7 @@ export type EmailCodeLanguage = 'pt-BR' | 'en';
 
 /** Options for `auth.signInWithIdentityConnection()`. */
 export interface IdentityConnectionSignInOptions {
-  /** Navigates the current page to the identity provider of the connection. */
+  /** Navigates the current page to the identity provider of the connection, or to IAM for a SAML one. */
   mode: 'redirect';
   /**
    * Where the identity provider sends the browser back. Defaults to the

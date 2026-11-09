@@ -29,16 +29,21 @@ function readAllowedOrigins(response: unknown): string[] {
   return Array.isArray(origins) ? origins.filter((origin): origin is string => typeof origin === 'string') : [];
 }
 
-/** Redeems the single-use code IAM issued for an identity connection sign-in. */
+/**
+ * Redeems the single-use code IAM issued for an identity connection sign-in.
+ * Only a code issued against a PKCE challenge (SAML) takes a `codeVerifier`;
+ * the others are issued without one, so the field is left out for them.
+ */
 export async function exchangeIdentityConnectionCode(
   client: HttpClient,
   slug: string,
   appId: string,
-  code: string
+  code: string,
+  codeVerifier?: string
 ): Promise<AuthTokenResponse> {
   const response = await client.post<unknown>(
     `/api/v1/auth/identity-connections/${slug}/exchange`,
-    { appId, code }
+    codeVerifier === undefined ? { appId, code } : { appId, code, codeVerifier }
   );
   return expectAuthTokenResponse(response);
 }

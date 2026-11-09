@@ -19,12 +19,24 @@ const CONNECTION = {
   clientId: 'mitra-apps',
 };
 const STATE = `connection.sankhya-pass.${'07'.repeat(16)}`;
+const SAML_CONNECTION_URL = `${IAM_URL}/api/v1/auth/identity-connections/customer-saml`;
+const SAML_CONNECTION = {
+  slug: 'customer-saml',
+  name: 'Customer SAML',
+  protocol: 'SAML',
+  allowedOrigins: [],
+  authorizationEndpoint: null,
+  tokenEndpoint: null,
+  clientId: null,
+};
+const SAML_STATE = `connection.customer-saml.${'07'.repeat(16)}`;
 const TOKENS = { accessToken: 'access-123', refreshToken: 'refresh-456', tokenType: 'Bearer' };
 
 function flow(): IdentityConnectionRedirectFlow {
   return new IdentityConnectionRedirectFlow({
     appId: APP_ID,
     client: new HttpClient({ baseUrl: IAM_URL, getToken: () => null }),
+    iamUrl: `${IAM_URL}/`,
     storageKey: STORAGE_KEY,
   });
 }
@@ -42,6 +54,18 @@ function storeContext(browser: BrowserHarness, overrides: Record<string, unknown
     tokenEndpoint: TOKEN_ENDPOINT,
     clientId: 'mitra-apps',
     language: 'pt-BR',
+    ...overrides,
+  });
+}
+
+function storeSamlContext(browser: BrowserHarness, overrides: Record<string, unknown> = {}): void {
+  tabStorage(browser)[STORAGE_KEY] = JSON.stringify({
+    state: SAML_STATE,
+    codeVerifier: 'verifier-1',
+    slug: 'customer-saml',
+    redirectUri: 'https://app.example.com/orders',
+    language: 'pt-BR',
+    protocol: 'SAML',
     ...overrides,
   });
 }
@@ -89,6 +113,60 @@ describe('IdentityConnectionRedirectFlow', () => {
         code_challenge_method: 'S256',
       });
       expect(target.search).toContain('scope=openid%20email%20profile');
+    });
+
+    it('should keep the OIDC route for a connection that names OIDC_ASSERTION', async () => {
+      const browser = mockBrowser();
+      mockFetchSequence([{ body: { ...CONNECTION, protocol: 'OIDC_ASSERTION' } }]);
+
+      void flow().start('sankhya-pass');
+      await vi.waitFor(() => expect(browser.window.location.assign).toHaveBeenCalled());
+
+      const target = browser.getRedirectUrl();
+      expect(`${target.origin}${target.pathname}`).toBe(AUTHORIZATION_ENDPOINT);
+      const context = JSON.parse(tabStorage(browser)[STORAGE_KEY]);
+      expect(context).toMatchObject({ tokenEndpoint: TOKEN_ENDPOINT, clientId: 'mitra-apps' });
+      expect(context).not.toHaveProperty('protocol');
+    });
+
+    it('should store a SAML request and send the page to IAM with the PKCE challenge', async () => {
+      const browser = mockBrowser();
+      const fetchMock = mockFetchSequence([{ body: SAML_CONNECTION }]);
+
+      void flow().start('customer-saml', { language: 'en' });
+      await vi.waitFor(() => expect(browser.window.location.assign).toHaveBeenCalled());
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0][0]).toBe(SAML_CONNECTION_URL);
+      const context = JSON.parse(tabStorage(browser)[STORAGE_KEY]);
+      expect(context).toEqual({
+        state: SAML_STATE,
+        codeVerifier: expect.stringMatching(/^[A-Za-z0-9_-]{43,128}$/),
+        slug: 'customer-saml',
+        redirectUri: 'https://app.example.com/orders',
+        language: 'en',
+        protocol: 'SAML',
+      });
+
+      const target = browser.getRedirectUrl();
+      expect(`${target.origin}${target.pathname}`).toBe(`${SAML_CONNECTION_URL}/saml/login`);
+      expect(Object.fromEntries(target.searchParams)).toEqual({
+        appId: APP_ID,
+        returnTo: 'https://app.example.com/orders',
+        state: SAML_STATE,
+        codeChallenge: createHash('sha256').update(context.codeVerifier).digest('base64url'),
+        language: 'en',
+      });
+    });
+
+    it('should refuse a connection of an unknown protocol, before storing or navigating', async () => {
+      const browser = mockBrowser();
+      mockFetchSequence([{ body: { ...CONNECTION, protocol: 'WS_FEDERATION' } }]);
+
+      await expect(flow().start('sankhya-pass')).rejects.toThrow('does not support redirect sign-in');
+
+      expect(tabStorage(browser)[STORAGE_KEY]).toBeUndefined();
+      expect(browser.window.location.assign).not.toHaveBeenCalled();
     });
 
     it('should send the provider back to the redirect URI the app chose', async () => {
@@ -361,6 +439,98 @@ describe('IdentityConnectionRedirectFlow', () => {
       });
       expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toEqual({ appId: APP_ID, code: 'exchange-1' });
       expect(browser.window.history.replaceState).toHaveBeenCalledWith({}, '', '/orders');
+    });
+
+    it('should take the protocol from the stored request, never from the query', async () => {
+      const browser = returnedWith(`?code=kc-code&state=${STATE}&protocol=SAML`);
+      storeContext(browser);
+      const fetchMock = mockFetchSequence([
+        { body: { access_token: 'kc-access' } },
+        { body: { exchangeCode: 'exchange-1', expiresInSeconds: 60 } },
+        { body: TOKENS },
+      ]);
+
+      await expect(flow().complete()).resolves.toEqual(TOKENS);
+
+      expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+        TOKEN_ENDPOINT,
+        `${CONNECTION_URL}/login`,
+        `${CONNECTION_URL}/exchange`,
+      ]);
+      expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toEqual({ appId: APP_ID, code: 'exchange-1' });
+    });
+
+    describe('SAML', () => {
+      it('should redeem the IAM code with the verifier in a single request', async () => {
+        const browser = returnedWith(`?code=iam-code&state=${SAML_STATE}`);
+        storeSamlContext(browser);
+        const fetchMock = mockFetchSequence([{ body: TOKENS }]);
+
+        await expect(flow().complete()).resolves.toEqual(TOKENS);
+
+        expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([`${SAML_CONNECTION_URL}/exchange`]);
+        expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+          appId: APP_ID,
+          code: 'iam-code',
+          codeVerifier: 'verifier-1',
+        });
+        expect(browser.window.history.replaceState).toHaveBeenCalledWith({}, '', '/orders');
+        expect(tabStorage(browser)[STORAGE_KEY]).toBeUndefined();
+      });
+
+      it('should refuse a matching state without code, without a request, after clearing the query', async () => {
+        const browser = returnedWith(`?state=${SAML_STATE}`);
+        storeSamlContext(browser);
+        const fetchMock = mockFetchSequence([]);
+
+        await expect(flow().complete()).rejects.toThrow('missing code');
+
+        expect(fetchMock).not.toHaveBeenCalled();
+        expect(browser.window.history.replaceState).toHaveBeenCalledWith({}, '', '/orders');
+        expect(tabStorage(browser)[STORAGE_KEY]).toBeUndefined();
+      });
+
+      it.each([
+        ['the error code', '?error=identity_connection_denied', /^identity_connection_denied$/],
+        ['the description over the error code', '?error=identity_connection_denied&error_description=Account%20disabled', /^Account disabled$/],
+      ])('should report %s from IAM after clearing the query and spending the request', async (_case, query, expected) => {
+        const browser = returnedWith(`${query}&state=${SAML_STATE}`);
+        storeSamlContext(browser);
+        const fetchMock = mockFetchSequence([]);
+
+        await expect(flow().complete()).rejects.toThrow(expected);
+
+        expect(fetchMock).not.toHaveBeenCalled();
+        expect(browser.window.history.replaceState).toHaveBeenCalledWith({}, '', '/orders');
+        expect(tabStorage(browser)[STORAGE_KEY]).toBeUndefined();
+      });
+
+      it.each([
+        ['no pending request', () => undefined],
+        ['another pending request', (browser: BrowserHarness) => storeSamlContext(browser, { state: `connection.customer-saml.${'0a'.repeat(16)}` })],
+      ])('should refuse a state with %s without a request', async (_case, arrange) => {
+        const browser = returnedWith(`?code=iam-code&state=${SAML_STATE}`);
+        arrange(browser);
+        const fetchMock = mockFetchSequence([]);
+
+        await expect(flow().complete()).rejects.toThrow('possible CSRF');
+
+        expect(fetchMock).not.toHaveBeenCalled();
+        expect(browser.window.history.replaceState).toHaveBeenCalledWith({}, '', '/orders');
+      });
+
+      it.each([
+        ['an unknown protocol, even with the OIDC fields', { protocol: 'WS_FEDERATION', tokenEndpoint: TOKEN_ENDPOINT, clientId: 'mitra-apps' }],
+        ['no protocol and no OIDC fields', { protocol: undefined }],
+      ])('should refuse a stored request with %s as not pending', async (_case, overrides) => {
+        const browser = returnedWith(`?code=iam-code&state=${SAML_STATE}`);
+        storeSamlContext(browser, overrides);
+        const fetchMock = mockFetchSequence([]);
+
+        await expect(flow().complete()).rejects.toThrow('possible CSRF');
+
+        expect(fetchMock).not.toHaveBeenCalled();
+      });
     });
   });
 });

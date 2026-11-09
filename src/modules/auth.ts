@@ -314,6 +314,7 @@ export class AuthModule {
     this.identityConnectionRedirect = new IdentityConnectionRedirectFlow({
       appId,
       client: this.publicClient,
+      iamUrl: trimmedIamBaseUrl,
       storageKey: `mitra_identity_connection_redirect_${appId}`,
     });
     this.loadFromStorage();
@@ -666,9 +667,11 @@ export class AuthModule {
    * Signs in through an identity connection, such as Sankhya Pass, outside a
    * host system iframe: the page is sent to the connection's identity provider
    * (Authorization Code with PKCE) and comes back to `redirectUri` with a code.
-   * `init()` finishes it on the way back, or {@link completeIdentityConnectionRedirect}
-   * when the app does not call `init()`. The returned promise never resolves,
-   * because the page navigates away.
+   * A SAML connection sends the page to IAM instead, which talks to the
+   * identity provider and sends it back with an IAM code. `init()` finishes
+   * it on the way back, or {@link completeIdentityConnectionRedirect} when the
+   * app does not call `init()`. The returned promise never resolves, because
+   * the page navigates away.
    *
    * @param slug - The connection, such as `sankhya-pass`.
    * @throws When the slug is invalid, the connection is unknown or does not
