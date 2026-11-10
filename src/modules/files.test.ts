@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, webcrypto } from 'node:crypto';
 import { File as NodeFile } from 'node:buffer';
 import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { createClient } from '../index';
@@ -19,6 +19,7 @@ function makeFile(size = 3): File {
 }
 
 async function fixture(size = 3, auth: Partial<HttpClientConfig> = {}) {
+  vi.stubGlobal('crypto', webcrypto);
   const file = makeFile(size);
   const bytes = Buffer.from(await file.arrayBuffer());
   const hashes = [];
@@ -359,6 +360,15 @@ describe('files download', () => {
     })));
     await expect(f.files.download(ID, { authorize: f.readAuthorize })).rejects.toMatchObject({ code: 'FILE_INTEGRITY_FAILED' });
     expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a truncated stream even when its checksum matches the received bytes', async () => {
+    const f = await downloadFixture();
+    const truncated = f.bytes.subarray(0, 2);
+    const partHash = createHash('sha256').update(truncated).digest();
+    f.ready.checksum!.value = createHash('sha256').update(partHash).digest('base64') + '-1';
+    f.fetch.mockResolvedValueOnce(Response.json(f.read)).mockResolvedValueOnce(new Response(truncated));
+    await expect(f.files.download(ID, { authorize: f.readAuthorize })).rejects.toMatchObject({ code: 'FILE_INTEGRITY_FAILED' });
   });
 
   it('fails clearly on expired storage access and lets the caller authorize again', async () => {
