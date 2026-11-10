@@ -35,7 +35,7 @@ export function fileMetadata(value: FileMetadata, state: FileMetadata['state']):
     (value.pendingExpiresAt !== null && !isDate(value.pendingExpiresAt))) throw fileError();
   const checksum = value.checksum;
   if (state !== 'UPLOADING' || checksum !== null) {
-    if (!checksum || checksum.algorithm !== 'SHA256' || checksum.type !== 'COMPOSITE' ||
+    if (checksum?.algorithm !== 'SHA256' || checksum.type !== 'COMPOSITE' ||
       checksum.partSize !== FILE_PART_SIZE || checksum.partCount !== Math.ceil(value.size / FILE_PART_SIZE) ||
       !new RegExp(`^[A-Za-z0-9+/]{43}=-${checksum.partCount}$`).test(checksum.value)) throw fileError();
   }
@@ -69,7 +69,7 @@ export interface FilePartDestination extends FileDestination {
 }
 
 export function destination(value: FileDestination, method: 'PUT' | 'GET', expiresAt: string): FileDestination {
-  if (!value || value.method !== method || typeof value.url !== 'string') throw fileError();
+  if (value?.method !== method || typeof value.url !== 'string') throw fileError();
   let url: URL;
   try { url = new URL(value.url); } catch { throw fileError(); }
   if (url.protocol !== 'https:' || url.username || url.password || url.hash) throw fileError();

@@ -1,7 +1,7 @@
 import { FILE_PART_SIZE, FileOperationError, checkExpiry, fileError, type FileDestination } from './files-contract';
 
 function base64(bytes: Uint8Array): string {
-  return btoa(String.fromCharCode(...bytes));
+  return btoa(String.fromCodePoint(...bytes));
 }
 
 export async function fileChecksums(blob: Blob, signal?: AbortSignal): Promise<string[]> {
@@ -18,7 +18,7 @@ export async function fileChecksums(blob: Blob, signal?: AbortSignal): Promise<s
 export async function compositeChecksum(checksums: string[]): Promise<string> {
   const bytes = new Uint8Array(checksums.length * 32);
   checksums.forEach((checksum, index) => {
-    bytes.set(Uint8Array.from(atob(checksum), (character) => character.charCodeAt(0)), index * 32);
+    bytes.set(Uint8Array.from(atob(checksum), (character) => character.codePointAt(0)!), index * 32);
   });
   return `${base64(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)))}-${checksums.length}`;
 }

@@ -48,7 +48,7 @@ export class FilesModule {
         return this.stagedFile(initial, initial, checksum);
       }
       const redeemed = await this.request<RedeemedUpload>(grantId, 'redeem', controller.signal);
-      if (!redeemed || redeemed.operation !== 'UPLOAD' || redeemed.uploadId !== authorized.uploadId) throw fileError();
+      if (redeemed?.operation !== 'UPLOAD' || redeemed.uploadId !== authorized.uploadId) throw fileError();
       if (redeemed.file?.state === 'STAGED') {
         completionMayHaveSucceeded = true;
         if (!Array.isArray(redeemed.destinations) || redeemed.destinations.length !== 0) throw fileError();
@@ -81,7 +81,7 @@ export class FilesModule {
     const signal = options.signal ?? new AbortController().signal;
     signal.throwIfAborted();
     const redeemed = await this.request<RedeemedRead>(grant.grantId, 'redeem', signal);
-    if (!redeemed || redeemed.operation !== 'READ') throw fileError();
+    if (redeemed?.operation !== 'READ') throw fileError();
     const file = fileMetadata(redeemed.file, 'READY');
     if (file.fileId !== id) throw fileError();
     const target = destination(redeemed.download, 'GET', grant.expiresAt);

@@ -257,12 +257,7 @@ export class HttpClient implements Transport {
         }
       }
 
-      const original = await this.errorFromResponse(response, token);
-      const error = options.redactErrors
-        ? new MitraApiError('File API request failed', original.status,
-          original.code && /^[A-Z_]{1,80}$/.test(original.code) ? original.code : 'FILE_REQUEST_FAILED',
-          undefined, original.retryAfterSeconds)
-        : original;
+      const error = await this.errorFromResponse(response, token, options.redactErrors);
       this.onError?.(error);
       throw error;
     }
@@ -270,18 +265,21 @@ export class HttpClient implements Transport {
     return this.parseResponseBody<T>(response, options.redactErrors ? 'files' : path, options);
   }
 
-  private async errorFromResponse(response: Response, token: string | null): Promise<MitraApiError> {
+  private async errorFromResponse(response: Response, token: string | null, redactErrors = false): Promise<MitraApiError> {
     const errorBody: unknown = await response.json().catch(() => ({}));
     const errorPayload = asErrorPayload(errorBody);
     const rawMessage = optionalString(errorPayload.message);
     const rawCode = optionalString(errorPayload.error_code);
-    return new MitraApiError(
+    const error = new MitraApiError(
       redactText(rawMessage || `Request failed with status ${response.status}`, token),
       response.status,
       rawCode === undefined ? undefined : redactText(rawCode, token),
       redactDetails(errorBody, token),
       readRetryAfterSeconds(response)
     );
+    if (!redactErrors) return error;
+    const code = error.code && /^[A-Z_]{1,80}$/.test(error.code) ? error.code : 'FILE_REQUEST_FAILED';
+    return new MitraApiError('File API request failed', error.status, code, undefined, error.retryAfterSeconds);
   }
 
   private async parseResponseBody<T>(response: Response, path: string, options: RequestOptions): Promise<T> {
