@@ -354,6 +354,27 @@ void legacyConfig
 void sdk.executeServerFunctionMitra
 `
   );
+  for (const extension of ['mts', 'cts']) {
+    writeFileSync(
+      join(consumerDirectory, `files.${extension}`),
+      `import { createClient, type FilesModule, type FileUpload, type FileUploadInput, type FileMetadata, type FileGrant, type FileDownload } from "@mitralab.io/platform-sdk"
+const files: FilesModule = createClient({ apiUrl: "https://api.example.com", appId: "app" }).files
+async function useFiles(file: File, authorize: (metadata: FileUploadInput) => Promise<FileUpload>, read: (id: string) => Promise<FileGrant>) {
+  const staged: FileMetadata = await files.upload(file, { authorize })
+  const result: FileDownload = await files.download(staged.fileId, { authorize: read })
+  const blob: Blob = result.blob
+  // @ts-expect-error The recipient cannot commit files.
+  void files.commit
+  // @ts-expect-error The recipient cannot mint grants.
+  void files.createReadGrant
+  // @ts-expect-error Download does not expose the signed URL.
+  void result.url
+  return blob
+}
+void useFiles
+`
+    );
+  }
   execFileSync(
     process.execPath,
     [
@@ -369,6 +390,8 @@ void sdk.executeServerFunctionMitra
       'NodeNext',
       'consumer.mts',
       'consumer.cts',
+      'files.mts',
+      'files.cts',
     ],
     { cwd: consumerDirectory, stdio: 'inherit' }
   );

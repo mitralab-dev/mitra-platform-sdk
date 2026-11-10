@@ -14,6 +14,7 @@ import { LegacySessionBridge, setActiveBridge } from './legacy/bridge';
 import { AuthModule, getAuthSessionPort } from './modules/auth';
 import { EntitiesModule, EntitiesProxy } from './modules/entities';
 import { FunctionsModule } from './modules/functions';
+import { FilesModule } from './modules/files';
 import { IntegrationModule } from './modules/integration';
 import { QueriesModule } from './modules/queries';
 import { createBrowserAgentTasksModule } from './modules/agent-tasks';
@@ -214,6 +215,7 @@ export interface MitraClient {
    * ```
    */
   functions: FunctionsModule;
+  readonly files: FilesModule;
 
   /** Anonymous execution of Functions explicitly published as public. */
   publicFunctions: PublicFunctionsModule;
@@ -470,6 +472,7 @@ export function createClient(config: MitraClientConfig): MitraClient {
     auth: authModule,
     entities: entitiesModule,
     functions: functionsModule,
+    files: new FilesModule(httpClient),
     publicFunctions: publicFunctionsModule,
     agentTasks: agentTasksModule,
     agentCredentials: agentCredentialsModule,

@@ -30,6 +30,11 @@
  */
 
 export { createClient } from './client';
+export type { FilesModule } from './modules/files';
+export type {
+  FileChecksum, FileMetadata, FileGrant, FileUploadInput, FileUpload,
+  FileUploadOptions, FileDownloadOptions, FileDownload,
+} from './modules/files.types';
 
 export type {
   MitraClient,

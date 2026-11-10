@@ -38,6 +38,7 @@ No app gerado pelo Code Studio, `VITE_MITRA_APP_ID` e `VITE_MITRA_API_URL` já v
 
 - `auth`: login com Google (`signInWithGoogle`), Microsoft (`signInWithMicrosoft`), código por e-mail ou e-mail e senha (`signInWithPassword` no popup da Mitra, ou `signInWithPasswordForm` no formulário do próprio app), mais `currentUser`, `onAuthStateChange` e `signOut`.
 - `entities.<Tabela>`: `list`, `filter`, `get`, `create`, `bulkCreate`, `update`, `delete` e `deleteMany` nas tabelas do app.
+- `files.upload(file, { authorize, onProgress?, signal? })` e `files.download(fileId, { authorize, signal? })`: arquivos privados, com autorização de negócio numa Server Function do app.
 - `queries.execute(id, params)`: roda uma query salva no app.
 - `functions`: `execute` espera o resultado da Server Function; `executeAsync` devolve a execução para acompanhar com `getExecution` ou parar com `cancelExecution`. `publicFunctions` chama as Functions publicadas como públicas, sem login.
 - `integration.executeByAlias(alias, request)`: chama uma API externa configurada no app. A credencial do provedor fica na Mitra e não passa pelo browser.
@@ -141,6 +142,65 @@ chat.on("delta", ({ delta, kind }) => {
 const { content } = await chat.sendAndWait("Resuma os pedidos de hoje")
 chat.close()
 ```
+
+## Arquivos privados
+
+O app autoriza cada operação numa Function privada com a capacidade `filesEnabled`. O SDK encapsula checksum, resgate autenticado, multipart e conclusão. O módulo de backend está no [`functions-sdk`](https://www.npmjs.com/package/@mitralab.io/functions-sdk); não injete a credencial de arquivos no browser.
+
+```typescript
+import type { FileUpload, FileGrant } from '@mitralab.io/platform-sdk';
+
+const controller = new AbortController();
+const idempotencyKey = crypto.randomUUID();
+const staged = await mitra.files.upload(selectedFile, {
+  signal: controller.signal,
+  onProgress: ({ loaded, total }) => renderProgress(loaded / total),
+  authorize: async (metadata) => {
+    const execution = await mitra.functions.execute(uploadFunctionId, {
+      conversationId, metadata, idempotencyKey,
+    });
+    if (execution.status !== 'COMPLETED') throw new Error('Upload authorization failed');
+    return execution.output as unknown as FileUpload;
+  },
+});
+
+// The app backend accepts the message, stores its fileId link and calls files.commit.
+const saved = await mitra.functions.execute(saveMessageFunctionId, {
+  conversationId, fileId: staged.fileId,
+});
+if (saved.status !== 'COMPLETED') throw new Error('Message is still pending');
+
+const downloaded = await mitra.files.download(staged.fileId, {
+  signal: controller.signal,
+  authorize: async (fileId) => {
+    const execution = await mitra.functions.execute(readFunctionId, {
+      conversationId, fileId, idempotencyKey: crypto.randomUUID(),
+    });
+    if (execution.status !== 'COMPLETED') throw new Error('Read authorization failed');
+    return execution.output as unknown as FileGrant;
+  },
+});
+const objectUrl = URL.createObjectURL(downloaded.blob);
+const link = document.createElement('a');
+link.href = objectUrl;
+link.download = downloaded.file.name;
+link.textContent = 'Save file';
+document.body.append(link);
+// Revoke the object URL when the link or preview is removed.
+```
+
+As Functions e variáveis do exemplo pertencem ao seu app. A de upload recebe `metadata`, aplica a política e chama `mitra.files.createUpload(metadata, { idempotencyKey })` no Functions SDK. A de leitura valida o vínculo do `fileId` com a conversa e a permissão do ator autenticado antes de `createReadGrant`. Nunca confie em `userId` enviado pelo browser. O resultado `execution.output` passa por validação de contrato no helper, além da tipagem do exemplo.
+
+- Upload aceita `File` de 1 byte a 25 MiB. Calcula SHA-256 em base64 por `Blob.slice` de 5 MiB antes de chamar `authorize` uma vez. Usa 1 a 5 partes, duas em paralelo por upload, com até três tentativas por parte e espera crescente. O mesmo manifesto e os mesmos bytes são usados nas repetições. Para lotes, limite também quantos `upload()` seu app inicia ao mesmo tempo.
+- `onProgress` informa bytes de partes concluídas com sucesso, sem contar retries duas vezes. Não é estimativa de bytes em trânsito: um arquivo pequeno atualiza ao terminar sua única parte. Progresso de 100% ainda precede a validação final na API.
+- Upload retorna `FileMetadata` em `STAGED`. Uma repetição da autorização ou do resgate com a mesma chave pode devolver `STAGED`: o SDK confere identidade, tamanho e checksum e retorna sem reenviar bytes, enquanto a concessão ainda estiver válida. Se já estiver `READY`, retorna `FILE_ALREADY_COMMITTED`; reconcilie o vínculo existente em vez de criar outro upload. Somente o backend pode fazer `commit`, depois de aceitar o vínculo. Não há transação distribuída entre mensagem e arquivo: mantenha vínculo pendente, repita `commit` e reconcilie com `get` se a resposta se perder. `pendingExpiresAt` limita a retenção sem commit.
+- `controller.abort()` cancela requests em andamento e a espera daquela chamada pela renovação da sessão, sem interromper a renovação compartilhada. Antes de enviar `complete`, um cancelamento explícito também tenta descartar o upload por até cinco segundos com sinal independente. Conflitos concorrentes, arquivos já `STAGED` e falhas após enviar `complete` não provocam descarte automático: a conclusão pode ter sido aceita mesmo sem resposta. Repita com a mesma chave para recuperar o estado, ou reconcilie no backend. O callback `authorize` pertence ao app e não pode ser interrompido pelo SDK; se devolver um upload ainda pendente depois do cancelamento, o SDK tenta descartá-lo. O cleanup do servidor cobre fechamento de aba e perda de rede. `files.cancel(grantId)` permite descarte explícito quando o app decidiu abandonar o upload, inclusive se ele já estiver `STAGED`.
+- Download retorna `{ file, blob }`, após conferir tamanho e SHA256 COMPOSITE em partes. O Blob é `application/octet-stream`; limite de leitura é 25 MiB, sem buffering ilimitado de resposta. Use `URL.createObjectURL` apenas localmente e `URL.revokeObjectURL` ao desmontar. Prévia de rascunho pode usar o `File` original. Não execute HTML/SVG nem confie no MIME declarado para embutir conteúdo ativo na origem autenticada.
+- A transferência usa `globalThis.fetch` com `credentials: 'omit'`, `redirect: 'error'`, sem token, cookies, referrer ou headers da API. Só aceita HTTPS e os headers de conteúdo/checksum previstos. `Content-Length` vem do tamanho exato do Blob, calculado pelo browser, nunca de `setRequestHeader`. CORS e assinatura precisam ser homologados na infraestrutura real.
+- Metadados e grants não contêm URL de armazenamento; resgate usa a sessão comum e as URLs ficam apenas em memória durante a chamada. Guarde `fileId` no histórico. A versão original é baixada diretamente, sem transformação. Arquivos validados são imutáveis; substituir conteúdo cria outro arquivo.
+- `FILE_GRANT_EXPIRED` pede nova autorização: chame `download` novamente, com nova chave de idempotência na Function, depois de decidir tentar de novo. Não há renovação silenciosa nem loop infinito. `FILE_INTEGRITY_FAILED` recusa conteúdo divergente; `INVALID_RESPONSE` recusa contrato inválido; `FILE_TRANSFER_FAILED` indica falha de rede/servidor após tentativas; `FILE_TRANSFER_REJECTED` indica recusa do armazenamento. Erros de API preservam `status` e `code`, sem mensagens/detalhes que exponham grants ou URLs.
+
+Os tipos `FileMetadata`, `FileChecksum`, `FileGrant`, `FileUploadInput`, `FileUpload`, `FileUploadOptions`, `FileDownloadOptions`, `FileDownload` e `FilesModule` são exportados. Datas são strings ISO UTC. SHA256 COMPOSITE é o SHA-256 da concatenação dos hashes binários das partes, em base64 com sufixo `-N`, inclusive `-1`; não é o hash simples do arquivo inteiro.
 
 ## Configuração
 

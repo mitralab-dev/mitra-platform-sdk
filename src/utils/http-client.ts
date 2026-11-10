@@ -122,6 +122,32 @@ export interface RequestOptions extends Omit<TransportRequestOptions, 'method'> 
   isRetry?: boolean;
   /** Lets the request outlive the page that sent it, as `fetch` `keepalive` does. */
   keepalive?: boolean;
+  signal?: AbortSignal;
+  /** File grants and storage URLs must not reach error callbacks or logs. */
+  redactErrors?: boolean;
+}
+
+function waitForRequest<T>(pending: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return pending;
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(new DOMException('Request aborted', 'AbortError'));
+    signal.addEventListener('abort', abort, { once: true });
+    // Only this waiter is cancelled; session refresh can still serve other requests.
+    pending.then(
+      (value) => { signal.removeEventListener('abort', abort); resolve(value); },
+      (error: unknown) => { signal.removeEventListener('abort', abort); reject(error); }
+    );
+    if (signal.aborted) {
+      signal.removeEventListener('abort', abort);
+      abort();
+    }
+  });
+}
+
+function requestFailure(error: unknown, options: RequestOptions): never {
+  if (!options.redactErrors) throw error;
+  if (options.signal?.aborted) throw new DOMException('File operation aborted', 'AbortError');
+  throw new MitraApiError('File API request failed', 0, 'NETWORK_ERROR');
 }
 
 /**
@@ -187,9 +213,11 @@ export class HttpClient implements Transport {
 
     const url = buildRequestUrl(this.baseUrl, path, params);
 
+    options.signal?.throwIfAborted();
     if (!isRetry && this.tokenGetter() && this.beforeAuthenticatedRequest) {
-      await this.beforeAuthenticatedRequest();
+      await waitForRequest(this.beforeAuthenticatedRequest(), options.signal);
     }
+    options.signal?.throwIfAborted();
 
     const requestHeaders: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -208,7 +236,8 @@ export class HttpClient implements Transport {
       body: body ? JSON.stringify(body) : undefined,
       redirect: 'manual',
       ...(keepalive ? { keepalive } : {}),
-    });
+      ...(options.signal ? { signal: options.signal } : {}),
+    }).catch((error: unknown) => requestFailure(error, options));
 
     if (response.redirected || response.type === 'opaqueredirect') {
       const error = new MitraApiError(
@@ -222,18 +251,23 @@ export class HttpClient implements Transport {
 
     if (!response.ok) {
       if (response.status === 401 && !isRetry && this.onUnauthorized) {
-        const refreshed = await this.onUnauthorized(token);
+        const refreshed = await waitForRequest(this.onUnauthorized(token), options.signal);
         if (refreshed) {
           return this.request<T>(path, { ...options, isRetry: true });
         }
       }
 
-      const error = await this.errorFromResponse(response, token);
+      const original = await this.errorFromResponse(response, token);
+      const error = options.redactErrors
+        ? new MitraApiError('File API request failed', original.status,
+          original.code && /^[A-Z_]{1,80}$/.test(original.code) ? original.code : 'FILE_REQUEST_FAILED',
+          undefined, original.retryAfterSeconds)
+        : original;
       this.onError?.(error);
       throw error;
     }
 
-    return this.parseResponseBody<T>(response, path);
+    return this.parseResponseBody<T>(response, options.redactErrors ? 'files' : path, options);
   }
 
   private async errorFromResponse(response: Response, token: string | null): Promise<MitraApiError> {
@@ -250,13 +284,13 @@ export class HttpClient implements Transport {
     );
   }
 
-  private async parseResponseBody<T>(response: Response, path: string): Promise<T> {
+  private async parseResponseBody<T>(response: Response, path: string, options: RequestOptions): Promise<T> {
     if (response.status === 204) {
       return undefined as T;
     }
 
     if (typeof response.text === 'function') {
-      const responseText = await response.text();
+      const responseText = await response.text().catch((error: unknown) => requestFailure(error, options));
       if (responseText.length === 0) {
         return undefined as T;
       }
@@ -274,7 +308,7 @@ export class HttpClient implements Transport {
       }
     }
 
-    return response.json();
+    return response.json().catch((error: unknown) => requestFailure(error, options));
   }
 
   /**
