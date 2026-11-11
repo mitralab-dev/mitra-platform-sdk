@@ -145,7 +145,7 @@ chat.close()
 
 ## Arquivos privados
 
-O app autoriza cada operação numa Function privada com a capacidade `filesEnabled`. O SDK encapsula checksum, resgate autenticado, multipart e conclusão. O módulo de backend está no [`functions-sdk`](https://www.npmjs.com/package/@mitralab.io/functions-sdk); não injete a credencial de arquivos no browser.
+O app autoriza cada operação numa Function privada JavaScript/Python, cuja execução recebe automaticamente a credencial quando tem ator autenticado elegível e não vem de chamada pública, agenda ou workflow. Não há habilitação individual. O SDK encapsula checksum, resgate autenticado, multipart e conclusão. O módulo de backend está no [`functions-sdk`](https://www.npmjs.com/package/@mitralab.io/functions-sdk); não injete a credencial de arquivos no browser.
 
 ```typescript
 import type { FileUpload, FileGrant } from '@mitralab.io/platform-sdk';
