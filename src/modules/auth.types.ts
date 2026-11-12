@@ -56,8 +56,10 @@ export interface IdentityConnectionSignInOptions {
   mode: 'redirect';
   /**
    * Where the identity provider sends the browser back. Defaults to the
-   * current origin and path, without query or fragment. Who checks it depends
-   * on the protocol: an OIDC connection needs it among the redirect URIs
+   * current origin and path, without query or fragment. A value passed here
+   * has to be an `http` or `https` URL on the app origin, with no query and no
+   * fragment, or the SDK refuses it before leaving the page. Beyond that, who
+   * checks it depends on the protocol: an OIDC connection needs it among the redirect URIs
    * registered for its client at the provider, and a SAML one needs its origin
    * among the origins published for the app, which IAM validates.
    */
