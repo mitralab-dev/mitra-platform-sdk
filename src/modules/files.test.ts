@@ -244,7 +244,7 @@ describe('files upload', () => {
     expect(f.fetch.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false);
   });
 
-  it('recovers a lost completion response through STAGED redemption without deleting or retransferring', async () => {
+  it('retries an UPLOADING authorization after lost completion through recovered STAGED redemption', async () => {
     const f = await fixture();
     const defaultFetch = f.fetch.getMockImplementation()!;
     let completed = false;
@@ -256,10 +256,19 @@ describe('files upload', () => {
       if (completed && String(url).endsWith('/redeem')) {
         return Response.json({ ...f.redeemed, file: f.staged, destinations: [] });
       }
+      if (completed && init?.method === 'PUT') {
+        return new Response('<Error><Code>NoSuchUpload</Code></Error>', { status: 404 });
+      }
       return defaultFetch(url, init);
     });
     await expect(f.files.upload(f.file, { authorize: f.authorize })).rejects.toMatchObject({ code: 'NETWORK_ERROR' });
+    expect(f.authorization.file.state).toBe('UPLOADING');
     await expect(f.files.upload(f.file, { authorize: f.authorize })).resolves.toEqual(f.staged);
+    expect(f.authorize).toHaveBeenCalledTimes(2);
+    expect(f.authorize.mock.calls[1]).toEqual(f.authorize.mock.calls[0]);
+    const redemptions = f.fetch.mock.calls.filter(([url]) => String(url).endsWith('/redeem'));
+    expect(redemptions).toHaveLength(2);
+    expect(redemptions.every(([url]) => url === `${API}/api/v1/file-grants/${GRANT}/redeem`)).toBe(true);
     expect(f.fetch.mock.calls.filter(([, init]) => init?.method === 'PUT')).toHaveLength(1);
     expect(f.fetch.mock.calls.filter(([url]) => String(url).endsWith('/complete'))).toHaveLength(1);
     expect(f.fetch.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false);
