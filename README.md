@@ -36,7 +36,7 @@ No app gerado pelo Code Studio, `VITE_MITRA_APP_ID` e `VITE_MITRA_API_URL` já v
 
 ## O que dá para fazer
 
-- `auth`: login com Google (`signInWithGoogle`), Microsoft (`signInWithMicrosoft`), código por e-mail ou e-mail e senha (`signInWithPassword` no popup da Mitra, ou `signInWithPasswordForm` no formulário do próprio app), mais `currentUser`, `onAuthStateChange` e `signOut`.
+- `auth`: login com Google (`signInWithGoogle`), Microsoft (`signInWithMicrosoft`), código por e-mail ou e-mail e senha (`signInWithPassword` no popup da Mitra, ou `signInWithPasswordForm` no formulário do próprio app), ou todos numa tela só (`signInWithAuthPage`), mais `currentUser`, `onAuthStateChange` e `signOut`.
 - `entities.<Tabela>`: `list`, `filter`, `get`, `create`, `bulkCreate`, `update`, `delete` e `deleteMany` nas tabelas do app.
 - `queries.execute(id, params)`: roda uma query salva no app.
 - `functions`: `execute` espera o resultado da Server Function; `executeAsync` devolve a execução para acompanhar com `getExecution` ou parar com `cancelExecution`. `publicFunctions` chama as Functions publicadas como públicas, sem login.
@@ -57,6 +57,22 @@ Login por código no e-mail, para quem monta a própria tela:
 const { receipt } = await mitra.auth.requestEmailCode({ email })
 const user = await mitra.auth.verifyEmailCode({ receipt, code })
 ```
+
+### Tela única de login
+
+`signInWithAuthPage()` abre a página de login da Mitra numa tela de escolha, com os métodos que o app tem: Google e Microsoft sempre, e senha e código por e-mail quando estão ligados no app. A pessoa escolhe lá, e o SDK troca o código pela rota do método escolhido, como o método sozinho faria. É opcional: o app que não chama esse método continua igual. Chame direto do clique, antes de qualquer `await`, para o browser não bloquear o popup:
+
+```typescript
+const user = await mitra.auth.signInWithAuthPage()   // popup
+await mitra.auth.signInWithAuthPage({ mode: "redirect" })
+
+// no startup, para o modo redirect e para a aba aberta pelo link do e-mail
+const redirectedUser = await mitra.auth.completeAuthPageSignInRedirect()
+```
+
+- Como a pessoa pode escolher o código por e-mail, o pedido pendente fica no `localStorage` por 10 minutos, na chave `mitra_all_redirect_{appId}`, como no `signInWithEmail()`: o state de uso único e o endereço da página, nunca um token. O popup também espera até 10 minutos.
+- Se a pessoa terminar pelo link do e-mail em outra aba, o popup não recebe o resultado e a chamada termina por tempo esgotado; trate como popup cancelado.
+- Uma resposta da página sem o método escolhido é recusada, e o código não é trocado.
 
 ### Login por e-mail e senha
 
@@ -182,7 +198,7 @@ Falha de rede chega como o erro do próprio `fetch` (`TypeError`), sem passar po
 ## Boas práticas
 
 - Chame `await mitra.init()` no startup, antes de montar a tela de login: `allowSignup`, `emailLoginEnabled`, `passwordLoginEnabled` e o login por e-mail dependem dele.
-- Com `mode: "redirect"`, chame no startup o `completeGoogleSignInRedirect()`, `completeMicrosoftSignInRedirect()` ou `completeEmailSignInRedirect()` do método que você usa. Cada um devolve `null` quando a URL não é dele. O link do e-mail completa o login no mesmo browser que pediu o código; em outro aparelho, a pessoa digita o código. O login por conexão de identidade (Sankhya Pass), pelo iframe ou por redirect, dispensa essa chamada: o `init()` já completa.
+- Com `mode: "redirect"`, chame no startup o `completeGoogleSignInRedirect()`, `completeMicrosoftSignInRedirect()`, `completeEmailSignInRedirect()` ou `completeAuthPageSignInRedirect()` do método que você usa. Cada um devolve `null` quando a URL não é dele. O link do e-mail completa o login no mesmo browser que pediu o código; em outro aparelho, a pessoa digita o código. O login por conexão de identidade (Sankhya Pass), pelo iframe ou por redirect, dispensa essa chamada: o `init()` já completa.
 - A sessão fica no `localStorage` do domínio do app, na chave `mitra_auth_{appId}`, e é renovada sozinha antes de vencer. A do login por conexão de identidade fica no `sessionStorage` da aba, na mesma chave. `signOut()` limpa a sessão e, em app com contas próprias, encerra a sessão no servidor: o refresh token deixa de renovar, e o access token já emitido vale até vencer.
 - Alguns apps recebem tokens extras junto da sessão, em `auth.allTokens`, liberados app por app pela Mitra. O de backoffice é o mais sensível: ele carrega os acessos que a pessoa tem no backoffice da Mitra, vale uma hora e fica no mesmo storage da sessão, onde qualquer script do domínio do app consegue ler. Leia ele por `auth.ensureFreshBackofficeToken()`, que renova o token quando está perto de vencer e devolve `null` quando o app ou a pessoa não têm esse acesso. Use só contra o backoffice e não repasse para outro serviço.
 - O SDK só repete uma requisição depois de renovar o token num `401`. Fora isso, quem decide repetir é o app.
