@@ -2,6 +2,22 @@
 
 All notable changes to this project are documented in this file.
 
+## Unreleased
+
+- Add `files.upload(file, { authorize, onProgress?, signal? })` and
+  `files.download(fileId, { authorize, signal? })` for private files authorized by the app's
+  Server Functions, with bounded multipart transfers and checksum verification. Upload returns
+  `STAGED` metadata for the backend to commit; download returns `{ file, blob }`.
+  `files.cancel(grantId)` explicitly discards an abandoned upload, including one already `STAGED`.
+- Export `FilesModule`, `FileMetadata`, `FileChecksum`, `FileGrant`, `FileUploadInput`,
+  `FileUpload`, `FileUploadOptions`, `FileDownloadOptions` and `FileDownload`.
+- Activation requires coordinated IAM, Functions, Data Manager, Functions SDK, Sandbox and
+  infrastructure support, plus package publication and adoption by the app. Eligible private
+  Functions use the single `MITRA_TOKEN`; the browser redeems grants with its own session and
+  never receives the execution token. Backend services use published Common Security 1.3.0.
+  Keep `FILES_ENABLED=false` until the IAM provenance window and real backend/storage/browser
+  validation, including CORS and signed transfer headers, are complete.
+
 ## 1.9.0-beta.1
 
 Sign-in through an identity connection by redirect, for an app opened directly in the browser,
