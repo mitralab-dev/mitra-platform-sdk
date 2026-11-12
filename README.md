@@ -147,6 +147,19 @@ await mitra.auth.signInWithIdentityConnection("sankhya-pass", { mode: "redirect"
 - A sessão fica no `sessionStorage`, como no login pelo iframe, com as mesmas regras de sessão por aba descritas acima.
 - Como não há iframe, não há requisito de `ancestorOrigins`: funciona em Chromium, WebKit e Firefox.
 
+#### Conexão SAML
+
+A mesma chamada serve para uma conexão SAML (Security Assertion Markup Language, o protocolo de SSO corporativo) de um cliente. O SDK descobre o protocolo pelo campo `protocol` da conexão (`GET /api/v1/auth/identity-connections/{slug}`): `"SAML"` segue este caminho; `"OIDC_ASSERTION"` ou a ausência do campo seguem o modo redirect descrito acima.
+
+```typescript
+await mitra.auth.signInWithIdentityConnection("customer-saml", { mode: "redirect" })
+```
+
+- Quem fala com o servidor de login do cliente é o IAM, não o browser. O SDK manda a página para `{apiUrl}/iam/api/v1/auth/identity-connections/{slug}/saml/login` com `appId`, `returnTo` (o mesmo redirect URI do modo redirect, com as mesmas regras), `state`, `codeChallenge` (S256 do `code_verifier`) e `language`.
+- Na volta, o IAM devolve a pessoa a `returnTo` com um código de troca do IAM na query, ou com `error` quando o login foi recusado. O `init()` completa sozinho, como no modo redirect, e troca o código em `POST /api/v1/auth/identity-connections/{slug}/exchange` mandando junto o `codeVerifier`, que prova que foi esta aba que começou o login.
+- Não há troca no token endpoint de um provedor, então não há liberação de Web Origins a pedir. O `returnTo` precisa estar numa das origens publicadas do app, as que o Code Studio informa para ele; a conexão não tem lista de redirect URI.
+- O pedido pendente, as recusas sem requisição (sem pedido pendente ou com `state` diferente) e a sessão por aba seguem as mesmas regras do modo redirect.
+
 Chat com agente:
 
 ```typescript

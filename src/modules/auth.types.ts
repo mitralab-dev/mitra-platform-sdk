@@ -52,12 +52,16 @@ export type EmailCodeLanguage = 'pt-BR' | 'en';
 
 /** Options for `auth.signInWithIdentityConnection()`. */
 export interface IdentityConnectionSignInOptions {
-  /** Navigates the current page to the identity provider of the connection. */
+  /** Navigates the current page to the identity provider of the connection, or to IAM for a SAML one. */
   mode: 'redirect';
   /**
    * Where the identity provider sends the browser back. Defaults to the
-   * current origin and path, without query or fragment. It has to be one of
-   * the redirect URIs the connection client accepts.
+   * current origin and path, without query or fragment. A value passed here
+   * has to be an `http` or `https` URL on the app origin, with no query and no
+   * fragment, or the SDK refuses it before leaving the page. Beyond that, who
+   * checks it depends on the protocol: an OIDC connection needs it among the redirect URIs
+   * registered for its client at the provider, and a SAML one needs its origin
+   * among the origins published for the app, which IAM validates.
    */
   redirectUri?: string;
   /** Defaults to the browser language, and to `pt-BR` when that is neither. */

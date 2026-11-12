@@ -1,4 +1,5 @@
 import type { HttpClient } from '../utils/http-client';
+import { stripTrailingSlashes } from '../utils/url';
 import type { AuthTokenResponse, IdentityConnectionSignInOptions } from './auth.types';
 import { resolveLanguage } from './email-code-flow';
 import { SLUG_PATTERN, exchangeIdentityConnectionCode } from './identity-connection-flow';
@@ -22,7 +23,9 @@ interface ConnectionEndpoints {
   clientId: string;
 }
 
-interface RedirectContext {
+type ConnectionRoute = { protocol: 'OIDC_ASSERTION'; endpoints: ConnectionEndpoints } | { protocol: 'SAML' };
+
+interface OidcRedirectContext {
   state: string;
   codeVerifier: string;
   slug: string;
@@ -30,11 +33,26 @@ interface RedirectContext {
   tokenEndpoint: string;
   clientId: string;
   language: string;
+  // OIDC contexts, old and new, carry no protocol, so its absence means OIDC.
+  protocol?: undefined;
 }
+
+interface SamlRedirectContext {
+  state: string;
+  codeVerifier: string;
+  slug: string;
+  redirectUri: string;
+  language: string;
+  protocol: 'SAML';
+}
+
+type RedirectContext = OidcRedirectContext | SamlRedirectContext;
 
 interface IdentityConnectionRedirectFlowConfig {
   appId: string;
   client: HttpClient;
+  /** Absolute IAM base URL; a SAML sign-in starts with a top-level navigation there, not a request. */
+  iamUrl: string;
   storageKey: string;
 }
 
@@ -49,13 +67,21 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
-function readEndpoints(connection: unknown): ConnectionEndpoints | null {
-  const fields = (connection ?? {}) as Partial<Record<keyof ConnectionEndpoints, unknown>>;
+function readRoute(connection: unknown): ConnectionRoute | null {
+  const fields = (connection ?? {}) as Partial<Record<keyof ConnectionEndpoints | 'protocol', unknown>>;
+  // An IAM that predates SAML sends no protocol, and every connection it has is OIDC.
+  const protocol = fields.protocol ?? 'OIDC_ASSERTION';
+  if (protocol === 'SAML') return { protocol };
+  if (protocol !== 'OIDC_ASSERTION') return null;
   const { authorizationEndpoint, tokenEndpoint, clientId } = fields;
   if (!isNonEmptyString(authorizationEndpoint) || !isNonEmptyString(tokenEndpoint) || !isNonEmptyString(clientId)) {
     return null;
   }
-  return { authorizationEndpoint, tokenEndpoint, clientId };
+  return { protocol, endpoints: { authorizationEndpoint, tokenEndpoint, clientId } };
+}
+
+function toQuery(params: Record<string, string>): string {
+  return Object.entries(params).map(([name, value]) => `${name}=${encodeURIComponent(value)}`).join('&');
 }
 
 function base64Url(bytes: Uint8Array): string {
@@ -105,14 +131,18 @@ function requireBareRedirectUri(redirectUri: string, browserWindow: Window): str
 function readContext(value: string | null): RedirectContext | null {
   if (!value) return null;
   try {
-    const context = JSON.parse(value) as Partial<RedirectContext>;
-    const complete = isNonEmptyString(context.state)
+    const context = JSON.parse(value) as Partial<OidcRedirectContext> | Partial<SamlRedirectContext>;
+    const common = isNonEmptyString(context.state)
       && isNonEmptyString(context.codeVerifier)
       && isNonEmptyString(context.slug)
-      && isNonEmptyString(context.redirectUri)
-      && isNonEmptyString(context.tokenEndpoint)
-      && isNonEmptyString(context.clientId);
-    return complete ? (context as RedirectContext) : null;
+      && isNonEmptyString(context.redirectUri);
+    if (!common) return null;
+    if (context.protocol === 'SAML') return context as SamlRedirectContext;
+    if (context.protocol !== undefined) return null;
+    const oidc = context as Partial<OidcRedirectContext>;
+    return isNonEmptyString(oidc.tokenEndpoint) && isNonEmptyString(oidc.clientId)
+      ? (oidc as OidcRedirectContext)
+      : null;
   } catch {
     return null;
   }
@@ -126,15 +156,21 @@ function readContext(value: string | null): RedirectContext | null {
  * The provider's access token is only the assertion IAM validates at
  * `/login`; it is used once and never kept. Its id token and refresh token are
  * ignored, so the only session left behind is the app session IAM issues.
+ *
+ * A SAML connection is spoken to by IAM, not by the browser: the page goes to
+ * IAM's `/saml/login`, which sends it back with an IAM exchange code bound to
+ * the PKCE challenge, so the verifier is the only proof this tab holds.
  */
 export class IdentityConnectionRedirectFlow {
   private readonly appId: string;
   private readonly client: HttpClient;
+  private readonly iamUrl: string;
   private readonly storageKey: string;
 
   constructor(config: IdentityConnectionRedirectFlowConfig) {
     this.appId = config.appId;
     this.client = config.client;
+    this.iamUrl = stripTrailingSlashes(config.iamUrl);
     this.storageKey = config.storageKey;
   }
 
@@ -146,10 +182,10 @@ export class IdentityConnectionRedirectFlow {
     const redirectUri = options.redirectUri === undefined
       ? `${browserWindow.location.origin}${browserWindow.location.pathname}`
       : requireBareRedirectUri(options.redirectUri, browserWindow);
-    const endpoints = readEndpoints(
+    const route = readRoute(
       await this.client.get<unknown>(`/api/v1/auth/identity-connections/${slug}`)
     );
-    if (!endpoints) {
+    if (!route) {
       throw new Error(`Identity connection ${slug} does not support redirect sign-in.`);
     }
 
@@ -157,32 +193,42 @@ export class IdentityConnectionRedirectFlow {
     const state = `${STATE_PREFIX}${slug}.${random}`;
     // 32 random bytes encode to a 43 character verifier, the minimum RFC 7636 allows.
     const codeVerifier = base64Url(randomBytes(32));
-    const context: RedirectContext = {
-      state,
-      codeVerifier,
-      slug,
-      redirectUri,
-      tokenEndpoint: endpoints.tokenEndpoint,
-      clientId: endpoints.clientId,
-      language: resolveLanguage(options.language, browserWindow),
-    };
+    const language = resolveLanguage(options.language, browserWindow);
+    const context: RedirectContext = route.protocol === 'SAML'
+      ? { state, codeVerifier, slug, redirectUri, language, protocol: 'SAML' }
+      : {
+        state,
+        codeVerifier,
+        slug,
+        redirectUri,
+        tokenEndpoint: route.endpoints.tokenEndpoint,
+        clientId: route.endpoints.clientId,
+        language,
+      };
     try {
       browserWindow.sessionStorage.setItem(this.storageKey, JSON.stringify(context));
     } catch {
       throw new Error('Identity connection sign-in redirect requires sessionStorage.');
     }
 
-    const query = Object.entries({
-      response_type: 'code',
-      client_id: endpoints.clientId,
-      redirect_uri: redirectUri,
-      scope: SCOPE,
-      state,
-      code_challenge: await codeChallengeOf(codeVerifier),
-      code_challenge_method: 'S256',
-    }).map(([name, value]) => `${name}=${encodeURIComponent(value)}`).join('&');
-    const separator = endpoints.authorizationEndpoint.includes('?') ? '&' : '?';
-    browserWindow.location.assign(`${endpoints.authorizationEndpoint}${separator}${query}`);
+    const codeChallenge = await codeChallengeOf(codeVerifier);
+    if (route.protocol === 'SAML') {
+      const query = toQuery({ appId: this.appId, returnTo: redirectUri, state, codeChallenge, language });
+      browserWindow.location.assign(`${this.iamUrl}/api/v1/auth/identity-connections/${slug}/saml/login?${query}`);
+    } else {
+      const { authorizationEndpoint, clientId } = route.endpoints;
+      const query = toQuery({
+        response_type: 'code',
+        client_id: clientId,
+        redirect_uri: redirectUri,
+        scope: SCOPE,
+        state,
+        code_challenge: codeChallenge,
+        code_challenge_method: 'S256',
+      });
+      const separator = authorizationEndpoint.includes('?') ? '&' : '?';
+      browserWindow.location.assign(`${authorizationEndpoint}${separator}${query}`);
+    }
 
     return new Promise<never>(() => undefined);
   }
@@ -228,6 +274,11 @@ export class IdentityConnectionRedirectFlow {
       throw new Error('Identity connection sign-in redirect is missing code.');
     }
 
+    if (context.protocol === 'SAML') {
+      // IAM already issued the exchange code, so there is no provider redemption and no /login.
+      return exchangeIdentityConnectionCode(this.client, context.slug, this.appId, code, context.codeVerifier);
+    }
+
     const assertion = await this.redeemAuthorizationCode(context, code);
     const login = await this.client.post<{ exchangeCode?: unknown }>(
       `/api/v1/auth/identity-connections/${context.slug}/login`,
@@ -260,7 +311,7 @@ export class IdentityConnectionRedirectFlow {
     );
   }
 
-  private async redeemAuthorizationCode(context: RedirectContext, code: string): Promise<string> {
+  private async redeemAuthorizationCode(context: OidcRedirectContext, code: string): Promise<string> {
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timedOut = new Error('Identity connection sign-in timed out redeeming the authorization code at the identity provider.');

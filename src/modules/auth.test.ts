@@ -1747,6 +1747,53 @@ describe('AuthModule', () => {
         expect(fetchMock).not.toHaveBeenCalled();
       });
 
+      it('should start a SAML connection at the IAM base URL', async () => {
+        const browser = mockBrowser();
+        mockFetchSequence([{ body: { slug: 'customer-saml', protocol: 'SAML', tokenEndpoint: null, clientId: null } }]);
+        const auth = new AuthModule(APP_ID, `${IAM_URL}/`, { apiUrl: API_URL });
+
+        void auth.signInWithIdentityConnection('customer-saml', { mode: 'redirect' });
+        await vi.waitFor(() => expect(browser.window.location.assign).toHaveBeenCalled());
+
+        const target = new URL(vi.mocked(browser.window.location.assign).mock.calls[0][0] as string);
+        expect(`${target.origin}${target.pathname}`).toBe(`${IAM_URL}/api/v1/auth/identity-connections/customer-saml/saml/login`);
+      });
+
+      it('should keep a SAML session in this tab and leave the shared one alone', async () => {
+        const samlState = `connection.customer-saml.${'07'.repeat(16)}`;
+        const browser = mockBrowser();
+        browser.window.location.search = `?code=iam-code&state=${samlState}`;
+        const tabStorage = browser.window.sessionStorage as unknown as ReturnType<typeof mockLocalStorage>;
+        tabStorage._store[REDIRECT_KEY] = JSON.stringify({
+          state: samlState,
+          codeVerifier: 'verifier-1',
+          slug: 'customer-saml',
+          redirectUri: 'https://app.example.com/orders',
+          language: 'pt-BR',
+          protocol: 'SAML',
+        });
+        storedSession(browser.localStorage, 'shared-access', 'shared-refresh');
+        const sharedSession = browser.localStorage._store[STORAGE_KEY];
+        const fetchMock = mockFetchSequence([
+          { body: { ...fakeTokenResponse, allTokens: fakeAllTokens } },
+          { body: currentUserResponse },
+        ]);
+        const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+        await expect(auth.completeIdentityConnectionRedirect()).resolves.toEqual(apiUser);
+
+        expect(fetchMock.mock.calls[0][0]).toBe(`${IAM_URL}/api/v1/auth/identity-connections/customer-saml/exchange`);
+        expect(getAuthSessionPort(auth).isTabScoped()).toBe(true);
+        expect(JSON.parse(tabStorage._store[STORAGE_KEY])).toEqual({
+          user: apiUser,
+          token: 'access-123',
+          refreshToken: 'refresh-456',
+          allTokens: fakeAllTokens,
+        });
+        expect(tabStorage._store[REDIRECT_KEY]).toBeUndefined();
+        expect(browser.localStorage._store[STORAGE_KEY]).toBe(sharedSession);
+      });
+
       it('should keep the session in this tab and leave the shared one alone', async () => {
         const { browser, tabStorage } = returnedFromProvider(`?code=kc-code&state=${REDIRECT_STATE}`);
         storedSession(browser.localStorage, 'shared-access', 'shared-refresh');

@@ -2,6 +2,25 @@
 
 All notable changes to this project are documented in this file.
 
+## 1.9.0-beta.2
+
+Sign-in by redirect through a customer SAML identity connection, where IAM, not the browser,
+talks to the customer's identity provider.
+
+- `auth.signInWithIdentityConnection(slug, { mode: 'redirect' })` reads `protocol` from the
+  connection. `"SAML"` sends the page to IAM's
+  `/api/v1/auth/identity-connections/{slug}/saml/login` with `appId`, `returnTo` (the same redirect
+  URI as the OIDC flow, with the same checks), `state`, `codeChallenge` (S256) and `language`; the
+  pending request in `sessionStorage` carries `protocol: 'SAML'` and no token endpoint or client
+  id. `"OIDC_ASSERTION"`, or no `protocol` at all, keeps the existing flow; any other value is
+  refused before anything is stored.
+- On the way back, a SAML request skips the provider token endpoint and `/login`, and redeems the
+  IAM code at `/exchange` with `{ appId, code, codeVerifier }` in a single request. The checks
+  before it (pending request, matching `state`, `error`, `code`) and the tab-scoped session are the
+  same as the OIDC flow.
+- The OIDC flow sends the same requests and bodies as before, and a pending request stored without
+  `protocol` is still completed as OIDC.
+
 ## 1.9.0-beta.1
 
 Sign-in through an identity connection by redirect, for an app opened directly in the browser,
