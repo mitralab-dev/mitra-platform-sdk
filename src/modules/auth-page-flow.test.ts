@@ -742,6 +742,353 @@ describe('Email auth page flow', () => {
   });
 });
 
+describe('Auth page flow with every method', () => {
+  const ALL_PENDING_KEY = `mitra_all_redirect_${APP_ID}`;
+  const ALL_OTHER_TAB_STATE = 'all.0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a';
+
+  function pendingAllRequest(browser: BrowserHarness, state: string, createdAt: number): void {
+    browser.localStorage._store[ALL_PENDING_KEY] = JSON.stringify({
+      state,
+      redirectUri: AUTH_PAGE_URL,
+      createdAt,
+    });
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it.each([
+    ['google', `${IAM_URL}/api/v1/auth/google`, true],
+    ['microsoft', `${IAM_URL}/api/v1/auth/microsoft`, true],
+    ['email', EXCHANGE_URL, false],
+    ['password', EXCHANGE_URL, false],
+  ])('redeems a popup code the page reports as %s at that method route', async (method, route, sendsRedirectUri) => {
+    const browser = mockBrowser();
+    const fetchMock = mockFetchSequence([
+      { body: TOKEN_RESPONSE },
+      { body: CURRENT_USER_RESPONSE },
+    ]);
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    const signIn = auth.signInWithAuthPage();
+    const startUrl = browser.getStartUrl();
+    const state = startUrl.searchParams.get('state')!;
+    browser.dispatchMessage(authPageResult(state, { code: 'chosen-code', provider: method }));
+
+    await expect(signIn).resolves.toEqual(USER);
+    expect(startUrl.origin + startUrl.pathname).toBe(AUTH_PAGE_URL);
+    expect(startUrl.searchParams.get('provider')).toBe('all');
+    expect(startUrl.searchParams.get('responseType')).toBe('code');
+    expect(startUrl.searchParams.has('view')).toBe(false);
+    expect(state).toMatch(/^all\.[0-9a-f]{32}$/);
+    expect(fetchMock.mock.calls[0][0]).toBe(route);
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      appId: APP_ID,
+      code: 'chosen-code',
+      ...(sendsRedirectUri ? { redirectUri: AUTH_PAGE_URL } : {}),
+    });
+    expect(browser.localStorage._store[ALL_PENDING_KEY]).toBeUndefined();
+  });
+
+  it('keeps the popup request pending in localStorage for the email link', async () => {
+    const browser = mockBrowser();
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    void auth.signInWithAuthPage().catch(() => undefined);
+    const state = browser.getStartUrl().searchParams.get('state')!;
+
+    expect(JSON.parse(browser.localStorage._store[ALL_PENDING_KEY])).toEqual({
+      state,
+      redirectUri: AUTH_PAGE_URL,
+      createdAt: expect.any(Number),
+    });
+    expect(browser.window.sessionStorage.setItem).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['no provider', {}],
+    ['an unknown provider', { provider: 'github' }],
+    ['the chooser itself as provider', { provider: 'all' }],
+    ['a provider that is not a string', { provider: ['google'] }],
+  ])('refuses a popup code with %s, without redeeming it', async (_case, extra) => {
+    const browser = mockBrowser();
+    const fetchMock = mockFetchSequence([]);
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    const signIn = auth.signInWithAuthPage();
+    const state = browser.getStartUrl().searchParams.get('state')!;
+    browser.dispatchMessage(authPageResult(state, { code: 'chosen-code', ...extra }));
+
+    await expect(signIn).rejects.toThrow('did not report which sign-in method');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(auth.accessToken).toBeNull();
+  });
+
+  it('accepts a popup token with a valid provider, without an exchange', async () => {
+    const browser = mockBrowser();
+    const fetchMock = mockFetchSequence([{ body: CURRENT_USER_RESPONSE }]);
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    const signIn = auth.signInWithAuthPage();
+    const state = browser.getStartUrl().searchParams.get('state')!;
+    browser.dispatchMessage(authPageResult(state, { token: TOKEN_RESPONSE, provider: 'google' }));
+
+    await expect(signIn).resolves.toEqual(USER);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0][0]).toBe(`${IAM_URL}/api/v1/auth/me`);
+  });
+
+  it('starts every request with the all. state prefix the auth page relies on', async () => {
+    const browser = mockBrowser();
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    void auth.signInWithAuthPage().catch(() => undefined);
+    expect(browser.getStartUrl().searchParams.get('state')).toMatch(/^all\.[0-9a-f]{32}$/);
+
+    void auth.signInWithAuthPage({ mode: 'redirect' });
+    expect(browser.getRedirectUrl().searchParams.get('state')).toMatch(/^all\.[0-9a-f]{32}$/);
+  });
+
+  it('refuses a popup token without a provider', async () => {
+    const browser = mockBrowser();
+    const fetchMock = mockFetchSequence([]);
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    const signIn = auth.signInWithAuthPage();
+    const state = browser.getStartUrl().searchParams.get('state')!;
+    browser.dispatchMessage(authPageResult(state, { token: TOKEN_RESPONSE }));
+
+    await expect(signIn).rejects.toThrow('did not report which sign-in method');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('reports the error the page returns without asking for a provider', async () => {
+    const browser = mockBrowser();
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    const signIn = auth.signInWithAuthPage();
+    const state = browser.getStartUrl().searchParams.get('state')!;
+    browser.dispatchMessage({
+      type: 'mitra-oauth-result',
+      success: false,
+      state,
+      error: 'Microsoft denied access.',
+    });
+
+    await expect(signIn).rejects.toThrow('Microsoft denied access.');
+  });
+
+  it('rejects a popup response with a different CSRF state', async () => {
+    const browser = mockBrowser();
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    const signIn = auth.signInWithAuthPage();
+    browser.dispatchMessage(authPageResult('all.attacker', { code: 'x', provider: 'google' }));
+
+    await expect(signIn).rejects.toThrow('possible CSRF');
+  });
+
+  it('keeps the popup open for the whole life of the email challenge before timing out', async () => {
+    vi.useFakeTimers();
+    const browser = mockBrowser();
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    const rejection = expect(auth.signInWithAuthPage()).rejects.toThrow('timed out');
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1_000);
+    expect(browser.popup.close).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1_000);
+
+    await rejection;
+    expect(browser.popup.close).toHaveBeenCalledOnce();
+  });
+
+  it('completes a redirect at the route of the method the page reports', async () => {
+    const browser = mockBrowser();
+    const fetchMock = mockFetchSequence([
+      { body: TOKEN_RESPONSE },
+      { body: CURRENT_USER_RESPONSE },
+    ]);
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    void auth.signInWithAuthPage({ mode: 'redirect' });
+    const redirectUrl = browser.getRedirectUrl();
+    expect(redirectUrl.searchParams.get('provider')).toBe('all');
+    expect(browser.window.sessionStorage.setItem).not.toHaveBeenCalled();
+
+    browser.window.location.hash =
+      `#codeMitra=redirect-code&stateMitra=${redirectUrl.searchParams.get('state')}&providerMitra=google`;
+    await expect(auth.completeAuthPageSignInRedirect()).resolves.toEqual(USER);
+
+    expect(fetchMock.mock.calls[0][0]).toBe(`${IAM_URL}/api/v1/auth/google`);
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      appId: APP_ID,
+      code: 'redirect-code',
+      redirectUri: AUTH_PAGE_URL,
+    });
+    expect(browser.window.history.replaceState).toHaveBeenCalledWith({}, '', '/orders?status=open');
+    expect(browser.localStorage.removeItem).toHaveBeenCalledWith(ALL_PENDING_KEY);
+  });
+
+  it('completes the tab opened by the email link from the request another tab left pending', async () => {
+    const browser = mockBrowser();
+    const fetchMock = mockFetchSequence([
+      { body: TOKEN_RESPONSE },
+      { body: CURRENT_USER_RESPONSE },
+    ]);
+    pendingAllRequest(browser, ALL_OTHER_TAB_STATE, Date.now());
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    browser.window.location.hash =
+      `#codeMitra=link-code&stateMitra=${ALL_OTHER_TAB_STATE}&providerMitra=email`;
+    await expect(auth.completeAuthPageSignInRedirect()).resolves.toEqual(USER);
+
+    expect(fetchMock.mock.calls[0][0]).toBe(EXCHANGE_URL);
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ appId: APP_ID, code: 'link-code' });
+    expect(browser.localStorage._store[ALL_PENDING_KEY]).toBeUndefined();
+  });
+
+  it.each([
+    ['no providerMitra', ''],
+    ['an unknown providerMitra', '&providerMitra=github'],
+    ['the chooser itself as providerMitra', '&providerMitra=all'],
+  ])('refuses a redirect with %s, consuming it without redeeming the code', async (_case, extra) => {
+    const browser = mockBrowser();
+    const fetchMock = mockFetchSequence([]);
+    pendingAllRequest(browser, ALL_OTHER_TAB_STATE, Date.now());
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    browser.window.location.hash = `#codeMitra=link-code&stateMitra=${ALL_OTHER_TAB_STATE}${extra}`;
+
+    await expect(auth.completeAuthPageSignInRedirect()).rejects.toThrow(
+      'did not report which sign-in method'
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(browser.localStorage._store[ALL_PENDING_KEY]).toBeUndefined();
+    expect(browser.window.history.replaceState).toHaveBeenCalledWith({}, '', '/orders?status=open');
+  });
+
+  it('exposes a redirect error without a provider once its state is validated', async () => {
+    const browser = mockBrowser();
+    pendingAllRequest(browser, ALL_OTHER_TAB_STATE, Date.now());
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    browser.window.location.hash =
+      `#codeMitra=error&errorMitra=provider-denied&stateMitra=${ALL_OTHER_TAB_STATE}`;
+
+    await expect(auth.completeAuthPageSignInRedirect()).rejects.toThrow('provider-denied');
+    expect(browser.localStorage._store[ALL_PENDING_KEY]).toBeUndefined();
+  });
+
+  it('refuses a redirect whose state is not the pending one, keeping the pending request', async () => {
+    const browser = mockBrowser();
+    const fetchMock = mockFetchSequence([]);
+    pendingAllRequest(browser, ALL_OTHER_TAB_STATE, Date.now());
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    browser.window.location.hash = '#codeMitra=attacker-code&stateMitra=all.deadbeef&providerMitra=google';
+
+    await expect(auth.completeAuthPageSignInRedirect()).rejects.toThrow('possible CSRF');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(browser.localStorage._store[ALL_PENDING_KEY]).toBeDefined();
+    expect(browser.window.history.replaceState).toHaveBeenCalled();
+  });
+
+  it('refuses a redirect when no request is pending in this browser', async () => {
+    const browser = mockBrowser();
+    const fetchMock = mockFetchSequence([]);
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    browser.window.location.hash =
+      `#codeMitra=link-code&stateMitra=${ALL_OTHER_TAB_STATE}&providerMitra=email`;
+
+    await expect(auth.completeAuthPageSignInRedirect()).rejects.toThrow('possible CSRF');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses and discards a pending request older than ten minutes', async () => {
+    const browser = mockBrowser();
+    const fetchMock = mockFetchSequence([]);
+    pendingAllRequest(browser, ALL_OTHER_TAB_STATE, Date.now() - TEN_MINUTES_MS - 1);
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    browser.window.location.hash =
+      `#codeMitra=link-code&stateMitra=${ALL_OTHER_TAB_STATE}&providerMitra=email`;
+
+    await expect(auth.completeAuthPageSignInRedirect()).rejects.toThrow('expired');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(browser.localStorage._store[ALL_PENDING_KEY]).toBeUndefined();
+  });
+
+  it('is left alone by every single-method completion at startup, and finishes last', async () => {
+    const browser = mockBrowser();
+    const fetchMock = mockFetchSequence([
+      { body: TOKEN_RESPONSE },
+      { body: CURRENT_USER_RESPONSE },
+    ]);
+    pendingAllRequest(browser, ALL_OTHER_TAB_STATE, Date.now());
+    pendingRequest(browser, OTHER_TAB_STATE, Date.now());
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    browser.window.location.hash =
+      `#codeMitra=link-code&stateMitra=${ALL_OTHER_TAB_STATE}&providerMitra=password`;
+    const user =
+      (await auth.completeGoogleSignInRedirect())
+      ?? (await auth.completeMicrosoftSignInRedirect())
+      ?? (await auth.completeEmailSignInRedirect())
+      ?? (await auth.completeAuthPageSignInRedirect());
+
+    expect(user).toEqual(USER);
+    expect(fetchMock.mock.calls[0][0]).toBe(EXCHANGE_URL);
+    expect(browser.localStorage._store[PENDING_KEY]).toBeDefined();
+    expect(browser.window.history.replaceState).toHaveBeenCalledOnce();
+  });
+
+  it('leaves a fragment of a single-method flow alone', async () => {
+    const browser = mockBrowser();
+    const fetchMock = mockFetchSequence([]);
+    pendingAllRequest(browser, ALL_OTHER_TAB_STATE, Date.now());
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    browser.window.location.hash = `#codeMitra=link-code&stateMitra=${OTHER_TAB_STATE}&providerMitra=email`;
+
+    await expect(auth.completeAuthPageSignInRedirect()).resolves.toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(browser.window.history.replaceState).not.toHaveBeenCalled();
+    expect(browser.localStorage._store[ALL_PENDING_KEY]).toBeDefined();
+  });
+
+  it('keeps a single-method flow on its own route whatever provider the page reports', async () => {
+    const browser = mockBrowser();
+    const fetchMock = mockFetchSequence([
+      { body: TOKEN_RESPONSE },
+      { body: CURRENT_USER_RESPONSE },
+    ]);
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    const signIn = auth.signInWithGoogle();
+    const state = browser.getStartUrl().searchParams.get('state')!;
+    browser.dispatchMessage(authPageResult(state, { code: 'google-code', provider: 'email' }));
+
+    await expect(signIn).resolves.toEqual(USER);
+    expect(fetchMock.mock.calls[0][0]).toBe(`${IAM_URL}/api/v1/auth/google`);
+  });
+
+  it('fails the redirect when localStorage refuses the pending request', async () => {
+    const browser = mockBrowser();
+    browser.localStorage.setItem.mockImplementation(() => {
+      throw new Error('storage is disabled');
+    });
+    const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+    await expect(auth.signInWithAuthPage({ mode: 'redirect' })).rejects.toThrow(
+      'requires localStorage'
+    );
+    expect(browser.window.location.assign).not.toHaveBeenCalled();
+  });
+});
+
 describe('expectAuthTokenResponse', () => {
   const ALL_TOKENS = {
     platform: { accessToken: 'session-access', refreshToken: 'session-refresh', tokenType: 'Bearer' },

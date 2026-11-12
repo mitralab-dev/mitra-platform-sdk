@@ -24,6 +24,7 @@ import type {
   BackofficeToken,
   AuthSession,
   AuthTokenResponse,
+  AuthPageSignInOptions,
   AuthStateChangeCallback,
   EmailCodeRequest,
   EmailCodeRequestResult,
@@ -214,7 +215,8 @@ function isDefinitiveRefreshFailure(error: unknown): boolean {
 /**
  * Authentication module for managing user sessions.
  *
- * Handles Google and Microsoft SSO, email and password sign-in, trusted session adoption, sign-out,
+ * Handles Google and Microsoft SSO, email and password sign-in, the auth page screen that offers
+ * them all, trusted session adoption, sign-out,
  * and automatic token refresh.
  * Auth state is persisted to localStorage with key `mitra_auth_{appId}`
  * and restored on page reload; a session from an identity connection is kept
@@ -246,6 +248,7 @@ export class AuthModule {
   private readonly microsoftAuth: AuthPageFlow;
   private readonly emailAuth: AuthPageFlow;
   private readonly passwordAuth: AuthPageFlow;
+  private readonly authPage: AuthPageFlow;
   private readonly emailCode: EmailCodeFlow;
   private readonly passwordForm: PasswordFormFlow;
   private readonly identityConnection: IdentityConnectionFlow;
@@ -299,6 +302,13 @@ export class AuthModule {
       authPageUrl: options.authPageUrl,
       client: this.publicClient,
       provider: 'password',
+    });
+    this.authPage = new AuthPageFlow({
+      appId,
+      apiUrl,
+      authPageUrl: options.authPageUrl,
+      client: this.publicClient,
+      provider: 'all',
     });
     this.emailCode = new EmailCodeFlow({
       appId,
@@ -631,6 +641,64 @@ export class AuthModule {
     if (linkResponse) return this.establishSession(linkResponse);
 
     const tokenResponse = await this.emailAuth.completeRedirect();
+    return tokenResponse ? this.establishSession(tokenResponse) : null;
+  }
+
+  /**
+   * Signs in on a single screen of the Mitra auth page that offers every method
+   * the app has on: Google and Microsoft always, plus password and the email
+   * code when the app has them enabled. The person picks one there, and
+   * the page reports which; the code is redeemed at that method's IAM route,
+   * exactly as the method's own sign-in would.
+   *
+   * Popup by default; redirect mode navigates away, and
+   * {@link completeAuthPageSignInRedirect} finishes it at startup. Since the
+   * person may choose the email code, whose message carries a link that opens
+   * a new tab, the pending request is kept in `localStorage` under
+   * `mitra_all_redirect_{appId}` for 10 minutes - the one-time state and the
+   * auth page URL, never a token - as {@link signInWithEmail} does.
+   *
+   * Call it straight from the click handler, before any `await`, or the browser
+   * blocks the popup.
+   *
+   * @param options - Popup or redirect mode.
+   * @returns The authenticated and hydrated user in popup mode.
+   * @throws {MitraApiError} When IAM rejects the exchange code.
+   * @throws {Error} When the browser blocks or cancels the popup, the flow times
+   * out, the response fails origin, source, state, or shape validation, or the
+   * page does not say which method produced the code. A person who finishes
+   * through the email link instead of the popup leaves this call to time out,
+   * which the application should treat as a cancelled popup.
+   *
+   * @example
+   * ```typescript
+   * const user = await mitra.auth.signInWithAuthPage();
+   * ```
+   */
+  async signInWithAuthPage(options: AuthPageSignInOptions = {}): Promise<User> {
+    return this.establishSession(await this.authPage.signIn(options));
+  }
+
+  /**
+   * Completes a sign-in started by {@link signInWithAuthPage} from `#codeMitra`,
+   * `#stateMitra` and `#providerMitra`, during application startup: the redirect
+   * back to the tab that started it, or the tab the email link opened. The state
+   * must match the request pending in this browser, as in
+   * {@link completeEmailSignInRedirect}.
+   *
+   * @returns The authenticated user, or `null` when the URL carries no result,
+   * or carries one that belongs to another sign-in method's flow.
+   * @throws When the fragment belongs to this flow but its state does not match,
+   * the request expired, the page reports an error, or it does not say which
+   * method produced the code. The fragment is removed first.
+   *
+   * @example
+   * ```typescript
+   * const redirectedUser = await mitra.auth.completeAuthPageSignInRedirect();
+   * ```
+   */
+  async completeAuthPageSignInRedirect(): Promise<User | null> {
+    const tokenResponse = await this.authPage.completeRedirect();
     return tokenResponse ? this.establishSession(tokenResponse) : null;
   }
 

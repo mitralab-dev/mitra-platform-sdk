@@ -25,7 +25,25 @@ const SESSION_TYPE = 'mitra-auth-session';
  */
 export const PASSWORD_CHANGED_SIGN_IN_AGAIN = 'PASSWORD_CHANGED_SIGN_IN_AGAIN';
 
-export type AuthPageProvider = 'google' | 'microsoft' | 'email' | 'password';
+/** A sign-in method of the auth page, each with its own IAM exchange route. */
+export type AuthPageMethod = 'google' | 'microsoft' | 'email' | 'password';
+
+/**
+ * What the auth page is opened for: one method, or `all`, the screen that
+ * offers every method the app has on and reports which one the person used.
+ */
+export type AuthPageProvider = AuthPageMethod | 'all';
+
+const AUTH_PAGE_METHODS: ReadonlySet<string> = new Set<AuthPageMethod>([
+  'google',
+  'microsoft',
+  'email',
+  'password',
+]);
+
+function isAuthPageMethod(value: unknown): value is AuthPageMethod {
+  return typeof value === 'string' && AUTH_PAGE_METHODS.has(value);
+}
 
 /**
  * What one popup of the auth page is opened for: which screen it starts on and,
@@ -45,13 +63,31 @@ export interface AuthPagePopupRequest {
   sessionToken?: () => Promise<string | null>;
 }
 
+interface AuthPageExchangeRoute {
+  /** IAM route that turns the single-use code into an app session. */
+  path: string;
+  /** Whether the exchange binds the code to the auth page that received it. */
+  sendsRedirectUri: boolean;
+}
+
+// IAM answers a password login, signup or change with the same single-use
+// exchange code the email flow gets, so both redeem it at the same route.
+const EXCHANGE_ROUTES: Record<AuthPageMethod, AuthPageExchangeRoute> = {
+  google: { path: '/api/v1/auth/google', sendsRedirectUri: true },
+  microsoft: { path: '/api/v1/auth/microsoft', sendsRedirectUri: true },
+  email: { path: '/api/v1/auth/magic-link/exchange', sendsRedirectUri: false },
+  password: { path: '/api/v1/auth/magic-link/exchange', sendsRedirectUri: false },
+};
+
 interface AuthPageProviderProfile {
   /** Name of the provider in errors handed to the application. */
   label: string;
-  /** IAM route that turns the single-use code into an app session. */
-  exchangePath: string;
-  /** Whether the exchange binds the code to the auth page that received it. */
-  sendsRedirectUri: boolean;
+  /**
+   * How the code is redeemed. `reportedMethod` means the page offers several
+   * methods and says which one produced the code: the code is only valid at
+   * that method's route, so the SDK never picks one on its own.
+   */
+  exchange: AuthPageExchangeRoute | 'reportedMethod';
   /** Where the pending request lives between the start of the flow and its completion. */
   redirectStorage: 'sessionStorage' | 'localStorage';
   /**
@@ -77,35 +113,38 @@ const TEN_MINUTES_MS = 10 * 60 * 1_000;
 const PROVIDERS: Record<AuthPageProvider, AuthPageProviderProfile> = {
   google: {
     label: 'Google',
-    exchangePath: '/api/v1/auth/google',
-    sendsRedirectUri: true,
+    exchange: EXCHANGE_ROUTES.google,
     redirectStorage: 'sessionStorage',
     popupTimeoutMs: FIVE_MINUTES_MS,
   },
   microsoft: {
     label: 'Microsoft',
-    exchangePath: '/api/v1/auth/microsoft',
-    sendsRedirectUri: true,
+    exchange: EXCHANGE_ROUTES.microsoft,
     redirectStorage: 'sessionStorage',
     popupTimeoutMs: FIVE_MINUTES_MS,
   },
   email: {
     label: 'Email',
-    exchangePath: '/api/v1/auth/magic-link/exchange',
-    sendsRedirectUri: false,
+    exchange: EXCHANGE_ROUTES.email,
     redirectStorage: 'localStorage',
     pendingRequestTtlMs: TEN_MINUTES_MS,
     popupTimeoutMs: TEN_MINUTES_MS,
   },
-  // IAM answers a password login, signup or change with the same single-use
-  // exchange code the email flow gets. Signing up waits on a code read from a
-  // mailbox, hence the email timeout; there is no link, so nothing pending is
-  // written for another tab.
+  // Signing up waits on a code read from a mailbox, hence the email timeout;
+  // there is no link, so nothing pending is written for another tab.
   password: {
     label: 'Password',
-    exchangePath: '/api/v1/auth/magic-link/exchange',
-    sendsRedirectUri: false,
+    exchange: EXCHANGE_ROUTES.password,
     redirectStorage: 'sessionStorage',
+    popupTimeoutMs: TEN_MINUTES_MS,
+  },
+  // The person may pick the email code on this screen, and its message carries
+  // a link that opens another tab, so this flow keeps the email lifetimes.
+  all: {
+    label: 'Auth page',
+    exchange: 'reportedMethod',
+    redirectStorage: 'localStorage',
+    pendingRequestTtlMs: TEN_MINUTES_MS,
     popupTimeoutMs: TEN_MINUTES_MS,
   },
 };
@@ -204,7 +243,7 @@ export function expectAuthTokenResponse(value: unknown): AuthTokenResponse {
   };
 }
 
-/** Coordinates the browser-only handshake through the brand auth page (Google, Microsoft, email, or password) and returns IAM tokens. */
+/** Coordinates the browser-only handshake through the brand auth page (Google, Microsoft, email, password, or the screen that offers them all) and returns IAM tokens. */
 export class AuthPageFlow {
   private readonly appId: string;
   private readonly apiUrl: string;
@@ -283,6 +322,7 @@ export class AuthPageFlow {
     const code = params.get('codeMitra');
     const state = params.get('stateMitra');
     const error = params.get('errorMitra');
+    const reportedMethod = params.get('providerMitra');
 
     if (code === null && state === null && error === null) return null;
 
@@ -334,7 +374,7 @@ export class AuthPageFlow {
       throw new Error(`${this.providerLabel} sign-in redirect is missing code.`);
     }
 
-    return this.exchangeCode(code, context.redirectUri);
+    return this.exchangeCode(code, context.redirectUri, this.readReportedMethod(reportedMethod));
   }
 
   private async startPopup(
@@ -371,7 +411,10 @@ export class AuthPageFlow {
     );
     if (completedInAnotherTab) this.clearRedirectContext(browserWindow);
 
-    if (result.code) return this.exchangeCode(result.code, this.getRedirectUri(authPageUrl));
+    const reportedMethod = this.readReportedMethod(result.method);
+    if (result.code) {
+      return this.exchangeCode(result.code, this.getRedirectUri(authPageUrl), reportedMethod);
+    }
 
     return expectAuthTokenResponse(result.token);
   }
@@ -454,15 +497,40 @@ export class AuthPageFlow {
 
   private async exchangeCode(
     code: string,
-    redirectUri: string | null
+    redirectUri: string | null,
+    reportedMethod?: AuthPageMethod
   ): Promise<AuthTokenResponse> {
-    const response = await this.client.post<unknown>(this.profile.exchangePath, {
+    const route = this.exchangeRoute(reportedMethod);
+    const response = await this.client.post<unknown>(route.path, {
       appId: this.appId,
       code,
-      ...(this.profile.sendsRedirectUri && redirectUri !== null ? { redirectUri } : {}),
+      ...(route.sendsRedirectUri && redirectUri !== null ? { redirectUri } : {}),
     });
 
     return expectAuthTokenResponse(response);
+  }
+
+  private exchangeRoute(reportedMethod: AuthPageMethod | undefined): AuthPageExchangeRoute {
+    if (this.profile.exchange !== 'reportedMethod') return this.profile.exchange;
+    if (!reportedMethod) {
+      throw new Error('The all-methods sign-in cannot redeem a code without the method the auth page reported.');
+    }
+    return EXCHANGE_ROUTES[reportedMethod];
+  }
+
+  /**
+   * The method the auth page says produced the code. Only the flow that asked
+   * for the page with every method reads it: a single-method page sends no such
+   * field, and its own route is already known. Anything outside the known
+   * methods is refused rather than mapped to a route, since a code redeemed at
+   * the wrong route is spent for nothing.
+   */
+  private readReportedMethod(value: unknown): AuthPageMethod | undefined {
+    if (this.profile.exchange !== 'reportedMethod') return undefined;
+    if (!isAuthPageMethod(value)) {
+      throw new Error(`${this.providerLabel} did not report which sign-in method produced the code.`);
+    }
+    return value;
   }
 
   private buildStartUrl(
@@ -516,7 +584,12 @@ export class AuthPageFlow {
     return Date.now() - context.createdAt > ttlMs;
   }
 
-  /** A one-time state that names the flow that created it, so its fragment is recognizable. */
+  /**
+   * A one-time state that names the flow that created it, so its fragment is
+   * recognizable. The auth page relies on the `all.` prefix too: the tab the
+   * email link opens has only the state to tell a chooser request apart, and
+   * answers it with `providerMitra=email`.
+   */
   private generateState(): string {
     if (!globalThis.crypto?.getRandomValues) {
       throw new Error(`${this.providerLabel} sign-in requires crypto.getRandomValues.`);
@@ -549,7 +622,7 @@ export class AuthPageFlow {
     expectedOrigin: string,
     expectedState: string,
     sessionToken?: () => Promise<string | null>
-  ): Promise<{ code?: string; token?: unknown }> {
+  ): Promise<PopupResult> {
     return new Promise((resolve, reject) => {
       const timeout = globalThis.setTimeout(() => {
         cleanup();
@@ -657,7 +730,14 @@ export class AuthPageFlow {
   }
 }
 
-type PopupResultOutcome = { value: { code?: string; token?: unknown } } | { error: Error };
+interface PopupResult {
+  code?: string;
+  token?: unknown;
+  /** The `provider` field as the page sent it, read only by the flow that offers every method. */
+  method?: unknown;
+}
+
+type PopupResultOutcome = { value: PopupResult } | { error: Error };
 
 function readPopupResult(
   data: Record<string, unknown>,
@@ -686,7 +766,13 @@ function readPopupResult(
 
   const code = typeof data.code === 'string' && data.code.trim() ? data.code : undefined;
   if (!code && data.token === undefined) {
-    return { error: new Error(`${providerLabel} auth page returned neither code nor token.`) };
+    return { error: new Error(`${providerLabel} sign-in returned neither code nor token.`) };
   }
-  return { value: { ...(code ? { code } : {}), ...(data.token !== undefined ? { token: data.token } : {}) } };
+  return {
+    value: {
+      ...(code ? { code } : {}),
+      ...(data.token !== undefined ? { token: data.token } : {}),
+      ...(data.provider !== undefined ? { method: data.provider } : {}),
+    },
+  };
 }
