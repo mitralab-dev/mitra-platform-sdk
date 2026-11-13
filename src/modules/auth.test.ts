@@ -1461,6 +1461,82 @@ describe('AuthModule', () => {
     });
   });
 
+  describe('auth page sign-in', () => {
+    it('should redeem the code at the route of the method chosen on the page and hydrate the session', async () => {
+      const browser = mockBrowser();
+      const fetchMock = mockFetchSequence([
+        { body: fakeTokenResponse },
+        { body: currentUserResponse },
+      ]);
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+      const listener = vi.fn();
+      auth.onAuthStateChange(listener);
+
+      const signIn = auth.signInWithAuthPage({ mode: 'popup' });
+      const startUrl = browser.getStartUrl();
+      const state = startUrl.searchParams.get('state')!;
+      browser.dispatchMessage(authPageResult(state, { code: 'exchange-code', provider: 'password' }));
+
+      await expect(signIn).resolves.toEqual(apiUser);
+      expect(startUrl.searchParams.get('provider')).toBe('all');
+      expect(startUrl.searchParams.get('appId')).toBe(APP_ID);
+      expect(startUrl.searchParams.get('apiUrl')).toBe(API_URL);
+      expect(startUrl.searchParams.get('origin')).toBe('https://app.example.com');
+      expect(startUrl.searchParams.get('responseType')).toBe('code');
+      expect(fetchMock.mock.calls[0][0]).toBe(EXCHANGE_URL);
+      expect(fetchMock.mock.calls[0][1].headers).not.toHaveProperty('Authorization');
+      expect(auth.currentUser).toEqual(apiUser);
+      expect(listener).toHaveBeenLastCalledWith(apiUser);
+      expect(JSON.parse(browser.localStorage._store[STORAGE_KEY])).toEqual({
+        user: apiUser,
+        token: 'access-123',
+        refreshToken: 'refresh-456',
+      });
+    });
+
+    it('should leave the session alone when the page does not say which method produced the code', async () => {
+      const browser = mockBrowser();
+      const fetchMock = mockFetchSequence([]);
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+      const signIn = auth.signInWithAuthPage();
+      const state = browser.getStartUrl().searchParams.get('state')!;
+      browser.dispatchMessage(authPageResult(state, { code: 'exchange-code' }));
+
+      await expect(signIn).rejects.toThrow('did not report which sign-in method');
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(auth.accessToken).toBeNull();
+      expect(browser.localStorage._store[STORAGE_KEY]).toBeUndefined();
+    });
+
+    it('should return null at startup when the URL carries no auth page result', async () => {
+      const browser = mockBrowser();
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+      await expect(auth.completeAuthPageSignInRedirect()).resolves.toBeNull();
+      expect(browser.window.history.replaceState).not.toHaveBeenCalled();
+    });
+
+    it('should reject an unsupported mode', async () => {
+      mockBrowser();
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+      await expect(
+        auth.signInWithAuthPage({ mode: 'tab' as unknown as 'popup' })
+      ).rejects.toThrow('Unsupported Auth page sign-in mode: tab');
+    });
+
+    it('should require browser APIs', async () => {
+      vi.stubGlobal('window', undefined);
+      const auth = new AuthModule(APP_ID, IAM_URL, { apiUrl: API_URL });
+
+      await expect(auth.signInWithAuthPage()).rejects.toThrow('only available in a browser');
+      await expect(auth.completeAuthPageSignInRedirect()).rejects.toThrow(
+        'only available in a browser'
+      );
+    });
+  });
+
   describe('identity connection sign-in', () => {
     const CONNECTION_FRAGMENT =
       '#codeMitra=code-1&stateMitra=connection.0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a&connectionMitra=sankhya-pass';
