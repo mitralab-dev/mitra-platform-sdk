@@ -3,7 +3,7 @@
  *
  * JavaScript/TypeScript SDK for building apps on Mitra Platform.
  * Provides authentication, database CRUD operations, serverless function execution,
- * integration proxy, and custom query execution.
+ * integration proxy, custom query execution, and app files.
  *
  * @packageDocumentation
  *
@@ -102,6 +102,21 @@ export type {
   CredentialUsage,
   CredentialUsageWindow,
   DeviceAuthorization,
+  FileCreator,
+  FileDownloadOptions,
+  FileKind,
+  FileMetadata,
+  FileReadUrl,
+  FileReadUrlItem,
+  FileReadUrlOptions,
+  FileReadUrls,
+  FilesModule,
+  FileStatus,
+  FileTransferStep,
+  FileUpload,
+  FileUploadInput,
+  FileUploadOptions,
+  FileVisibility,
   IncludedAiQuota,
   IncludedAiQuotaWindow,
   ManagedAiProfile,
@@ -118,6 +133,7 @@ export type {
 } from './client';
 
 export { MitraApiError } from './utils/http-client';
+export { FileTransferError } from '@mitralab.io/sdk-core';
 
 /**
  * Deprecated `mitra-interactions-sdk` surface, re-exported so existing call

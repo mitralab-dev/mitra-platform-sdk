@@ -7,6 +7,21 @@ function jwt(payload: Record<string, unknown>): string {
   return `${encode({ alg: 'none' })}.${encode(payload)}.signature`;
 }
 
+const fileMetadata = {
+  id: 'file-1',
+  name: 'notes.txt',
+  contentType: 'text/plain',
+  sizeBytes: 5,
+  kind: 'TEMPORARY',
+  visibility: 'PRIVATE',
+  status: 'READY',
+  ownerUserId: 'u1',
+  createdBy: 'USER',
+  createdAt: '2026-11-14T12:00:00Z',
+  confirmedAt: '2026-11-14T12:00:03Z',
+  expiresAt: '2026-11-21T12:00:00Z',
+};
+
 const functionExecution = {
   id: 'exec-1',
   functionId: 'fn-1',
@@ -324,6 +339,35 @@ describe('createClient', () => {
     expect(fetchMock.mock.calls[3][1].headers.Authorization).toBe(`Bearer ${newAccess}`);
   });
 
+  it('should renew the session and repeat a files request once after a 401', async () => {
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const oldAccess = jwt({ app_id: 'app-1', exp: nowSeconds + 3_600 });
+    const oldRefresh = jwt({ app_id: 'app-1', exp: nowSeconds + 7_200 });
+    const newAccess = jwt({ app_id: 'app-1', exp: nowSeconds + 3_600, jti: 'renewed' });
+    const storage = mockLocalStorage();
+    storage._store['mitra_auth_app-1'] = JSON.stringify({
+      user: { id: 'u1', tenantId: 't1', email: 'user@test.com', name: null },
+      token: oldAccess,
+      refreshToken: oldRefresh,
+    });
+    const fetchMock = mockFetchSequence([
+      { body: { message: 'Expired' }, status: 401 },
+      { body: { accessToken: newAccess, refreshToken: oldRefresh, tokenType: 'Bearer' } },
+      { body: fileMetadata },
+    ]);
+    const mitra = createClient({ appId: 'app-1', apiUrl: 'https://api.mitra.io' });
+
+    await expect(mitra.files.get('file-1')).resolves.toEqual(fileMetadata);
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      'https://api.mitra.io/data-manager/api/v1/files/file-1',
+      'https://api.mitra.io/iam/api/v1/auth/refresh-token',
+      'https://api.mitra.io/data-manager/api/v1/files/file-1',
+    ]);
+    expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe(`Bearer ${oldAccess}`);
+    expect(fetchMock.mock.calls[2][1].headers.Authorization).toBe(`Bearer ${newAccess}`);
+  });
+
   it('should run proactive refresh on every protected native service transport', async () => {
     const nowSeconds = Math.floor(Date.now() / 1000);
     const expiredAccess = () => jwt({ app_id: 'app-1', exp: nowSeconds - 1 });
@@ -354,6 +398,8 @@ describe('createClient', () => {
       { body: functionExecution },
       { body: tokenResponse() },
       { body: integrationResult },
+      { body: tokenResponse() },
+      { body: fileMetadata },
     ]);
     const mitra = createClient({ appId: 'app-1', apiUrl: 'https://api.mitra.io' });
 
@@ -362,6 +408,8 @@ describe('createClient', () => {
     await mitra.functions.execute('fn-1');
     mitra.auth.setToken(expiredAccess());
     await mitra.integration.executeResource('resource-1');
+    mitra.auth.setToken(expiredAccess());
+    await mitra.files.get('file-1');
 
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
       'https://api.mitra.io/iam/api/v1/auth/refresh-token',
@@ -370,6 +418,8 @@ describe('createClient', () => {
       'https://api.mitra.io/functions/api/v1/functions/fn-1/execute',
       'https://api.mitra.io/iam/api/v1/auth/refresh-token',
       'https://api.mitra.io/integration/api/v1/proxy/resources/resource-1/execute',
+      'https://api.mitra.io/iam/api/v1/auth/refresh-token',
+      'https://api.mitra.io/data-manager/api/v1/files/file-1',
     ]);
   });
 });

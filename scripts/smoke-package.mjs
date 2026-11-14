@@ -36,6 +36,7 @@ for (const declarationFile of ['index.d.ts', 'index.d.cts']) {
 // package re-exports so legacy applications can swap the dependency.
 const expectedExports = JSON.stringify(
   [
+    'FileTransferError',
     'MitraApiError',
     'createClient',
     'callIntegrationMitra',
@@ -67,6 +68,21 @@ const expectedExports = JSON.stringify(
     'updateRecordMitra',
   ].sort()
 );
+
+// Each build of the package must throw the FileTransferError it exports, or an app's instanceof
+// check fails in one of them. Storage refuses the bytes, so the upload ends in a send failure.
+const refusedUploadCheck = `globalThis.fetch = async (url, init) => {
+  if (url === "https://api.example.com/data-manager/api/v1/files") {
+    return new Response(JSON.stringify({ fileId: "file-id", uploadUrl: "https://storage.example.com/file-id?X-Amz-Signature=signature", uploadMethod: "PUT", uploadHeaders: { "content-type": "text/plain" }, expiresAt: "2026-11-14T12:05:00Z" }), { status: 201 })
+  }
+  if (url.startsWith("https://storage.example.com/")) return new Response("", { status: 403 })
+  if (url === "https://api.example.com/data-manager/api/v1/files/file-id" && init.method === "DELETE") return new Response(null, { status: 204 })
+  throw new Error("Unexpected request")
+}
+client.files.upload(new Blob(["x"], { type: "text/plain" }), { kind: "TEMPORARY", visibility: "PRIVATE", name: "notes.txt" }).then(
+  () => { throw new Error("files.upload resolved although storage refused the bytes") },
+  (error) => { if (!(error instanceof sdk.FileTransferError) || error.step !== "send") throw new Error("files.upload did not reject with the exported FileTransferError") }
+)`;
 
 try {
   const packOutput = npm(
@@ -112,6 +128,7 @@ try {
     `import type { MitraConfig as InteractionsMitraConfig } from "mitra-interactions-sdk"
 import {
   createClient,
+  FileTransferError,
   MitraApiError,
   executeServerFunctionMitra,
   loginWithGoogleMitra,
@@ -128,6 +145,12 @@ import {
   type EmailCodeRequestResult,
   type EmailCodeVerification,
   type EntityTable,
+  type FileMetadata,
+  type FileReadUrl,
+  type FileReadUrls,
+  type FilesModule,
+  type FileTransferStep,
+  type FileUploadOptions,
   type FunctionExecution,
   type GoogleSignInOptions,
   type NativeAgentTaskSession,
@@ -164,6 +187,24 @@ client.aiProviders = aiProviders
 void client.aiProviders.setActiveEngine("IMMERSION")
 // @ts-expect-error App identity comes from client configuration, not the read request.
 void client.aiProviders.get({ appId: "another-app" })
+const files: FilesModule = client.files
+const uploadOptions: FileUploadOptions = { kind: "PERMANENT", visibility: "PRIVATE", signal: AbortSignal.timeout(60_000) }
+const uploaded: Promise<FileMetadata> = files.upload(new Blob(["hello"]), { ...uploadOptions, name: "notes.txt" })
+void uploaded.catch((reason: unknown) => {
+  if (reason instanceof FileTransferError) {
+    const step: FileTransferStep = reason.step
+    const cleanedUp: boolean = reason.cleanedUp
+    void [step, cleanedUp, reason.fileId]
+  }
+})
+const readUrl: Promise<FileReadUrl> = files.getUrl("file-id", { expiresInSeconds: 600 })
+const readUrls: Promise<FileReadUrls> = files.getUrls(["file-id"])
+const downloaded: Promise<Blob> = files.download("file-id", { signal: new AbortController().signal })
+void [readUrl, readUrls, downloaded, files.get("file-id"), files.delete("file-id")]
+// @ts-expect-error The files module cannot be replaced on the client.
+client.files = files
+// @ts-expect-error The kind is TEMPORARY or PERMANENT.
+void files.upload(new Blob(["hello"]), { kind: "FOREVER", visibility: "PRIVATE", name: "notes.txt" })
 const user: User = { id: "user", tenantId: "tenant", email: "user@example.com", name: null }
 const query: QueryResult = { rows: [], affectedRows: null, durationMs: 0 }
 const proxy: ProxyInput = { method: "GET", endpoint: "/", queryParams: { limit: "10" } }
@@ -313,6 +354,9 @@ void providers.then((response) => {
 })
 // @ts-expect-error Provider discovery has no preference write operation.
 void client.aiProviders.setActiveEngine("IMMERSION")
+const files: sdk.FilesModule = client.files
+const uploaded: Promise<sdk.FileMetadata> = files.upload(new Blob(["hello"]), { kind: "TEMPORARY", visibility: "APP", name: "notes.txt" })
+void uploaded.catch((reason: unknown) => (reason instanceof sdk.FileTransferError ? reason.step : undefined))
 const user: sdk.User = { id: "user", tenantId: "tenant", email: "user@example.com", name: null }
 const query: sdk.QueryResult = { rows: [], affectedRows: null, durationMs: 0 }
 const proxy: sdk.ProxyInput = { method: "GET", endpoint: "/", queryParams: { limit: "10" } }
@@ -381,6 +425,7 @@ void sdk.executeServerFunctionMitra
 globalThis.fetch = () => { throw new Error("Unexpected request") }
 const client = sdk.createClient({ appId: "app", apiUrl: "https://api.example.com" })
 if (typeof client.aiProviders?.get !== "function") throw new Error("aiProviders.get is missing from the installed package")
+${refusedUploadCheck}
 `,
     ],
     { cwd: consumerDirectory, stdio: 'inherit' }
@@ -393,6 +438,7 @@ if (typeof client.aiProviders?.get !== "function") throw new Error("aiProviders.
 globalThis.fetch = () => { throw new Error("Unexpected request") }
 const client = sdk.createClient({ appId: "app", apiUrl: "https://api.example.com" })
 if (typeof client.aiProviders?.get !== "function") throw new Error("aiProviders.get is missing from the installed package")
+${refusedUploadCheck}
 `,
     ],
     { cwd: consumerDirectory, stdio: 'inherit' }
