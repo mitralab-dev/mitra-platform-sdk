@@ -2,7 +2,9 @@
 
 All notable changes to this project are documented in this file.
 
-## Unreleased
+## 1.9.0-beta.2
+
+App files through `client.files`, and a single sign-in screen with every method the app has.
 
 - Depend on `@mitralab.io/sdk-core@0.3.10` for its `files` module, exposed as `client.files`: app
   files kept by the Data Manager under `/data-manager/api/v1/files`. `upload(fileOrBlob, options)`
@@ -21,6 +23,15 @@ All notable changes to this project are documented in this file.
 - New exported types: `FilesModule`, `FileUploadOptions`, `FileDownloadOptions`, `FileMetadata`,
   `FileKind`, `FileVisibility`, `FileStatus`, `FileCreator`, `FileUpload`, `FileUploadInput`,
   `FileReadUrl`, `FileReadUrlItem`, `FileReadUrlOptions`, `FileReadUrls` and `FileTransferStep`.
+- `auth.signInWithAuthPage({ mode? })` opens the Mitra sign-in page, in a popup or by redirect, on
+  a choice screen with the methods the app has: Google and Microsoft always, password and e-mail
+  code when the app has them on. The person chooses there, and the SDK exchanges the code through
+  the route of the chosen method. It is optional: an app that does not call it stays the same. In
+  `redirect` mode, and for the tab opened by the e-mail link, call
+  `auth.completeAuthPageSignInRedirect()` at startup; it returns `null` when the URL is not its
+  own. The pending request stays in `localStorage` for 10 minutes under
+  `mitra_all_redirect_{appId}`: the single-use state and the page address, never a token. An answer
+  from the page without the chosen method is refused, and the code is not exchanged.
 
 ## 1.9.0-beta.1
 
