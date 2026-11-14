@@ -1,11 +1,13 @@
 import { stripTrailingSlashes } from './utils/url';
 import {
   createAiProvidersModule,
+  createFilesModule,
   createPublicFunctionsModule,
   encodePathSegment,
   expectObject,
   type AgentTasksWithSessions,
   type AiProvidersModule,
+  type FilesModule,
   type PublicFunctionsModule,
 } from '@mitralab.io/sdk-core';
 import { coreErrors } from './core-errors';
@@ -227,6 +229,27 @@ export interface MitraClient {
   readonly aiProviders: AiProvidersModule;
 
   /**
+   * App files kept by the Data Manager: `upload` a `File` or `Blob`, read its
+   * metadata with `get`, ask for signed read links with `getUrl` or `getUrls`,
+   * `download` and `delete`.
+   *
+   * The API calls carry the session token and `X-App-Id`. The bytes go straight
+   * to storage through the signed link, with the browser `fetch` and without
+   * those headers.
+   *
+   * @example
+   * ```typescript
+   * // `picked` is a File from an <input type="file">
+   * const file = await mitra.files.upload(picked, {
+   *   kind: 'PERMANENT',
+   *   visibility: 'PRIVATE',
+   * });
+   * const { url } = await mitra.files.getUrl(file.id);
+   * ```
+   */
+  readonly files: FilesModule;
+
+  /**
    * Integration module for proxying HTTP requests to external APIs.
    *
    * Sends requests through the Mitra server, which handles authentication
@@ -290,6 +313,7 @@ export interface MitraClient {
  * - **functions**: Serverless function invocation
  * - **integration**: Proxy HTTP requests to external APIs
  * - **queries**: Custom query management and execution
+ * - **files**: App file upload, signed read links and download
  *
  * After creating the client, call `init()` to resolve the app's public config
  * (dataSourceId, allowSignup, emailLoginEnabled, passwordLoginEnabled) automatically from the server.
@@ -396,6 +420,11 @@ export function createClient(config: MitraClientConfig): MitraClient {
   const agentCredentialsModule = createBrowserAgentCredentialsModule(copilotHttpClient);
   const aiProvidersModule = createAiProvidersModule(copilotHttpClient, coreErrors);
 
+  // No storage fetch on purpose: Core falls back to the global fetch, which this SDK never
+  // wraps (HttpClient adds the token and X-App-Id per request), so storage gets only the
+  // signed headers. A fetch that added the token would leak it to storage.
+  const filesModule = createFilesModule(httpClient, {}, coreErrors);
+
   const integrationHttpClient = new HttpClient({
     baseUrl: integrationUrl,
     getToken: () => authModule.accessToken,
@@ -474,6 +503,7 @@ export function createClient(config: MitraClientConfig): MitraClient {
     agentTasks: agentTasksModule,
     agentCredentials: agentCredentialsModule,
     aiProviders: aiProvidersModule,
+    files: filesModule,
     integration: integrationModule,
     queries: queriesModule,
     get allowSignup() {
@@ -560,6 +590,21 @@ export type {
   CredentialUsage,
   CredentialUsageWindow,
   DeviceAuthorization,
+  FileCreator,
+  FileDownloadOptions,
+  FileKind,
+  FileMetadata,
+  FileReadUrl,
+  FileReadUrlItem,
+  FileReadUrlOptions,
+  FileReadUrls,
+  FilesModule,
+  FileStatus,
+  FileTransferStep,
+  FileUpload,
+  FileUploadInput,
+  FileUploadOptions,
+  FileVisibility,
   IncludedAiQuota,
   IncludedAiQuotaWindow,
   ManagedAiProfile,

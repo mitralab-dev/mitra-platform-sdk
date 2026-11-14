@@ -2,6 +2,26 @@
 
 All notable changes to this project are documented in this file.
 
+## Unreleased
+
+- Depend on `@mitralab.io/sdk-core@0.3.10` for its `files` module, exposed as `client.files`: app
+  files kept by the Data Manager under `/data-manager/api/v1/files`. `upload(fileOrBlob, options)`
+  requests the upload, sends the bytes to the signed link and confirms, resolving only with the
+  `READY` file; `requestUpload` and `confirmUpload` are the steps on their own. `get`, `getUrl`,
+  `getUrls` (1 to 100 ids), `download` and `delete` complete the module.
+- The API calls go through the Data Manager client of this SDK, with the session token,
+  `X-App-Id`, the renewal before the request and the global `onError`. The bytes go to the signed
+  link through the global `fetch`, without `Authorization`, `X-App-Id` or any other header this SDK
+  adds: the link is the credential, and storage gets only the headers the API signed it with.
+- An API refusal rejects with `MitraApiError`. A failure after the upload request rejects with the
+  Core `FileTransferError` (`step` `send`, `confirm` or `download`), now exported by this package,
+  and never carries the link; a failed send deletes the pending file first. A `signal` stops the
+  transfer with storage and the call rejects with `signal.reason` (`AbortError`, or `TimeoutError`
+  from `AbortSignal.timeout`). The transfer with storage does not reach `onError`.
+- New exported types: `FilesModule`, `FileUploadOptions`, `FileDownloadOptions`, `FileMetadata`,
+  `FileKind`, `FileVisibility`, `FileStatus`, `FileCreator`, `FileUpload`, `FileUploadInput`,
+  `FileReadUrl`, `FileReadUrlItem`, `FileReadUrlOptions`, `FileReadUrls` and `FileTransferStep`.
+
 ## 1.9.0-beta.1
 
 Sign-in through an identity connection by redirect, for an app opened directly in the browser,

@@ -46,6 +46,7 @@ No app gerado pelo Code Studio, `VITE_MITRA_APP_ID` e `VITE_MITRA_API_URL` já v
   `loadOlder()` traz a página anterior do histórico e põe antes de `history`; `hasOlder` diz se ainda há mais antiga.
 - `agentCredentials`: credenciais de provedor de IA e modelos disponíveis. `providers(agentId?)` devolve numa chamada só os provedores em que o próximo turno pode rodar, cada um com os modelos e a última leitura da assinatura.
 - `aiProviders.get()`: consulta tipada de `GET /copilot/api/v1/ai-providers`, com o token da sessão e o `X-App-Id` do cliente. Retorna engine ativa, quota pessoal, provedores personalizados, conexão OpenCode e `managedAiProfile`. O módulo oferece somente leitura: não altera preferências, cria tarefas ou conecta provedores.
+- `files`: arquivos do app, com `upload`, `get`, `getUrl`, `getUrls`, `download` e `delete`, mais os passos `requestUpload` e `confirmUpload` (ver [Arquivos do app](#arquivos-do-app)).
 
 `managedAiProfile` é `null` quando inelegível e pode estar ausente em backends anteriores. Quando o Copilot oferece Immersion, o perfil traz `profile: "IMMERSION"`, `agentType: "IMMERSION"`, `selectionMode: "FORCED"`, `model: "immersion"` e `requiredScope: "ACCOUNT"`. A leitura preserva a engine ativa e a quota pessoal; não calcula elegibilidade com base nelas. Falhas, inclusive `404` de backend sem a rota, chegam como `MitraApiError`.
 
@@ -158,13 +159,63 @@ const { content } = await chat.sendAndWait("Resuma os pedidos de hoje")
 chat.close()
 ```
 
+### Arquivos do app
+
+Os arquivos que a pessoa envia pelo app ficam no storage da Mitra, registrados pelo Data Manager. Os bytes não passam pela API: o browser manda e lê direto do storage por um link assinado, que vale poucos minutos, e a API só autoriza e registra. As chamadas à API levam o token da sessão e o `X-App-Id`; o envio e o download saem pelo `fetch` do browser sem eles, porque o link já é a credencial.
+
+Envio a partir de um `<input type="file">`:
+
+```typescript
+// <input type="file" id="attachment"> e <button id="cancel">
+const input = document.querySelector<HTMLInputElement>("#attachment")!
+const cancel = document.querySelector<HTMLButtonElement>("#cancel")!
+
+input.addEventListener("change", async () => {
+  const picked = input.files?.[0]
+  if (!picked) return
+
+  const sending = new AbortController()
+  cancel.onclick = () => sending.abort()
+  try {
+    const file = await mitra.files.upload(picked, {
+      kind: "PERMANENT",
+      visibility: "PRIVATE",
+      signal: sending.signal,
+    })
+    await mitra.entities.Attachment.create({ fileId: file.id, name: file.name })
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") return
+    throw error
+  }
+})
+```
+
+Quem lê o arquivo depende da visibilidade, não de quem tem o `fileId`: `PRIVATE` só quem enviou, `APP` qualquer pessoa do app, `RESTRICTED` quem enviou e quem a regra do app liberar, por uma Server Function que roda em nome de um usuário; a execução pública de uma Server Function não recebe o link.
+
+Exibição pelo link de leitura:
+
+```typescript
+// <img id="preview">
+const { url } = await mitra.files.getUrl(attachment.fileId)
+document.querySelector<HTMLImageElement>("#preview")!.src = url
+```
+
+- `upload` pede o envio com o nome, o tipo e o tamanho do `File`, manda os bytes ao link com os headers que a API devolveu e confirma; só resolve com o arquivo `READY`. Um `Blob` que não é `File` precisa de `name` nas opções.
+- `kind`: `TEMPORARY` vence 7 dias depois do pedido de envio, `PERMANENT` fica até ser apagado.
+- Guarde o `id`, nunca o link: ele vence e autoriza sozinho quem o tiver. O link de `PRIVATE` e `RESTRICTED` vale 5 minutos e não se estende; o de `APP` aceita `expiresInSeconds` até 1 hora. Peça o link na hora de exibir, e peça outro quando uma imagem voltar a montar depois do prazo, pelo `expiresAt` ou no `onerror` do `<img>`. Para várias imagens, `getUrls(ids)` traz até 100 numa chamada. Aberto direto numa aba, o link baixa o arquivo com o nome original. `download(fileId)` devolve o conteúdo como `Blob`.
+- Recusa da API chega como `MitraApiError`, como nas outras chamadas: `FILE_TOO_LARGE`, `FILE_QUOTA_REACHED` e `FILE_PENDING_LIMIT_REACHED` no pedido de envio, `NOT_FOUND` para arquivo que a pessoa não pode ler.
+- Falha depois do pedido de envio chega como `FileTransferError`, com `step` (`send`, `confirm` ou `download`) e `fileId`, e nunca carrega o link. No `send`, o `upload` já apagou o arquivo pendente quando `cleanedUp` é `true`; com `false`, apague com `files.delete(fileId)`. No `confirm`, os bytes já estão no storage: confirme de novo com `files.confirmUpload(fileId)` ou apague. A exclusão que limpa um envio que falhou é uma chamada à plataforma como as outras, então a falha dela passa pelo `onError`; o erro do envio já traz `cleanedUp: false`.
+- O `signal` interrompe só a transferência dos bytes, e a chamada rejeita com o `signal.reason`, como o `fetch`: `AbortError` no `abort()` do exemplo. Um envio cancelado no meio já tentou apagar o arquivo pendente, que vence sozinho em 24 horas se a exclusão falhar. Sem `signal`, o browser não dá prazo à transferência. Um prazo por `AbortSignal.timeout(ms)` rejeita com `TimeoutError`, mas conta desde a criação do sinal, pedido de envio incluído, e corta um envio legítimo de 25 MiB numa rede lenta: dimensione pelo tamanho do arquivo.
+
+O comportamento completo, com as garantias sobre o link e os erros, está no [README do Core](https://github.com/mitralab-dev/mitra-core-sdk#arquivos-de-app), que este módulo usa sem mudar.
+
 ## Configuração
 
 | Campo | Obrigatório | Uso |
 |---|---|---|
 | `appId` | sim | ID do app no Code Studio |
 | `apiUrl` | sim | URL do API gateway da Mitra |
-| `onError` | não | callback com o `MitraApiError` das falhas de `entities`, `queries`, `functions`, `integration`, `agentTasks`, `agentCredentials` e `aiProviders`; `init()`, login, `publicFunctions` e falha de rede não passam por ele e são tratados no `catch` de cada chamada |
+| `onError` | não | callback com o `MitraApiError` das falhas de `entities`, `queries`, `functions`, `integration`, `agentTasks`, `agentCredentials`, `aiProviders` e das chamadas de `files` à API, inclusive a exclusão que limpa um envio que falhou; `init()`, login, `publicFunctions`, a transferência de `files` com o storage e falha de rede não passam por ele e são tratados no `catch` de cada chamada |
 | `authPageUrl` | não | URL da página de login da Mitra; sem ela, o SDK descobre sozinho |
 | `apiKey` | não | chave padrão de `auth.signInWithApiKey()`; só em código de servidor, nunca no bundle do browser |
 
