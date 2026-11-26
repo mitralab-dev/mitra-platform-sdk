@@ -76,6 +76,7 @@ export type {
   AgentSendOptions,
   AgentSendAndWaitOptions,
   AgentSessionTransport,
+  AgentSubagentHistory,
   AgentTask,
   AgentTaskCreateInput,
   AgentTaskInput,

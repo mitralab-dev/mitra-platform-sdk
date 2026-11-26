@@ -4,6 +4,9 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+- Exported `AgentSubagentHistory`, the result of the Core `session.loadSubagent(toolId)`, which
+  reaches the app through `agentTasks.session` like the rest of the Core session. With that Core,
+  `history` holds only the chat's own thread and a subagent's pieces come from `loadSubagent`.
 - `agentCredentials` accepts `GOOGLE` (Antigravity): `saveApiKey` and `remove` take `ANTHROPIC`,
   `OPENAI` and `GOOGLE`, and `startOAuth` and `exchangeOAuth` take `ANTHROPIC` and `GOOGLE`, the
   Core methods and endpoints of the other providers. Keep the same `scope` on `startOAuth` and
