@@ -370,6 +370,14 @@ void client.aiProviders.setActiveEngine("IMMERSION")
 const files: sdk.FilesModule = client.files
 const uploaded: Promise<sdk.FileMetadata> = files.upload(new Blob(["hello"]), { kind: "TEMPORARY", visibility: "APP", name: "notes.txt" })
 void uploaded.catch((reason: unknown) => (reason instanceof sdk.FileTransferError ? reason.step : undefined))
+const turnStates: Promise<sdk.AgentTaskTurnStateEntry[]> | undefined = client.agentTasks.turnStates?.(["00000000-0000-4000-8000-000000000001"])
+void turnStates?.then(([entry]) => {
+  const turn: sdk.AgentTaskTurn | null | undefined = entry?.turn
+  const lastTurn: sdk.AgentTaskLastTurn | null | undefined = turn?.lastTurn
+  void [lastTurn]
+})
+const compactions: sdk.AgentTurnCompaction[] = []
+void compactions
 const user: sdk.User = { id: "user", tenantId: "tenant", email: "user@example.com", name: null }
 const query: sdk.QueryResult = { rows: [], affectedRows: null, durationMs: 0 }
 const proxy: sdk.ProxyInput = { method: "GET", endpoint: "/", queryParams: { limit: "10" } }
