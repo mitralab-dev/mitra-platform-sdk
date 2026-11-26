@@ -52,9 +52,34 @@ function reasonOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+let clientMessageSequence = 0;
+
+// The core's own generator, so a message held here goes out with an id of the same shape as one
+// the core gives: the core takes it through `clientMessageId` when the network is back.
+function newClientMessageId(): string {
+  const random = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto?.randomUUID;
+  return random
+    ? random.call((globalThis as { crypto: unknown }).crypto)
+    : `m-${Date.now()}-${++clientMessageSequence}`;
+}
+
+function idOf(input: AgentTaskInput): string | undefined {
+  return input.type === 'message' ? input.clientMessageId : undefined;
+}
+
+function withId(clientMessageId: string | undefined): { clientMessageId?: string } {
+  return clientMessageId === undefined ? {} : { clientMessageId };
+}
+
+function cancelledUnsent(): Error {
+  return new Error('Agent prompt was cancelled before it was sent.');
+}
+
 interface HeldPrompt {
   readonly input: AgentTaskInput;
   attempts: number;
+  /** A retry request is out: it may still land, so the prompt can no longer be cancelled. */
+  sending: boolean;
   resolve(): void;
   reject(error: Error): void;
   /** Disarms whatever would trigger the next retry. */
@@ -63,6 +88,7 @@ interface HeldPrompt {
 
 /** A prompt that has not entered the core yet: the browser said it was offline when it was sent. */
 interface GatedPrompt {
+  readonly clientMessageId: string;
   resolve(): void;
   reject(error: Error): void;
   disarm(): void;
@@ -136,14 +162,24 @@ export class AgentInputOutbox {
    * over through `deliver`. Prompts held for one session leave in the order they arrived. The
    * promise settles when the prompt is handed over, or rejects if the session closes first.
    */
-  holdUntilOnline(session: object, taskId: string | null, deliver: () => void): Promise<void> {
+  holdUntilOnline(
+    session: object,
+    taskId: string | null,
+    clientMessageId: string,
+    deliver: () => void
+  ): Promise<void> {
     return new Promise((resolve, reject) => {
-      const prompt: GatedPrompt = { resolve, reject, disarm: () => undefined };
+      const prompt: GatedPrompt = { clientMessageId, resolve, reject, disarm: () => undefined };
       this.gated.set(session, [...(this.gated.get(session) ?? []), prompt]);
       if (taskId) {
         this.announce(taskId, {
           type: 'inputUnsent',
-          payload: { attempt: 0, reason: 'The browser is offline.', waitingForOnline: true },
+          payload: {
+            attempt: 0,
+            reason: 'The browser is offline.',
+            waitingForOnline: true,
+            clientMessageId,
+          },
           timestamp: Date.now(),
         });
       }
@@ -162,6 +198,32 @@ export class AgentInputOutbox {
     });
   }
 
+  /**
+   * Takes back a prompt this outbox still holds, by the id `send` returned, and rejects its
+   * promise: nothing is sent for it afterwards. False when the prompt is not held here (it went
+   * out, it was never held, or a retry request for it is out and may still land). A prompt held
+   * after a request that got no response may have reached the server with that first request.
+   */
+  cancelUnsent(session: object, taskId: string | null, clientMessageId: string): boolean {
+    const gated = this.gated.get(session) ?? [];
+    const waiting = gated.find((prompt) => prompt.clientMessageId === clientMessageId);
+    if (waiting) {
+      const rest = gated.filter((prompt) => prompt !== waiting);
+      if (rest.length) this.gated.set(session, rest);
+      else this.gated.delete(session);
+      waiting.disarm();
+      waiting.reject(cancelledUnsent());
+      return true;
+    }
+    if (!taskId) return false;
+    const held = this.held.get(taskId)?.find((prompt) => idOf(prompt.input) === clientMessageId);
+    if (!held || held.sending) return false;
+    this.release(taskId, held);
+    held.disarm();
+    held.reject(cancelledUnsent());
+    return true;
+  }
+
   /** The session is closing with prompts that never entered the core: same report as `abandon`. */
   abandonGated(session: object, taskId: string | null): void {
     const pending = this.gated.get(session);
@@ -170,12 +232,16 @@ export class AgentInputOutbox {
     this.drop(taskId, pending);
   }
 
-  private drop(taskId: string | null, pending: GatedPrompt[]): void {
+  private drop(taskId: string | null, pending: Array<GatedPrompt | HeldPrompt>): void {
     const error = neverSent(pending.length);
     if (taskId) {
+      const clientMessageIds = pending.flatMap((prompt) => {
+        const id = 'input' in prompt ? idOf(prompt.input) : prompt.clientMessageId;
+        return id === undefined ? [] : [id];
+      });
       this.announce(taskId, {
         type: 'error',
-        payload: { code: 'INPUT_UNSENT', message: error.message },
+        payload: { code: 'INPUT_UNSENT', message: error.message, clientMessageIds },
         timestamp: Date.now(),
       });
     }
@@ -187,7 +253,14 @@ export class AgentInputOutbox {
 
   private hold(taskId: string, input: AgentTaskInput, cause: unknown): Promise<void> {
     return new Promise((resolve, reject) => {
-      const prompt: HeldPrompt = { input, attempts: 1, resolve, reject, disarm: () => undefined };
+      const prompt: HeldPrompt = {
+        input,
+        attempts: 1,
+        sending: false,
+        resolve,
+        reject,
+        disarm: () => undefined,
+      };
       this.held.set(taskId, [...(this.held.get(taskId) ?? []), prompt]);
       this.schedule(taskId, prompt, cause);
     });
@@ -210,6 +283,7 @@ export class AgentInputOutbox {
         reason: reasonOf(cause),
         waitingForOnline,
         ...(retryInMs === undefined ? {} : { retryInMs }),
+        ...withId(idOf(prompt.input)),
       },
       timestamp: Date.now(),
     });
@@ -228,9 +302,11 @@ export class AgentInputOutbox {
 
   private async retry(taskId: string, prompt: HeldPrompt): Promise<void> {
     prompt.attempts += 1;
+    prompt.sending = true;
     try {
       await this.tasks.sendInput(taskId, prompt.input);
     } catch (error) {
+      prompt.sending = false;
       // Abandoned while the request was out: already reported, nothing left to decide.
       if (!this.isHeld(taskId, prompt)) return;
       if (!sendGotNoResponse(error)) {
@@ -245,7 +321,7 @@ export class AgentInputOutbox {
     this.release(taskId, prompt);
     this.announce(taskId, {
       type: 'inputSent',
-      payload: { attempts: prompt.attempts },
+      payload: { attempts: prompt.attempts, ...withId(idOf(prompt.input)) },
       timestamp: Date.now(),
     });
     prompt.resolve();
@@ -260,6 +336,16 @@ export class AgentInputOutbox {
     if (rest.length) this.held.set(taskId, rest);
     else this.held.delete(taskId);
   }
+}
+
+/** The session `agentTasks.session` returns: the core's, plus taking back a prompt held here. */
+export interface BrowserAgentTaskSession extends AgentTaskSession {
+  /**
+   * Takes back a message that has not gone out yet, by the id `send` returned or the
+   * `inputUnsent` frame carries: its `sendAndWait` rejects and nothing is sent for it. True when
+   * it was taken back; false when it is not held any more (it went out, or is on its way).
+   */
+  cancelUnsent(clientMessageId: string): boolean;
 }
 
 type Listener = (payload: unknown) => void;
@@ -283,8 +369,9 @@ function notify(listeners: ReadonlySet<Listener>, payload: unknown): void {
  * in the outbox and is sent, in order, once the network is back. Everything else on the
  * session is the core's, untouched.
  *
- * `send` returns the id the core gives the message when it goes out now; a prompt held offline
- * returns undefined, since the core only assigns the id once the network takes it.
+ * `send` returns the id the message goes out with, also for a prompt held offline: the id is
+ * given here and the core sends with it once the network is back, so the screen can show that
+ * message as waiting and `cancelUnsent` can take it back.
  *
  * The outbox frames reach the app through this wrapper's own `raw` and `error` listeners: a chat
  * on the direct channel is served by Core without the event source, so no observer of this SDK
@@ -293,7 +380,7 @@ function notify(listeners: ReadonlySet<Listener>, payload: unknown): void {
 export function holdSendsWhileOffline(
   session: AgentTaskSession,
   outbox: AgentInputOutbox
-): AgentTaskSession {
+): BrowserAgentTaskSession {
   const passThrough = (prompt: string) => !outbox.offline || !prompt.trim() || session.status === 'closed';
   const raws = new Set<Listener>();
   const errors = new Set<Listener>();
@@ -310,7 +397,7 @@ export function holdSendsWhileOffline(
       notify(errors, { code: payload.code, error: payload.message });
     },
   });
-  const gated: Pick<AgentTaskSession, 'send' | 'sendAndWait' | 'close' | 'on'> = {
+  const gated: Pick<BrowserAgentTaskSession, 'send' | 'sendAndWait' | 'close' | 'on' | 'cancelUnsent'> = {
     on: (event, handler) => {
       const off = session.on(event, handler);
       const own = outboxListeners[event];
@@ -323,19 +410,24 @@ export function holdSendsWhileOffline(
     },
     send: (prompt, options) => {
       if (passThrough(prompt)) return session.send(prompt, options);
-      void outbox.holdUntilOnline(session, session.taskId, () => session.send(prompt, options))
+      const clientMessageId = options?.clientMessageId || newClientMessageId();
+      void outbox
+        .holdUntilOnline(session, session.taskId, clientMessageId, () =>
+          session.send(prompt, { ...options, clientMessageId }))
         .catch(() => undefined);
-      return undefined;
+      return clientMessageId;
     },
     sendAndWait: (prompt, options) => {
       if (passThrough(prompt)) return session.sendAndWait(prompt, options);
+      const clientMessageId = options?.clientMessageId || newClientMessageId();
       let turn: Promise<AgentTurnResult> | undefined;
       return outbox
-        .holdUntilOnline(session, session.taskId, () => {
-          turn = session.sendAndWait(prompt, options);
+        .holdUntilOnline(session, session.taskId, clientMessageId, () => {
+          turn = session.sendAndWait(prompt, { ...options, clientMessageId });
         })
         .then(() => turn as Promise<AgentTurnResult>);
     },
+    cancelUnsent: (clientMessageId) => outbox.cancelUnsent(session, session.taskId, clientMessageId),
     close: () => {
       if (session.status !== 'closed') {
         outbox.abandonGated(session, session.taskId);
@@ -349,5 +441,5 @@ export function holdSendsWhileOffline(
   };
   return new Proxy(session, {
     get: (target, key) => (key in gated ? gated[key as keyof typeof gated] : Reflect.get(target, key, target)),
-  });
+  }) as BrowserAgentTaskSession;
 }

@@ -5,7 +5,6 @@ import {
   createPublicFunctionsModule,
   encodePathSegment,
   expectObject,
-  type AgentTasksWithSessions,
   type AiProvidersModule,
   type FilesModule,
   type PublicFunctionsModule,
@@ -18,7 +17,7 @@ import { EntitiesModule, EntitiesProxy } from './modules/entities';
 import { FunctionsModule } from './modules/functions';
 import { IntegrationModule } from './modules/integration';
 import { QueriesModule } from './modules/queries';
-import { createBrowserAgentTasksModule } from './modules/agent-tasks';
+import { createBrowserAgentTasksModule, type AgentTasksWithSessions } from './modules/agent-tasks';
 import {
   createBrowserAgentCredentialsModule,
   type AgentCredentialsModule,

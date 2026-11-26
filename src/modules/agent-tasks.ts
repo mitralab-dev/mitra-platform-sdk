@@ -2,12 +2,13 @@ import {
   createAgentTaskSessionManager,
   createAgentTasksModule,
   withAgentTaskSessions,
-  type AgentTasksWithSessions,
+  type AgentTaskSessionOptions,
+  type AgentTasksModule,
 } from '@mitralab.io/sdk-core';
 import { coreErrors } from '../core-errors';
 import type { HttpClient } from '../utils/http-client';
 import type { AuthSessionPort } from './auth';
-import { AgentInputOutbox, holdSendsWhileOffline } from './agent-outbox';
+import { AgentInputOutbox, holdSendsWhileOffline, type BrowserAgentTaskSession } from './agent-outbox';
 import { BrowserAgentTaskEventSource } from './agent-session';
 
 /**
@@ -43,8 +44,13 @@ export function createBrowserAgentTasksModule(
   delete publicTasks.channel;
   return withAgentTaskSessions(publicTasks, {
     session: (options) => holdSendsWhileOffline(manager.session(options), outbox),
-  });
+  }) as AgentTasksWithSessions;
 }
+
+export type AgentTasksWithSessions = AgentTasksModule & {
+  session(options: AgentTaskSessionOptions): BrowserAgentTaskSession;
+};
+export type { BrowserAgentTaskSession as NativeAgentTaskSession };
 
 export type {
   AgentMessage as NativeAgentMessage,
@@ -58,11 +64,9 @@ export type {
   AgentTaskInput,
   AgentTaskListOptions,
   AgentTaskRuntime,
-  AgentTaskSession as NativeAgentTaskSession,
   AgentTaskSessionEventMap,
   AgentTaskSessionOptions,
   AgentTaskSessionStatus,
-  AgentTasksWithSessions,
   AgentTimelineItem as NativeAgentTimelineItem,
   AgentToolEvent as NativeAgentToolEvent,
   AgentTurnResult,

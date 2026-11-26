@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented in this file.
 
+## Unreleased
+
+- `send` returns the `clientMessageId` of a message held while the browser is offline, the id it
+  goes out with when the network is back, instead of `undefined`. It needs the Core
+  `clientMessageId` send option, so this SDK depends on the Core release that has it.
+- The outbox frames name their message: `inputUnsent` and `inputSent` carry its `clientMessageId`,
+  and the `INPUT_UNSENT` error frame carries `clientMessageIds`, the messages that never went out.
+- Added `session.cancelUnsent(clientMessageId)`: takes back a message still held offline or held
+  after a request that got no response, without closing the session. Its `sendAndWait` rejects and
+  nothing is sent for it. It returns `false` when the message already went out or a retry request
+  for it is out, which may still land.
+
 ## 1.9.0-beta.2
 
 App files through `client.files`, and a single sign-in screen with every method the app has.
