@@ -133,6 +133,10 @@ import {
   executeServerFunctionMitra,
   loginWithGoogleMitra,
   type AgentReadyProvider,
+  type AgentTaskLastTurn,
+  type AgentTaskTurn,
+  type AgentTaskTurnStateEntry,
+  type AgentTurnCompaction,
   type AiProviders,
   type AiProvidersModule,
   type IncludedAiQuota,
@@ -187,6 +191,15 @@ client.aiProviders = aiProviders
 void client.aiProviders.setActiveEngine("IMMERSION")
 // @ts-expect-error App identity comes from client configuration, not the read request.
 void client.aiProviders.get({ appId: "another-app" })
+const turnStates: Promise<AgentTaskTurnStateEntry[]> | undefined = client.agentTasks.turnStates?.(["00000000-0000-4000-8000-000000000001"])
+void turnStates?.then(([entry]) => {
+  const turn: AgentTaskTurn | null | undefined = entry?.turn
+  const lastTurn: AgentTaskLastTurn | null | undefined = turn?.lastTurn
+  void [lastTurn]
+})
+void client.agentTasks.setInstructions?.("00000000-0000-4000-8000-000000000001", null)
+const compactionsOf = (result: { compactions?: AgentTurnCompaction[] }): AgentTurnCompaction[] => result.compactions ?? []
+void compactionsOf
 const files: FilesModule = client.files
 const uploadOptions: FileUploadOptions = { kind: "PERMANENT", visibility: "PRIVATE", signal: AbortSignal.timeout(60_000) }
 const uploaded: Promise<FileMetadata> = files.upload(new Blob(["hello"]), { ...uploadOptions, name: "notes.txt" })
