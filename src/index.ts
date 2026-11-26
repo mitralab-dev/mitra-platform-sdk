@@ -98,6 +98,7 @@ export type {
   AgentCredentialScope,
   AgentDeviceProvider,
   AgentOAuthProvider,
+  AgentUsageProvider,
   CredentialStatus,
   CredentialUsage,
   CredentialUsageWindow,

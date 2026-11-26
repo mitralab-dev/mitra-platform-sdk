@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+- `agentCredentials` accepts `GOOGLE` (Antigravity): `saveApiKey` and `remove` take `ANTHROPIC`,
+  `OPENAI` and `GOOGLE`, and `startOAuth` and `exchangeOAuth` take `ANTHROPIC` and `GOOGLE`, the
+  Core methods and endpoints of the other providers. Keep the same `scope` on `startOAuth` and
+  `exchangeOAuth`. `exchangeOAuth` may answer `connected: false`: the code is still being verified
+  and the caller repeats the same call; a 503 on either call is repeated too. `usage` and the device
+  authorization stay on their providers; `usage` now takes the new `AgentUsageProvider`
+  (`ANTHROPIC` | `OPENAI`), the set it already accepted.
 - `send` returns the `clientMessageId` of a message held while the browser is offline, the id it
   goes out with when the network is back, instead of `undefined`. It needs the Core
   `clientMessageId` send option, so this SDK depends on the Core release that has it.

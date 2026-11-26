@@ -623,5 +623,6 @@ export type {
   AgentCredentialsModule,
   AgentDeviceProvider,
   AgentOAuthProvider,
+  AgentUsageProvider,
 } from './modules/agent-credentials';
 export { MitraApiError } from './utils/http-client';
