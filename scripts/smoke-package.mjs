@@ -133,6 +133,10 @@ import {
   executeServerFunctionMitra,
   loginWithGoogleMitra,
   type AgentReadyProvider,
+  type AgentTaskLastTurn,
+  type AgentTaskTurn,
+  type AgentTaskTurnStateEntry,
+  type AgentTurnCompaction,
   type AiProviders,
   type AiProvidersModule,
   type IncludedAiQuota,
@@ -187,6 +191,15 @@ client.aiProviders = aiProviders
 void client.aiProviders.setActiveEngine("IMMERSION")
 // @ts-expect-error App identity comes from client configuration, not the read request.
 void client.aiProviders.get({ appId: "another-app" })
+const turnStates: Promise<AgentTaskTurnStateEntry[]> | undefined = client.agentTasks.turnStates?.(["00000000-0000-4000-8000-000000000001"])
+void turnStates?.then(([entry]) => {
+  const turn: AgentTaskTurn | null | undefined = entry?.turn
+  const lastTurn: AgentTaskLastTurn | null | undefined = turn?.lastTurn
+  void [lastTurn]
+})
+void client.agentTasks.setInstructions?.("00000000-0000-4000-8000-000000000001", null)
+const compactionsOf = (result: { compactions?: AgentTurnCompaction[] }): AgentTurnCompaction[] => result.compactions ?? []
+void compactionsOf
 const files: FilesModule = client.files
 const uploadOptions: FileUploadOptions = { kind: "PERMANENT", visibility: "PRIVATE", signal: AbortSignal.timeout(60_000) }
 const uploaded: Promise<FileMetadata> = files.upload(new Blob(["hello"]), { ...uploadOptions, name: "notes.txt" })
@@ -357,6 +370,14 @@ void client.aiProviders.setActiveEngine("IMMERSION")
 const files: sdk.FilesModule = client.files
 const uploaded: Promise<sdk.FileMetadata> = files.upload(new Blob(["hello"]), { kind: "TEMPORARY", visibility: "APP", name: "notes.txt" })
 void uploaded.catch((reason: unknown) => (reason instanceof sdk.FileTransferError ? reason.step : undefined))
+const turnStates: Promise<sdk.AgentTaskTurnStateEntry[]> | undefined = client.agentTasks.turnStates?.(["00000000-0000-4000-8000-000000000001"])
+void turnStates?.then(([entry]) => {
+  const turn: sdk.AgentTaskTurn | null | undefined = entry?.turn
+  const lastTurn: sdk.AgentTaskLastTurn | null | undefined = turn?.lastTurn
+  void [lastTurn]
+})
+const compactions: sdk.AgentTurnCompaction[] = []
+void compactions
 const user: sdk.User = { id: "user", tenantId: "tenant", email: "user@example.com", name: null }
 const query: sdk.QueryResult = { rows: [], affectedRows: null, durationMs: 0 }
 const proxy: sdk.ProxyInput = { method: "GET", endpoint: "/", queryParams: { limit: "10" } }

@@ -24,6 +24,21 @@ All notable changes to this project are documented in this file.
   nothing is sent for it. It returns `false` when the message already went out or a retry request
   for it is out, which may still land.
 
+## 1.9.0-beta.3
+
+The turn state and the chat's own instructions, from `@mitralab.io/sdk-core@0.3.11`
+(mitra-copilot#585 and #589).
+
+- Depend on `@mitralab.io/sdk-core@0.3.11`. `client.agentTasks` now has `turnStates(ids)`, which
+  reads where the turn of several chats stands in one call (an id that is not a UUID is left out
+  before the request), and `setInstructions(id, instructions | null)`. `get` answers `turn` for a
+  chat on an agent box; `create` takes `instructions` and `folderKey`, and the task carries them
+  back. The session emits `contextCompacted`, and `turnEnd` and `sendAndWait` carry
+  `compactions`, always set and empty when the box sent none. The details are in the Core
+  changelog for 0.3.11.
+- New exported types: `AgentTaskTurn`, `AgentTaskLastTurn`, `AgentTaskTurnStateEntry` and
+  `AgentTurnCompaction`.
+
 ## 1.9.0-beta.2
 
 App files through `client.files`, and a single sign-in screen with every method the app has.
