@@ -245,8 +245,8 @@ describe('agent input outbox', () => {
   });
 
   it('takes back a prompt whose request got no response from inside its inputUnsent frame', async () => {
-    // Gandalf on #212: the frame went out before the retry was armed, so a cancel inside it
-    // answered true and the retry still sent the message.
+    // The frame once went out before the retry was armed, so a cancel inside it answered true
+    // and the retry still sent the message.
     const inputs = copilot([networkLost, accepted]);
     const { session, raws } = await openSession();
     const answers: boolean[] = [];
@@ -400,8 +400,8 @@ describe('agent input outbox', () => {
     });
 
     it('takes back a prompt held offline from inside its inputUnsent frame', async () => {
-      // Gandalf on #212: the online listener was installed after the frame, without checking
-      // whether the prompt was still held, so a cancel inside the frame still delivered it.
+      // The online listener was once installed after the frame, without checking whether the
+      // prompt was still held, so a cancel inside the frame still delivered it.
       const inputs = copilot([accepted]);
       const { session } = await openSession();
       const answers: boolean[] = [];
