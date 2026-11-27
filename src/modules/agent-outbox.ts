@@ -75,6 +75,12 @@ function cancelledUnsent(): Error {
   return new Error('Agent prompt was cancelled before it was sent.');
 }
 
+// Its first request got no response, so it may have reached the server anyway: the cancel only
+// stops the retries.
+function cancelledRetry(): Error {
+  return new Error('Agent prompt was cancelled: it will not be retried, but its first request may have reached the server.');
+}
+
 interface HeldPrompt {
   readonly input: AgentTaskInput;
   attempts: number;
@@ -171,6 +177,21 @@ export class AgentInputOutbox {
     return new Promise((resolve, reject) => {
       const prompt: GatedPrompt = { clientMessageId, resolve, reject, disarm: () => undefined };
       this.gated.set(session, [...(this.gated.get(session) ?? []), prompt]);
+      const offOnline = this.network.onOnline(() => {
+        prompt.disarm();
+        const pending = this.gated.get(session) ?? [];
+        if (!pending.includes(prompt)) return;
+        const rest = pending.filter((candidate) => candidate !== prompt);
+        if (rest.length) this.gated.set(session, rest);
+        else this.gated.delete(session);
+        deliver();
+        resolve();
+      });
+      prompt.disarm = () => {
+        offOnline();
+        prompt.disarm = () => undefined;
+      };
+      // Armed before the frame goes out: a listener may take the prompt back inside it.
       if (taskId) {
         this.announce(taskId, {
           type: 'inputUnsent',
@@ -183,24 +204,12 @@ export class AgentInputOutbox {
           timestamp: Date.now(),
         });
       }
-      const offOnline = this.network.onOnline(() => {
-        prompt.disarm();
-        const rest = (this.gated.get(session) ?? []).filter((candidate) => candidate !== prompt);
-        if (rest.length) this.gated.set(session, rest);
-        else this.gated.delete(session);
-        deliver();
-        resolve();
-      });
-      prompt.disarm = () => {
-        offOnline();
-        prompt.disarm = () => undefined;
-      };
     });
   }
 
   /**
    * Takes back a prompt this outbox still holds, by the id `send` returned, and rejects its
-   * promise: nothing is sent for it afterwards. False when the prompt is not held here (it went
+   * promise: nothing more is sent for it. False when the prompt is not held here (it went
    * out, it was never held, or a retry request for it is out and may still land). A prompt held
    * after a request that got no response may have reached the server with that first request.
    */
@@ -220,7 +229,7 @@ export class AgentInputOutbox {
     if (!held || held.sending) return false;
     this.release(taskId, held);
     held.disarm();
-    held.reject(cancelledUnsent());
+    held.reject(cancelledRetry());
     return true;
   }
 
@@ -276,17 +285,6 @@ export class AgentInputOutbox {
       ));
       return;
     }
-    this.announce(taskId, {
-      type: 'inputUnsent',
-      payload: {
-        attempt: prompt.attempts,
-        reason: reasonOf(cause),
-        waitingForOnline,
-        ...(retryInMs === undefined ? {} : { retryInMs }),
-        ...withId(idOf(prompt.input)),
-      },
-      timestamp: Date.now(),
-    });
     const retry = () => {
       prompt.disarm();
       void this.retry(taskId, prompt);
@@ -298,9 +296,22 @@ export class AgentInputOutbox {
       offOnline();
       prompt.disarm = () => undefined;
     };
+    // Armed before the frame goes out: a listener may take the prompt back inside it.
+    this.announce(taskId, {
+      type: 'inputUnsent',
+      payload: {
+        attempt: prompt.attempts,
+        reason: reasonOf(cause),
+        waitingForOnline,
+        ...(retryInMs === undefined ? {} : { retryInMs }),
+        ...withId(idOf(prompt.input)),
+      },
+      timestamp: Date.now(),
+    });
   }
 
   private async retry(taskId: string, prompt: HeldPrompt): Promise<void> {
+    if (!this.isHeld(taskId, prompt)) return;
     prompt.attempts += 1;
     prompt.sending = true;
     try {
@@ -341,9 +352,11 @@ export class AgentInputOutbox {
 /** The session `agentTasks.session` returns: the core's, plus taking back a prompt held here. */
 export interface BrowserAgentTaskSession extends AgentTaskSession {
   /**
-   * Takes back a message that has not gone out yet, by the id `send` returned or the
-   * `inputUnsent` frame carries: its `sendAndWait` rejects and nothing is sent for it. True when
-   * it was taken back; false when it is not held any more (it went out, or is on its way).
+   * Takes back a message still held, by the id `send` returned or the `inputUnsent` frame
+   * carries: its `sendAndWait` rejects and nothing more is sent for it. One held after a request
+   * that got no response may have reached the server with that request; the cancel only stops
+   * the retries. True when it was taken back; false when it is not held any more (it went out,
+   * or is on its way).
    */
   cancelUnsent(clientMessageId: string): boolean;
 }

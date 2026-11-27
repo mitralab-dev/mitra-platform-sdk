@@ -233,12 +233,35 @@ describe('agent input outbox', () => {
 
     expect(session.cancelUnsent(id)).toBe(true);
 
-    await expect(waiting).resolves.toContain('cancelled before it was sent');
+    await expect(waiting).resolves.toBe(
+      'Agent prompt was cancelled: it will not be retried, but its first request may have reached the server.'
+    );
     expect(onlineListeners).toHaveLength(0);
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(inputs).toHaveBeenCalledTimes(1);
     expect(session.cancelUnsent(id)).toBe(false);
     expect(errors.map((error) => error.code)).not.toContain('INPUT_UNSENT');
+    session.close();
+  });
+
+  it('takes back a prompt whose request got no response from inside its inputUnsent frame', async () => {
+    // Gandalf on #212: the frame went out before the retry was armed, so a cancel inside it
+    // answered true and the retry still sent the message.
+    const inputs = copilot([networkLost, accepted]);
+    const { session, raws } = await openSession();
+    const answers: boolean[] = [];
+    session.on('raw', (event) => {
+      if (event.type !== 'inputUnsent') return;
+      answers.push(session.cancelUnsent((event.payload as { clientMessageId: string }).clientMessageId));
+    });
+    const waiting = session.sendAndWait('hello').catch((error: Error) => error.message);
+
+    await expect(waiting).resolves.toContain('will not be retried');
+    expect(answers).toEqual([true]);
+    expect(onlineListeners).toHaveLength(0);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(inputs).toHaveBeenCalledTimes(1);
+    expect(outboxEvents(raws).map((event) => event.type)).toEqual(['inputUnsent']);
     session.close();
   });
 
@@ -373,6 +396,28 @@ describe('agent input outbox', () => {
       expect(session.status).not.toBe('closed');
       expect(errors).toEqual([]);
       void dropped;
+      session.close();
+    });
+
+    it('takes back a prompt held offline from inside its inputUnsent frame', async () => {
+      // Gandalf on #212: the online listener was installed after the frame, without checking
+      // whether the prompt was still held, so a cancel inside the frame still delivered it.
+      const inputs = copilot([accepted]);
+      const { session } = await openSession();
+      const answers: boolean[] = [];
+      session.on('raw', (event) => {
+        if (event.type !== 'inputUnsent') return;
+        answers.push(session.cancelUnsent((event.payload as { clientMessageId: string }).clientMessageId));
+      });
+      goOffline();
+      const waiting = session.sendAndWait('hello').catch((error: Error) => error.message);
+
+      await expect(waiting).resolves.toBe('Agent prompt was cancelled before it was sent.');
+      expect(answers).toEqual([true]);
+      expect(onlineListeners).toHaveLength(0);
+      goOnline();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(inputs).not.toHaveBeenCalled();
       session.close();
     });
 

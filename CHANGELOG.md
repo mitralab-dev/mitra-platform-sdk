@@ -21,8 +21,10 @@ All notable changes to this project are documented in this file.
   and the `INPUT_UNSENT` error frame carries `clientMessageIds`, the messages that never went out.
 - Added `session.cancelUnsent(clientMessageId)`: takes back a message still held offline or held
   after a request that got no response, without closing the session. Its `sendAndWait` rejects and
-  nothing is sent for it. It returns `false` when the message already went out or a retry request
-  for it is out, which may still land.
+  nothing more is sent for it. A message held offline never went out; one held after a request
+  that got no response may have reached the server with that first request, which a cancel cannot
+  undo, so its rejection says so. It returns `false` when the message already went out or a retry
+  request for it is out, which may still land.
 
 ## 1.9.0-beta.3
 
