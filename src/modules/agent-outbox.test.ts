@@ -2,7 +2,7 @@ import type { AgentTaskEvent, AgentTaskSession, AgentTasksModule } from '@mitral
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HttpClient } from '../utils/http-client';
 import { AgentInputOutbox, holdSendsWhileOffline, OUTBOX_DELAYS_MS } from './agent-outbox';
-import type { OutboxNetwork } from './agent-outbox';
+import type { BrowserAgentTaskSession, OutboxNetwork } from './agent-outbox';
 import { createBrowserAgentTasksModule } from './agent-tasks';
 import type { AuthSessionPort } from './auth';
 
@@ -120,7 +120,7 @@ function copilot(inputAnswers: InputAnswer[], boxWsUrl?: string) {
 }
 
 interface Watched {
-  session: AgentTaskSession;
+  session: BrowserAgentTaskSession;
   errors: Array<{ code?: string; error: string }>;
   raws: AgentTaskEvent[];
 }
@@ -182,7 +182,13 @@ describe('agent input outbox', () => {
     expect(errors).toEqual([]);
     expect(outboxEvents(raws)).toEqual([{
       type: 'inputUnsent',
-      payload: { attempt: 1, reason: 'Failed to fetch', waitingForOnline: false, retryInMs: OUTBOX_DELAYS_MS[0] },
+      payload: {
+        attempt: 1,
+        reason: 'Failed to fetch',
+        waitingForOnline: false,
+        retryInMs: OUTBOX_DELAYS_MS[0],
+        clientMessageId: expect.stringMatching(CLIENT_MESSAGE_ID),
+      },
     }]);
     // The turn is held, not failed: the prompt is still on its way.
     expect(session.status).toBe('streaming');
@@ -192,10 +198,70 @@ describe('agent input outbox', () => {
     await vi.waitFor(() => expect(inputs).toHaveBeenCalledTimes(2));
     await vi.waitFor(() => expect(outboxEvents(raws).at(-1)).toEqual({
       type: 'inputSent',
-      payload: { attempts: 2 },
+      payload: { attempts: 2, clientMessageId: expect.stringMatching(CLIENT_MESSAGE_ID) },
     }));
     expect(errors).toEqual([]);
     expect(onlineListeners).toHaveLength(0);
+    session.close();
+  });
+
+  it('names the message in the frames of a prompt whose request got no response', async () => {
+    // Crew, 2026-11-26: the screen could not tell which message `inputUnsent` was about.
+    const inputs = copilot([networkLost, accepted]);
+    const { session, raws } = await openSession();
+
+    const id = session.send('hello');
+    await vi.waitFor(() => expect(outboxEvents(raws)).toHaveLength(1));
+
+    expect(id).toMatch(CLIENT_MESSAGE_ID);
+    expect(outboxEvents(raws)[0].payload).toMatchObject({ attempt: 1, clientMessageId: id });
+    for (const listener of onlineListeners) listener();
+    await vi.waitFor(() => expect(outboxEvents(raws).at(-1)).toEqual({
+      type: 'inputSent',
+      payload: { attempts: 2, clientMessageId: id },
+    }));
+    expect(inputs.mock.calls.map(([body]) => body.clientMessageId)).toEqual([id, id]);
+    session.close();
+  });
+
+  it('takes back a prompt whose request got no response, and never retries it', async () => {
+    const inputs = copilot([networkLost, accepted]);
+    const { session, errors, raws } = await openSession();
+    const waiting = session.sendAndWait('hello').catch((error: Error) => error.message);
+    await vi.waitFor(() => expect(outboxEvents(raws)).toHaveLength(1));
+    const id = (outboxEvents(raws)[0].payload as { clientMessageId: string }).clientMessageId;
+
+    expect(session.cancelUnsent(id)).toBe(true);
+
+    await expect(waiting).resolves.toBe(
+      'Agent prompt was cancelled: it will not be retried, but its first request may have reached the server.'
+    );
+    expect(onlineListeners).toHaveLength(0);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(inputs).toHaveBeenCalledTimes(1);
+    expect(session.cancelUnsent(id)).toBe(false);
+    expect(errors.map((error) => error.code)).not.toContain('INPUT_UNSENT');
+    session.close();
+  });
+
+  it('takes back a prompt whose request got no response from inside its inputUnsent frame', async () => {
+    // The frame once went out before the retry was armed, so a cancel inside it answered true
+    // and the retry still sent the message.
+    const inputs = copilot([networkLost, accepted]);
+    const { session, raws } = await openSession();
+    const answers: boolean[] = [];
+    session.on('raw', (event) => {
+      if (event.type !== 'inputUnsent') return;
+      answers.push(session.cancelUnsent((event.payload as { clientMessageId: string }).clientMessageId));
+    });
+    const waiting = session.sendAndWait('hello').catch((error: Error) => error.message);
+
+    await expect(waiting).resolves.toContain('will not be retried');
+    expect(answers).toEqual([true]);
+    expect(onlineListeners).toHaveLength(0);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(inputs).toHaveBeenCalledTimes(1);
+    expect(outboxEvents(raws).map((event) => event.type)).toEqual(['inputUnsent']);
     session.close();
   });
 
@@ -258,7 +324,12 @@ describe('agent input outbox', () => {
       expect(inputs).not.toHaveBeenCalled();
       expect(outboxEvents(raws)).toEqual([{
         type: 'inputUnsent',
-        payload: { attempt: 0, reason: 'The browser is offline.', waitingForOnline: true },
+        payload: {
+          attempt: 0,
+          reason: 'The browser is offline.',
+          waitingForOnline: true,
+          clientMessageId: expect.stringMatching(CLIENT_MESSAGE_ID),
+        },
       }]);
       expect(session.status).toBe('idle');
 
@@ -267,6 +338,120 @@ describe('agent input outbox', () => {
       expect(errors).toEqual([]);
       expect(session.status).toBe('streaming');
       session.close();
+    });
+
+    it('returns the id a prompt held offline goes out with, and names it in the frame', async () => {
+      // Crew, 2026-11-26: `send` returned undefined for it and the screen read that as not sent.
+      const inputs = copilot([accepted]);
+      const { session, raws } = await openSession();
+      goOffline();
+
+      const id = session.send('hello');
+
+      expect(id).toMatch(CLIENT_MESSAGE_ID);
+      expect(outboxEvents(raws)).toEqual([{
+        type: 'inputUnsent',
+        payload: { attempt: 0, reason: 'The browser is offline.', waitingForOnline: true, clientMessageId: id },
+      }]);
+      goOnline();
+      await vi.waitFor(() => expect(inputs).toHaveBeenCalledExactlyOnceWith({
+        type: 'message',
+        content: 'hello',
+        clientMessageId: id,
+      }));
+      session.close();
+    });
+
+    it('sends a sendAndWait held offline with the id its frame named', async () => {
+      const inputs = copilot([accepted]);
+      const { session, raws } = await openSession();
+      goOffline();
+
+      void session.sendAndWait('hello').catch(() => undefined);
+      const id = (outboxEvents(raws)[0].payload as { clientMessageId: string }).clientMessageId;
+      goOnline();
+
+      await vi.waitFor(() => expect(inputs).toHaveBeenCalledOnce());
+      expect(id).toMatch(CLIENT_MESSAGE_ID);
+      expect(inputs.mock.calls[0][0]).toMatchObject({ content: 'hello', clientMessageId: id });
+      session.close();
+    });
+
+    it('takes back a prompt held offline without closing the session', async () => {
+      const inputs = copilot([accepted]);
+      const { session, errors } = await openSession();
+      goOffline();
+      const dropped = session.sendAndWait('dropped').catch((error: Error) => error.message);
+      const kept = session.send('kept');
+      const id = session.send('gone')!;
+      expect(session.cancelUnsent(id)).toBe(true);
+      expect(session.cancelUnsent(id)).toBe(false);
+      expect(session.cancelUnsent('not-held')).toBe(false);
+      goOnline();
+
+      await vi.waitFor(() => expect(inputs).toHaveBeenCalledTimes(2));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(inputs.mock.calls.map(([body]) => body.content)).toEqual(['dropped', 'kept']);
+      expect(inputs.mock.calls[1][0].clientMessageId).toBe(kept);
+      expect(session.status).not.toBe('closed');
+      expect(errors).toEqual([]);
+      void dropped;
+      session.close();
+    });
+
+    it('takes back a prompt held offline from inside its inputUnsent frame', async () => {
+      // The online listener was once installed after the frame, without checking whether the
+      // prompt was still held, so a cancel inside the frame still delivered it.
+      const inputs = copilot([accepted]);
+      const { session } = await openSession();
+      const answers: boolean[] = [];
+      session.on('raw', (event) => {
+        if (event.type !== 'inputUnsent') return;
+        answers.push(session.cancelUnsent((event.payload as { clientMessageId: string }).clientMessageId));
+      });
+      goOffline();
+      const waiting = session.sendAndWait('hello').catch((error: Error) => error.message);
+
+      await expect(waiting).resolves.toBe('Agent prompt was cancelled before it was sent.');
+      expect(answers).toEqual([true]);
+      expect(onlineListeners).toHaveLength(0);
+      goOnline();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(inputs).not.toHaveBeenCalled();
+      session.close();
+    });
+
+    it('rejects the sendAndWait of a prompt taken back, and sends nothing for it', async () => {
+      const inputs = copilot([accepted]);
+      const { session, raws } = await openSession();
+      goOffline();
+      const waiting = session.sendAndWait('hello').catch((error: Error) => error.message);
+      const id = (outboxEvents(raws)[0].payload as { clientMessageId: string }).clientMessageId;
+
+      expect(session.cancelUnsent(id)).toBe(true);
+
+      await expect(waiting).resolves.toBe('Agent prompt was cancelled before it was sent.');
+      expect(onlineListeners).toHaveLength(0);
+      goOnline();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(inputs).not.toHaveBeenCalled();
+      expect(session.status).toBe('idle');
+      session.close();
+    });
+
+    it('names the prompts that never went out when the session closes', async () => {
+      copilot([accepted]);
+      const { session, raws } = await openSession();
+      goOffline();
+      const first = session.send('first');
+      const second = session.send('second');
+
+      session.close();
+
+      expect(raws.find((event) => event.type === 'error')?.payload).toMatchObject({
+        code: 'INPUT_UNSENT',
+        clientMessageIds: [first, second],
+      });
     });
 
     it('keeps the order of prompts sent while offline', async () => {
@@ -361,6 +546,23 @@ describe('agent input outbox', () => {
       session.close();
     });
 
+    it('sends a prompt held offline on the box with the id send returned', async () => {
+      copilot([accepted], BOX_WS_URL);
+      const { session } = await openSession();
+      browser.offline = true;
+      vi.stubGlobal('navigator', { onLine: false });
+
+      const id = session.send('hello');
+      browser.offline = false;
+      vi.stubGlobal('navigator', { onLine: true });
+      for (const listener of [...onlineListeners]) listener();
+
+      await vi.waitFor(() => expect(box().frames()).toEqual([
+        { type: 'message', content: 'hello', clientMessageId: id },
+      ]));
+      session.close();
+    });
+
     it('says through the session that a prompt waits for the network, and sends it on the box', async () => {
       // Core serves this chat without the SDK's event source, so the outbox frames reach the
       // app through the session wrapper itself, not through a stream observer.
@@ -373,7 +575,12 @@ describe('agent input outbox', () => {
       await new Promise((resolve) => setTimeout(resolve, 20));
       expect(outboxEvents(raws)).toEqual([{
         type: 'inputUnsent',
-        payload: { attempt: 0, reason: 'The browser is offline.', waitingForOnline: true },
+        payload: {
+          attempt: 0,
+          reason: 'The browser is offline.',
+          waitingForOnline: true,
+          clientMessageId: expect.stringMatching(CLIENT_MESSAGE_ID),
+        },
       }]);
 
       browser.offline = false;
@@ -534,7 +741,13 @@ describe('agent input outbox', () => {
     for (const [index, delayMs] of OUTBOX_DELAYS_MS.entries()) {
       expect(outboxEvents(raws).at(-1)).toEqual({
         type: 'inputUnsent',
-        payload: { attempt: index + 1, reason: 'Failed to fetch', waitingForOnline: false, retryInMs: delayMs },
+        payload: {
+          attempt: index + 1,
+          reason: 'Failed to fetch',
+          waitingForOnline: false,
+          retryInMs: delayMs,
+          clientMessageId: expect.stringMatching(CLIENT_MESSAGE_ID),
+        },
       });
       expect(errors).toEqual([]);
       await vi.advanceTimersByTimeAsync(delayMs);
@@ -566,10 +779,11 @@ describe('send on the offline gate', () => {
     expect(send).toHaveBeenCalledExactlyOnceWith('hello', undefined);
   });
 
-  it('returns undefined for a message held while the browser is offline', () => {
+  it('returns the id a message held while the browser is offline will go out with', () => {
     const { send, wrapped } = gated(true);
 
-    expect(wrapped.send('hello')).toBeUndefined();
+    expect(wrapped.send('hello')).toMatch(CLIENT_MESSAGE_ID);
+    expect(wrapped.send('again', { clientMessageId: 'mine' })).toBe('mine');
     expect(send).not.toHaveBeenCalled();
   });
 });

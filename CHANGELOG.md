@@ -2,6 +2,30 @@
 
 All notable changes to this project are documented in this file.
 
+## Unreleased
+
+- Exported `AgentSubagentHistory`, the result of the Core `session.loadSubagent(toolId)`, which
+  reaches the app through `agentTasks.session` like the rest of the Core session. With that Core,
+  `history` holds only the chat's own thread and a subagent's pieces come from `loadSubagent`.
+- `agentCredentials` accepts `GOOGLE` (Antigravity): `saveApiKey` and `remove` take `ANTHROPIC`,
+  `OPENAI` and `GOOGLE`, and `startOAuth` and `exchangeOAuth` take `ANTHROPIC` and `GOOGLE`, the
+  Core methods and endpoints of the other providers. Keep the same `scope` on `startOAuth` and
+  `exchangeOAuth`. `exchangeOAuth` may answer `connected: false`: the code is still being verified
+  and the caller repeats the same call; a 503 on either call is repeated too. `usage` and the device
+  authorization stay on their providers; `usage` now takes the new `AgentUsageProvider`
+  (`ANTHROPIC` | `OPENAI`), the set it already accepted.
+- `send` returns the `clientMessageId` of a message held while the browser is offline, the id it
+  goes out with when the network is back, instead of `undefined`. It needs the Core
+  `clientMessageId` send option, so this SDK depends on the Core release that has it.
+- The outbox frames name their message: `inputUnsent` and `inputSent` carry its `clientMessageId`,
+  and the `INPUT_UNSENT` error frame carries `clientMessageIds`, the messages that never went out.
+- Added `session.cancelUnsent(clientMessageId)`: takes back a message still held offline or held
+  after a request that got no response, without closing the session. Its `sendAndWait` rejects and
+  nothing more is sent for it. A message held offline never went out; one held after a request
+  that got no response may have reached the server with that first request, which a cancel cannot
+  undo, so its rejection says so. It returns `false` when the message already went out or a retry
+  request for it is out, which may still land.
+
 ## 1.9.0-beta.3
 
 The turn state and the chat's own instructions, from `@mitralab.io/sdk-core@0.3.11`

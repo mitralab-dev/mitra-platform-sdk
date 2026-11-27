@@ -59,6 +59,31 @@ describe('createBrowserAgentCredentialsModule', () => {
     expect(init.body).toBe(body);
   });
 
+  it.each<[string, unknown, number, string, boolean, () => Promise<unknown>]>([
+    ['saveApiKey', undefined, 204, 'credentials/GOOGLE/api-key', false, () => credentials().saveApiKey('GOOGLE', 'gemini-key')],
+    ['remove', undefined, 204, 'credentials/GOOGLE', false, () => credentials().remove('GOOGLE')],
+    ['startOAuth', { authUrl: 'https://accounts.google.com/o', state: 's' }, 200, 'oauth/start', true, () => credentials().startOAuth('GOOGLE')],
+    ['exchangeOAuth', { connected: true, email: 'a@b.c' }, 200, 'oauth/exchange', true, () => credentials().exchangeOAuth('GOOGLE', { code: 'c', state: 's' })],
+  ])('%s reaches the Copilot for Google (Antigravity)', async (_name, response, status, path, providerInBody, call) => {
+    const fetchMock = mockFetch(response, status);
+
+    await expect(call()).resolves.toEqual(response);
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(`https://api.mitra.io/copilot/api/v1/${path}`);
+    if (providerInBody) {
+      expect(JSON.parse(init.body as string)).toMatchObject({ provider: 'GOOGLE' });
+    }
+  });
+
+  it('answers connected false while the Google code is still being verified, for the caller to repeat', async () => {
+    mockFetch({ connected: false, email: null }, 200);
+
+    await expect(
+      credentials().exchangeOAuth('GOOGLE', { code: 'c', state: 's' }, { scope: 'ACCOUNT' })
+    ).resolves.toEqual({ connected: false, email: null });
+  });
+
   it('reads the last subscription window and answers null while there is none', async () => {
     const fetchMock = mockFetch(usage, 200);
     await expect(credentials().usage('OPENAI')).resolves.toEqual(usage);
@@ -74,11 +99,13 @@ describe('createBrowserAgentCredentialsModule', () => {
   });
 
   it.each([
-    ['saveApiKey', () => credentials().saveApiKey('GOOGLE' as 'ANTHROPIC', 'secret')],
-    ['remove', () => credentials().remove('GOOGLE' as 'OPENAI')],
+    ['saveApiKey', () => credentials().saveApiKey('MISTRAL' as 'ANTHROPIC', 'secret')],
+    ['remove', () => credentials().remove('MISTRAL' as 'OPENAI')],
     ['usage', () => credentials().usage('GOOGLE' as 'OPENAI')],
     ['OAuth', () => credentials().startOAuth('OPENAI' as 'ANTHROPIC')],
+    ['OAuth exchange', () => credentials().exchangeOAuth('OPENAI' as 'ANTHROPIC', { code: 'c', state: 's' })],
     ['device authorization', () => credentials().startDeviceAuthorization('ANTHROPIC' as 'OPENAI')],
+    ['device authorization of a Google account', () => credentials().startDeviceAuthorization('GOOGLE' as 'OPENAI')],
   ])('rejects unsupported providers at runtime for %s', (_flow, call) => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);

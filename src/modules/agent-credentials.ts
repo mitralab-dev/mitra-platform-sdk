@@ -16,8 +16,10 @@ import {
 import { coreErrors } from '../core-errors';
 import type { HttpClient } from '../utils/http-client';
 
-export type AgentCredentialProvider = 'ANTHROPIC' | 'OPENAI';
-export type AgentOAuthProvider = 'ANTHROPIC';
+export type AgentCredentialProvider = 'ANTHROPIC' | 'OPENAI' | 'GOOGLE';
+// Only the Claude and Codex subscription logins report a usage window.
+export type AgentUsageProvider = 'ANTHROPIC' | 'OPENAI';
+export type AgentOAuthProvider = 'ANTHROPIC' | 'GOOGLE';
 export type AgentDeviceProvider = 'OPENAI';
 
 export interface AgentCredentialsModule {
@@ -33,7 +35,7 @@ export interface AgentCredentialsModule {
    * `null` until a turn on the provider's subscription login has reported one.
    */
   usage(
-    provider: AgentCredentialProvider,
+    provider: AgentUsageProvider,
     options?: AgentCredentialOptions
   ): Promise<CredentialUsage | null>;
   saveApiKey(
@@ -92,19 +94,19 @@ export function createBrowserAgentCredentialsModule(
       return core.usage(provider, options);
     },
     saveApiKey: (provider, apiKey, options) => {
-      requireProvider(provider, ['ANTHROPIC', 'OPENAI'] as const, 'API key authentication');
+      requireProvider(provider, ['ANTHROPIC', 'OPENAI', 'GOOGLE'] as const, 'API key authentication');
       return core.saveApiKey(provider, apiKey, options);
     },
     remove: (provider, options) => {
-      requireProvider(provider, ['ANTHROPIC', 'OPENAI'] as const, 'Credential removal');
+      requireProvider(provider, ['ANTHROPIC', 'OPENAI', 'GOOGLE'] as const, 'Credential removal');
       return core.remove(provider, options);
     },
     startOAuth: (provider, options) => {
-      requireProvider(provider, ['ANTHROPIC'] as const, 'OAuth');
+      requireProvider(provider, ['ANTHROPIC', 'GOOGLE'] as const, 'OAuth');
       return core.startOAuth(provider, options);
     },
     exchangeOAuth: (provider, input, options) => {
-      requireProvider(provider, ['ANTHROPIC'] as const, 'OAuth');
+      requireProvider(provider, ['ANTHROPIC', 'GOOGLE'] as const, 'OAuth');
       return core.exchangeOAuth(provider, input, options);
     },
     startDeviceAuthorization: (provider, options) => {

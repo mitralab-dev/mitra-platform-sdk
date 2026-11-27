@@ -136,4 +136,28 @@ describe('createBrowserAgentTasksModule', () => {
     expect(urls).toContain('https://api.mitra.io/copilot/api/v1/tasks/task-1/events');
     session.close();
   });
+
+  it('reads the chat thread on open and a subagent\'s rows through loadSubagent, past the offline wrapper', async () => {
+    const fetchMock = vi.fn((input: unknown) => {
+      const url = String(input);
+      if (url.endsWith('/channel')) return Promise.resolve({ ok: false, status: 404, json: async () => ({}) });
+      if (url.endsWith('/events')) {
+        return Promise.resolve({ ok: true, status: 200, body: new ReadableStream<Uint8Array>({ start() {} }) });
+      }
+      if (url.includes('/messages')) return Promise.resolve({ ok: true, status: 200, json: async () => page([]) });
+      return Promise.resolve({ ok: true, status: 200, json: async () => task });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const http = new HttpClient({ baseUrl: 'https://api.mitra.io/copilot' });
+    const session = createBrowserAgentTasksModule(http, auth, 'https://api.mitra.io')
+      .session({ taskId: 'task-1', transport: 'http' });
+    await vi.waitFor(() => expect(session.status).toBe('idle'));
+
+    await expect(session.loadSubagent('call-1', { limit: 10 })).resolves.toEqual({ items: [], hasOlder: false });
+
+    const messages = fetchMock.mock.calls.map(([input]) => String(input)).filter((url) => url.includes('/messages'));
+    expect(messages[0]).toContain('thread=root');
+    expect(messages.at(-1)).toContain('parentToolId=call-1');
+    session.close();
+  });
 });
